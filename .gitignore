@@ -1,0 +1,25 @@
+# รหัสลับและการตั้งค่า
+.env
+.env.*
+!.env.example
+
+# ระบบ Backend (Python)
+backend/venv/
+backend/__pycache__/
+backend/.pytest_cache/
+*.pyc
+
+# ระบบ Frontend (Node.js)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.npm/
+frontend/coverage/
+
+# ไฟล์ระบบของ OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# อื่นๆ
+tessdata_temp/

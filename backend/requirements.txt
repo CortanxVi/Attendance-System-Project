@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+Pillow
+python-multipart
+python-dotenv
+easyocr
+torch
+torchvision
+opencv-python
+numpy
+PyJWT
