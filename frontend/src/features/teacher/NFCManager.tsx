@@ -14,11 +14,13 @@ import axios from "axios";
 interface NFCManagerProps {
   onClose: () => void;
   defaultCourseCode?: string;
+  activeSessionId: string;
 }
 
 export default function NFCManager({
   onClose,
   defaultCourseCode = "CS301",
+  activeSessionId
 }: NFCManagerProps) {
   const [isNfcSystemEnabled, setIsNfcSystemEnabled] = useState(false);
   const [activeTab, setActiveTab] = useState<"checkin" | "register">("checkin");
@@ -112,7 +114,7 @@ export default function NFCManager({
 
       const response = await axios.post("/api/v1/nfc/checkin", {
         nfc_uid: checkInNfcUid.trim(),
-        session_id: mockSessionId,
+        session_id: activeSessionId,
       });
 
       if (response.data.status === "success") {

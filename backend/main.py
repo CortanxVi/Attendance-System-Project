@@ -22,6 +22,11 @@ class NFCCheckInRequest(BaseModel):
     nfc_uid: str
     session_id: str
 
+# เพิ่ม Pydantic Model สำหรับรับค่าเปิดคลาส ไว้ด้านบนของไฟล์
+class SessionStartRequest(BaseModel):
+    course_id: str  # UUID ของวิชาจากตาราง courses
+    teacher_id: str # UUID ของอาจารย์จาก auth.users
+
 app = FastAPI(title="KMUTNB Face Recognition API")
 
 # Config สำหรับการเชื่อมต่อ Supabase (ให้ขอ key กับ team lead)
@@ -248,6 +253,32 @@ async def nfc_checkin(payload: NFCCheckInRequest):
                 "full_name": student['full_name'],
                 "method": "nfc" # face_ocr, nfc, manual 
             }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# API สำหรับอาจารย์กดสร้างห้องเรียน (เปิด Session)
+@app.post("/api/v1/sessions/start")
+async def start_attendance_session(payload: SessionStartRequest):
+    try:
+        session_data = {
+            "course_id": payload.course_id,
+            "opened_by": payload.teacher_id,
+            "status": "active"
+            # qr_token และอื่นๆ สามารถใส่เพิ่มได้ตามความต้องการของคุณ
+        }
+        
+        response = supabase.table('attendance_sessions').insert(session_data).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=500, detail="ไม่สามารถสร้างห้องเรียนได้")
+            
+        new_session_id = response.data[0]['id']
+        
+        return {
+            "status": "success", 
+            "message": "เปิดระบบเช็คชื่อสำเร็จ",
+            "session_id": new_session_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
