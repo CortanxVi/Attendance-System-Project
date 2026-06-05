@@ -64,3 +64,6 @@ Thumbs.db
 .cache/
 *.bak
 *.tmp
+
+# unwanted folder
+Version0.1/
