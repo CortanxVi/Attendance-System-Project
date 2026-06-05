@@ -1,21 +1,38 @@
 import React, { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, CreditCard } from 'lucide-react';
 import LiveAttendance from './LiveAttendance'; // นำเข้า Component ใหม่
+import NFCManager from './NFCManager'; // 1. นำเข้าคอมโพเนนต์ NFC ใหม่ที่เราเพิ่งเขียน
 
 export default function TeacherDashboard() {
   const [isLive, setIsLive] = useState(false); // ควบคุมการเปิดปิดหน้า QR
+  const [isNfcOpen, setIsNfcOpen] = useState(false); // 2. สร้าง State ควบคุมการเปิด/ปิดหน้าจอคลังควบคุม NFC
 
-  return (
+return (
     <div>
       {/* ถ้า isLive เป็น true จะแสดงหน้าจอ QR Code แบบเต็มจอ */}
       {isLive && <LiveAttendance courseCode="CS301" onClose={() => setIsLive(false)} />}
       
+      {/* 3. หากกดเปิดระบบ NFC จะแสดงหน้าต่าง Modal ของศูนย์ควบคุมฮาร์ดแวร์ */}
+      {isNfcOpen && <NFCManager onClose={() => setIsNfcOpen(false)} defaultCourseCode="CS301" />}
+      
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">รายวิชาที่สอน</h2>
-        <button className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors cursor-pointer shadow-sm">
-          <Plus size={18} />
-          เพิ่มรายวิชาใหม่
-        </button>
+        
+        <div className="flex items-center gap-3">
+          {/* 4. เพิ่มปุ่มกดระบบจัดการสแกนเนอร์ NFC บนฝั่งเครื่องอาจารย์ */}
+          <button 
+            onClick={() => setIsNfcOpen(true)}
+            className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors cursor-pointer shadow-sm"
+          >
+            <CreditCard size={18} />
+            ระบบจัดการ บัตร NFC
+          </button>
+
+          <button className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors cursor-pointer shadow-sm">
+            <Plus size={18} />
+            เพิ่มรายวิชาใหม่
+          </button>
+        </div>
       </div>
 
       {/* การ์ดตัวอย่างวิชาเรียน */}

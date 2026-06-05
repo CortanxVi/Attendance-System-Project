@@ -3,14 +3,24 @@ import cv2
 import os
 import re
 import json
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status, APIRouter
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 
 # นำเข้าเครื่องมือจาก services ที่เราปรับปรุงใหม่
 from services.easyocr_service import ocr_service
 from services.insightface_service import face_service
+
+class NFCRegisterRequest(BaseModel):
+    student_id: str
+    nfc_uid: str
+
+class NFCCheckInRequest(BaseModel):
+    nfc_uid: str
+    session_id: str
 
 app = FastAPI(title="KMUTNB Face Recognition API")
 
@@ -150,7 +160,7 @@ async def verify_FaceReg_OCR_attendance(
         supabase.table('attendance_records').insert({
             'student_id': profile_uuid, 
             'status': 'present',
-            'method': 'manual', # face_ocr, nfc, manual 
+            'method': 'face_ocr', # face_ocr, nfc, manual 
             'similarity_score': round(similarity_score, 4)
         }).execute()
 
@@ -171,6 +181,76 @@ async def verify_FaceReg_OCR_attendance(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"เกิดข้อผิดพลาดในระบบหลังบ้าน: {str(e)}"
         )
+
+@app.post("/api/v1/nfc/register")
+async def register_nfc_card(payload: NFCRegisterRequest):
+    try:
+        # ทำความสะอาดข้อมูล ตัดช่องว่างหัว-ท้ายออกก่อนนับ
+        uid_clean = payload.nfc_uid.strip()
+        
+        # 🌟 เพิ่มการตรวจสอบความยาว 10 ตัวอักษร
+        if len(uid_clean) != 10:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"ไม่สามารถลงทะเบียนได้: รหัส UID ต้องมีความยาว 10 หลักเท่านั้น (ค่าที่ส่งมามี {len(uid_clean)} หลัก)"
+            )
+
+        # ค้นหานักศึกษาและอัปเดตเลข nfc_uid ลงในตาราง profiles
+        response = supabase.table('profiles') \
+            .update({'nfc_uid': uid_clean}) \
+            .eq('student_id', payload.student_id) \
+            .execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบรหัสนักศึกษาในระบบ")
+            
+        return {"status": "success", "message": f"ผูกบัตร NFC กับรหัส {payload.student_id} สำเร็จ"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/nfc/checkin")
+async def nfc_checkin(payload: NFCCheckInRequest):
+    try:
+        # 1. ตรวจสอบว่าหมายเลขบัตรนี้ตรงกับโปรไฟล์ของใคร
+        user_response = supabase.table('profiles') \
+            .select('id', 'student_id', 'full_name') \
+            .eq('nfc_uid', payload.nfc_uid) \
+            .single() \
+            .execute()
+            
+        if not user_response.data:
+            raise HTTPException(status_code=404, detail="บัตร NFC ใบนี้ยังไม่ได้ลงทะเบียนในระบบ")
+            
+        student = user_response.data
+        student_uuid = student['id'] # UUID จาก auth.users
+
+        # 2. ทำการบันทึกข้อมูลการเช็คชื่อเข้าตาราง attendance_records
+        attendance_data = {
+            "session_id": payload.session_id,
+            "student_id": student_uuid,
+            "status": "present",
+            "method": "nfc", # face_ocr, nfc, manual 
+            "similarity_score": None # ไม่จำเป็นต้องระบุเพราะไม่ได้ใช้ AI หน้าสแกน
+        }
+        
+        record_response = supabase.table('attendance_records') \
+            .insert(attendance_data) \
+            .execute()
+            
+        return {
+            "status": "success",
+            "message": "เช็คชื่อผ่าน NFC สำเร็จ",
+            "student_info": {
+                "student_id": student['student_id'],
+                "full_name": student['full_name'],
+                "method": "nfc" # face_ocr, nfc, manual 
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
