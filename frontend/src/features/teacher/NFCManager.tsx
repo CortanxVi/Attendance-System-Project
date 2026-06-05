@@ -31,9 +31,9 @@ export default function NFCManager({
 
   // State สำหรับการสแกนเช็คชื่อ (Attendance Check-in)
   const [checkInNfcUid, setCheckInNfcUid] = useState("");
-  const [mockSessionId, setMockSessionId] = useState(
-    "88888888-8888-8888-8888-888888888888",
-  ); // สมมติรหัส Session คลาสเรียน
+  // const [mockSessionId, setMockSessionId] = useState(
+  //   "88888888-8888-8888-8888-888888888888",
+  // ); // สมมติรหัส Session คลาสเรียน
 
   // State สำหรับแสดงผลลัพธ์ข้อมูล
   const [successMessage, setSuccessMessage] = useState("");

@@ -3,12 +3,14 @@ import cv2
 import os
 import re
 import json
+import uuid
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status, APIRouter
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+from enum import Enum
 
 # นำเข้าเครื่องมือจาก services ที่เราปรับปรุงใหม่
 from services.easyocr_service import ocr_service
@@ -22,10 +24,21 @@ class NFCCheckInRequest(BaseModel):
     nfc_uid: str
     session_id: str
 
-# เพิ่ม Pydantic Model สำหรับรับค่าเปิดคลาส ไว้ด้านบนของไฟล์
+# 🌟 1. กำหนด Enum ให้ค่าตรงกับที่ Supabase ต้องการเป๊ะๆ (ตัวพิมพ์เล็ก)
+class SessionStatus(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
 class SessionStartRequest(BaseModel):
-    course_id: str  # UUID ของวิชาจากตาราง courses
-    teacher_id: str # UUID ของอาจารย์จาก auth.users
+    course_id: str
+    teacher_id: str
+
+# เพิ่ม Model สำหรับรับค่าเพิ่มรายวิชาเรียน
+class CourseCreateRequest(BaseModel):
+    course_code: str
+    course_name: str
+    section: int
+    teacher_id: str
 
 app = FastAPI(title="KMUTNB Face Recognition API")
 
@@ -261,26 +274,68 @@ async def nfc_checkin(payload: NFCCheckInRequest):
 @app.post("/api/v1/sessions/start")
 async def start_attendance_session(payload: SessionStartRequest):
     try:
+        # 🌟 2. เจนเนอเรต Token ก้อนแรกขึ้นมาสำหรับเซสชันนี้
+        initial_token = str(uuid.uuid4())
+
         session_data = {
             "course_id": payload.course_id,
             "opened_by": payload.teacher_id,
-            "status": "active"
-            # qr_token และอื่นๆ สามารถใส่เพิ่มได้ตามความต้องการของคุณ
+            "status": SessionStatus.OPEN.value,
+            "qr_token": initial_token,
+            "qr_refresh_rate_seconds": 60,
+            "grace_period_minutes": 15
         }
         
         response = supabase.table('attendance_sessions').insert(session_data).execute()
         
         if not response.data:
-            raise HTTPException(status_code=500, detail="ไม่สามารถสร้างห้องเรียนได้")
+            raise HTTPException(status_code=400, detail="ไม่สามารถสร้างห้องเรียนได้")
             
         new_session_id = response.data[0]['id']
         
         return {
-            "status": "success", 
+            "status": "success",
             "message": "เปิดระบบเช็คชื่อสำเร็จ",
-            "session_id": new_session_id
+            "session_id": new_session_id,
+            "qr_token": initial_token  # ส่งกลับไปเผื่อหน้าบ้านต้องใช้สร้าง QR Code ตัวแรกทันที
         }
+        
     except Exception as e:
+        print(f"❌ [Error] Start Session Failed: {str(e)}")
+        # สามารถส่ง str(e) ไปก่อนในช่วงพัฒนานี้ เพื่อให้หน้าบ้านเห็น Error ชัดๆ
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 1. API สำหรับกดบันทึกเพิ่มรายวิชาใหม่ลงตาราง courses
+@app.post("/api/v1/courses")
+async def create_course(payload: CourseCreateRequest):
+    try:
+        course_data = {
+            "course_code": payload.course_code.strip(),
+            "course_name": payload.course_name.strip(),
+            "section": payload.section,
+            "teacher_id": payload.teacher_id
+        }
+        response = supabase.table('courses').insert(course_data).execute()
+        return {"status": "success", "course": response.data[0]}
+    except Exception as e:
+        # 🌟 ปรับตรง detail ให้พ่น Error ออกมาฟ้องที่หน้าเว็บ
+        raise HTTPException(status_code=500, detail=f"Supabase POST Error: {str(e)}")
+
+# 2. API สำหรับดึงรายวิชาทั้งหมดของอาจารย์ท่านนั้นมาแสดงผลบน Dashboard
+@app.get("/api/v1/courses/{teacher_id}")
+async def get_courses_by_teacher(teacher_id: str):
+    try:
+        # ลองดึงข้อมูลแบบตรงไปตรงมา
+        response = supabase.table('courses') \
+            .select('*') \
+            .eq('teacher_id', teacher_id) \
+            .execute()
+            
+        return {"status": "success", "courses": response.data}
+    except Exception as e:
+        # 🌟 ตรงนี้สำคัญ: พิมพ์ Error ลงใน Terminal ของหลังบ้านให้เราเห็นด้วย
+        print(f"DEBUG ERROR: {str(e)}") 
+        # ส่ง Error กลับไปที่หน้าเว็บให้ชัดเจน
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
