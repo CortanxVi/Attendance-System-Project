@@ -9,6 +9,7 @@ import StudentLayout from './components/layout/StudentLayout';
 import StudentHome from './features/student/StudentHome';
 import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
+import RegisterNFC from './features/teacher/RegisterNFC';
 
 interface UserProfile {
   id: string;
@@ -95,6 +96,7 @@ export default function App() {
         {(profile.role === 'teacher' || profile.role === 'admin') && (
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
+            <Route path="register-nfc" element={<RegisterNFC />} />
             <Route path="reports" element={<div className="p-8">หน้ารายงาน (รอดำเนินการ)</div>} />
             <Route path="students" element={<div className="p-8">หน้าจัดการนักศึกษา (รอดำเนินการ)</div>} />
             <Route path="settings" element={<div className="p-8">หน้าตั้งค่าระบบ (รอดำเนินการ)</div>} />

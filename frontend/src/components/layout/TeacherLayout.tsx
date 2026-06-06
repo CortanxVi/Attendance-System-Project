@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Settings, LogOut, FileText } from 'lucide-react';
+import { BookOpen, UserPlus, FileText, Users, Settings, LogOut, QrCode, Menu, X } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 
 export default function TeacherLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -13,29 +14,53 @@ export default function TeacherLayout() {
   };
 
   const menuItems = [
-    { name: 'หน้าหลักรายวิชา', path: '/teacher', icon: LayoutDashboard },
+    { name: 'รายวิชาที่สอน', path: '/teacher', icon: BookOpen },
+    { name: 'ลงทะเบียนบัตร NFC', path: '/teacher/register-nfc', icon: UserPlus },
     { name: 'รายงานการเข้าเรียน', path: '/teacher/reports', icon: FileText },
     { name: 'จัดการนักศึกษา', path: '/teacher/students', icon: Users },
     { name: 'ตั้งค่าระบบ', path: '/teacher/settings', icon: Settings },
   ];
 
+  // ตรวจสอบว่าเมนูไหน Active: index route ใช้ exact match, sub-routes ใช้ startsWith
+  const isActive = (path: string) => {
+    if (path === '/teacher') {
+      return location.pathname === '/teacher';
+    }
+    return location.pathname.startsWith(path);
+  };
+
+  // ชื่อหน้าปัจจุบันสำหรับแสดงบน mobile header
+  const currentPageName = menuItems.find(item => isActive(item.path))?.name || 'ระบบจัดการการเข้าเรียน';
+
   return (
     <div className="flex h-screen bg-gray-100">
+      {/* แถบดำทับหน้าจอเมื่อเปิด Sidebar บนมือถือ */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+      )}
+
       {/* แถบเมนูด้านซ้าย (Sidebar) */}
-      <aside className="w-64 bg-slate-900 text-white flex flex-col hidden md:flex">
-        <div className="h-16 flex items-center px-6 font-bold text-xl border-b border-slate-800 text-orange-400">
-          KMUTNB Admin
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800">
+          <h1 className="font-bold text-xl flex items-center gap-2">
+            <QrCode size={24} className="text-orange-500" />
+            <span className="text-orange-400">CheckIn Pro</span>
+          </h1>
+          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white">
+            <X size={24} />
+          </button>
         </div>
+
         <nav className="flex-1 py-6 space-y-1 px-3">
           {menuItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const active = isActive(item.path);
             return (
               <button
                 key={item.name}
-                onClick={() => navigate(item.path)}
+                onClick={() => { navigate(item.path); setIsSidebarOpen(false); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-                  isActive ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  active ? 'bg-orange-500 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
                 <Icon size={20} />
@@ -44,6 +69,7 @@ export default function TeacherLayout() {
             );
           })}
         </nav>
+
         <div className="p-4 border-t border-slate-800">
           <button 
             onClick={handleLogout}
@@ -58,16 +84,14 @@ export default function TeacherLayout() {
       {/* พื้นที่หลักแสดงเนื้อหา (Main Content) */}
       <main className="flex-1 overflow-y-auto">
         <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 shadow-sm">
-          <h1 className="text-xl font-semibold text-gray-800">ระบบจัดการการเข้าเรียน</h1>
           <div className="flex items-center gap-4">
-             {/* จุดแสดงสถานะ NFC (จะต่อเติมใน Step หลังๆ) */}
-             <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-full border border-gray-200">
-                <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                NFC: ปิดใช้งาน
-             </div>
+            <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-slate-800 focus:outline-none">
+              <Menu size={28} />
+            </button>
+            <h1 className="text-xl font-semibold text-gray-800">{currentPageName}</h1>
           </div>
         </header>
-        <div className="p-8">
+        <div className="p-6 md:p-8">
           <Outlet />
         </div>
       </main>

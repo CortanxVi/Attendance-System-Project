@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from enum import Enum
+from datetime import datetime, timezone
 
 # นำเข้าเครื่องมือจาก services ที่เราปรับปรุงใหม่
 from services.easyocr_service import ocr_service
@@ -40,7 +41,13 @@ class CourseCreateRequest(BaseModel):
     section: int
     teacher_id: str
 
+class CheckInPayload(BaseModel):
+    student_id: str
+    session_id: str
+    qr_token: str  # นักศึกษาส่ง Token ที่สแกนได้มาตรวจความถูกต้อง
+
 app = FastAPI(title="KMUTNB Face Recognition API")
+router = APIRouter()
 
 # Config สำหรับการเชื่อมต่อ Supabase (ให้ขอ key กับ team lead)
 load_dotenv()
@@ -59,6 +66,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(router)
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
     """แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV"""
@@ -305,6 +314,31 @@ async def start_attendance_session(payload: SessionStartRequest):
         # สามารถส่ง str(e) ไปก่อนในช่วงพัฒนานี้ เพื่อให้หน้าบ้านเห็น Error ชัดๆ
         raise HTTPException(status_code=500, detail=str(e))
 
+# API สำหรับกดปิดเซสชันแบบ Manual
+@app.post("/api/v1/sessions/{session_id}/close")
+async def close_attendance_session(session_id: str):
+    try:
+        # ดึงเวลาปัจจุบัน (UTC) เพื่อบันทึกเป็นเวลาปิด
+        close_time = datetime.now(timezone.utc).isoformat()
+        
+        # อัปเดตสถานะและเวลาปิดลงฐานข้อมูล
+        response = supabase.table('attendance_sessions').update({
+            "status": SessionStatus.CLOSED.value, # บังคับเป็น "closed"
+            "closed_at": close_time
+        }).eq('id', session_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบเซสชันที่ต้องการปิด")
+            
+        return {
+            "status": "success", 
+            "message": "ปิดระบบเช็คชื่อและบันทึกเวลาสำเร็จ",
+            "closed_at": close_time
+        }
+    except Exception as e:
+        print(f"❌ [Error] Close Session Failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # 1. API สำหรับกดบันทึกเพิ่มรายวิชาใหม่ลงตาราง courses
 @app.post("/api/v1/courses")
 async def create_course(payload: CourseCreateRequest):
@@ -336,6 +370,124 @@ async def get_courses_by_teacher(teacher_id: str):
         # 🌟 ตรงนี้สำคัญ: พิมพ์ Error ลงใน Terminal ของหลังบ้านให้เราเห็นด้วย
         print(f"DEBUG ERROR: {str(e)}") 
         # ส่ง Error กลับไปที่หน้าเว็บให้ชัดเจน
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/v1/attendance/checkin")
+async def student_check_in(payload: CheckInPayload):
+    try:
+        # 1. ตรวจสอบว่า เซสชันนี้มีอยู่จริง, เปิดอยู่ และ QR Token ตรงกันปัจจุบันหรือไม่
+        session_res = supabase.table('attendance_sessions') \
+            .select('*, courses(*)') \
+            .eq('id', payload.session_id) \
+            .eq('status', 'open') \
+            .execute()
+            
+        if not session_res.data:
+            raise HTTPException(status_code=400, detail="QR Code หมดอายุ หรือห้องเรียนปิดระบบแล้ว")
+            
+        session_info = session_res.data[0]
+        course_config = session_info['courses']  # ดึงข้อมูลเกณฑ์ที่อาจารย์ตั้งค่าไว้จากตารางผูก
+        
+        # ตรวจสอบ Token ว่าตรงกับที่หมุนอยู่ปัจจุบันไหม
+        if session_info['qr_token'] != payload.qr_token:
+            raise HTTPException(status_code=400, detail="Dynamic QR Code ไม่ถูกต้องหรือหมดอายุแล้ว")
+            
+        # 2. คำนวณเวลาส่วนต่าง (หน่วยนาที)
+        created_at_str = session_info['created_at'] # เวลาเปิดเซสชัน (เวลาเริ่มคาบ)
+        session_start_time = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+        current_time = datetime.now(timezone.utc)
+        
+        minutes_diff = (current_time - session_start_time).total_seconds() / 60
+        
+        # 3. ตรวจสอบเกณฑ์แบบ Dynamic ตามที่ตั้งค่าไว้ในตารางวิชานั้นๆ
+        late_limit = course_config['late_threshold_minutes']       # ค่าปกติคือ 15
+        absent_limit = course_config['absent_threshold_minutes']   # ค่าปกติคือ 45
+        
+        calculated_status = "present"  # สถานะเริ่มต้น: มาเรียนปกติ
+        
+        if minutes_diff > absent_limit:
+            calculated_status = "absent"  # เกิน 45 นาที -> ขาดเรียน
+        elif minutes_diff > late_limit:
+            calculated_status = "late"    # เกิน 15 นาที -> มาสาย
+            
+        # 4. บันทึกประวัติการเช็คชื่อลงตารางประวัตินักศึกษา (attendance_records)
+        attendance_data = {
+            "session_id": payload.session_id,
+            "student_id": payload.student_id,
+            "check_in_time": current_time.isoformat(),
+            "status": calculated_status  # เก็บเป็น 'present', 'late', หรือ 'absent'
+        }
+        
+        record_res = supabase.table('attendance_records').insert(attendance_data).execute()
+        
+        return {
+            "status": "success",
+            "calculated_status": calculated_status,
+            "minutes_diff": round(minutes_diff, 2)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/api/v1/courses/{course_id}/attendance-summary")
+async def get_course_attendance_summary(course_id: str):
+    try:
+        # 1. ดึงข้อมูลเกณฑ์ของวิชานี้ออกมาดู
+        course_res = supabase.table('courses').select('*').eq('id', course_id).execute()
+        if not course_res.data:
+            raise HTTPException(status_code=404, detail="ไม่พบข้อมูลรายวิชา")
+        course = course_res.data[0]
+        
+        total_sessions = course['total_sessions']        # เช่น 15 ครั้ง
+        max_absent_pct = course['max_absence_percent']  # เช่น 20%
+        
+        # คำนวณจำนวนครั้งสูงสุดที่ขาดได้: 15 ครั้ง * (20/100) = ขาดได้ไม่เกิน 3 ครั้ง หากขาด >= 4 ครั้ง ได้ Fa
+        allowed_absent_count = total_sessions * (max_absent_pct / 100)
+
+        # 2. ดึงรายชื่อนักศึกษาทั้งหมดในวิชานี้พร้อมข้อมูลประวัติการเช็คชื่อ
+        # (หมายเหตุ: ปรับโครงสร้าง Query ตามความสัมพันธ์ตารางจริงของคุณ)
+        records_res = supabase.table('attendance_records') \
+            .select('student_id, status, attendance_sessions!inner(course_id)') \
+            .eq('attendance_sessions.course_id', course_id) \
+            .execute()
+            
+        # 3. จัดกลุ่มประมวลผลข้อมูล (Data Aggregation)
+        student_summary = {}
+        for rec in records_res.data:
+            s_id = rec['student_id']
+            if s_id not in student_summary:
+                student_summary[s_id] = {"present": 0, "late": 0, "absent": 0, "leave": 0}
+            student_summary[s_id][rec['status']] += 1
+
+        # 4. วิเคราะห์ตัดเกรดตามเงื่อนไข Production
+        final_report = []
+        for s_id, summary in student_summary.items():
+            absent_count = summary['absent']
+            # คำนวณอัตราส่วนการขาดเรียนจริงเป็นเปอร์เซ็นต์
+            absence_rate = (absent_count / total_sessions) * 100
+            
+            # ตัดสินเกรด Fa
+            grade_status = "Normal"
+            if absent_count > allowed_absent_count:
+                grade_status = "Fa"  # สอบตกเนื่องจากเวลาเรียนไม่พอ (Failed Attendance)
+
+            final_report.append({
+                "student_id": s_id,
+                "attendance_stats": summary,
+                "total_absent_count": absent_count,
+                "absence_percentage": round(absence_rate, 2),
+                "evaluation": grade_status
+            })
+            
+        return {
+            "status": "success",
+            "course_config": {
+                "total_term_sessions": total_sessions,
+                "max_allowed_absent_sessions": allowed_absent_count
+            },
+            "report": final_report
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

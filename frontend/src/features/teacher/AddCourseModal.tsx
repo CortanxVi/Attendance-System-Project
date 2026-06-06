@@ -32,9 +32,10 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
         onSuccess(); // รีเฟรชยอดวิชาบนหน้าจอหลัก
         onClose();   // ปิดหน้าต่างนี้ลงไป
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert('เกิดข้อผิดพลาด: ไม่สามารถบันทึกข้อมูลวิชาเรียนลงฐานข้อมูลได้');
+      const detailMsg = error.response?.data?.detail || error.message || 'ไม่สามารถบันทึกข้อมูลวิชาเรียนลงฐานข้อมูลได้';
+      alert(`เกิดข้อผิดพลาด: ${detailMsg}`);
     } finally {
       setIsLoading(false);
     }
@@ -58,7 +59,7 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
             <label className="block text-sm font-bold text-gray-700 mb-1">รหัสวิชา</label>
             <input 
               type="text" 
-              placeholder="ตัวอย่างเช่น CS301" 
+              placeholder="ตัวอย่าง 030513xxx" 
               value={courseCode}
               onChange={(e) => setCourseCode(e.target.value)}
               className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
@@ -70,7 +71,7 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
             <label className="block text-sm font-bold text-gray-700 mb-1">ชื่อรายวิชา</label>
             <input 
               type="text" 
-              placeholder="ตัวอย่างเช่น Software Engineering" 
+              placeholder="ตัวอย่าง Computer Programming" 
               value={courseName}
               onChange={(e) => setCourseName(e.target.value)}
               className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
