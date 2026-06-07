@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { BookOpen, UserPlus, FileText, Users, Settings, LogOut, QrCode, Menu, X } from 'lucide-react';
+import { BookOpen, UserPlus, FileText, Users, Settings, LogOut, LayoutDashboard, Menu, X } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 
 export default function TeacherLayout() {
@@ -43,8 +43,8 @@ export default function TeacherLayout() {
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800">
           <h1 className="font-bold text-xl flex items-center gap-2">
-            <QrCode size={24} className="text-orange-500" />
-            <span className="text-orange-400">CheckIn Pro</span>
+            <LayoutDashboard size={24} className="text-orange-500" />
+            <span className="text-orange-400 text-lg">Attendance System</span>
           </h1>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white">
             <X size={24} />
