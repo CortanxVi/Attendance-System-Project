@@ -12,6 +12,8 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
   const [courseCode, setCourseCode] = useState<string>('');
   const [courseName, setCourseName] = useState<string>('');
   const [section, setSection] = useState<number>(1);
+  const [year, setYear] = useState<number>(0);
+  const [semester, setSemester] = useState<number>(1);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -24,8 +26,10 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
       const response = await axios.post('/api/v1/courses', {
         course_code: courseCode,
         course_name: courseName,
+        teacher_id: teacherId,
         section: Number(section),
-        teacher_id: teacherId
+        year: Number(year),
+        semester: Number(semester),
       });
 
       if (response.data.status === 'success') {
@@ -89,6 +93,32 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
               className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
               required
             />
+          </div>
+
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-bold text-gray-700 mb-1">ภาคการศึกษา (Semester)</label>
+              <input 
+                type="number" 
+                min="1"
+                max="3"
+                value={semester}
+                onChange={(s) => setSemester(Number(s.target.value))}
+                className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                required
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-bold text-gray-700 mb-1">ปีการศึกษา (Year)</label>
+              <input 
+                type="number"
+                min="1"
+                value={year}
+                onChange={(y) => setYear(Number(y.target.value))}
+                className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                required
+              />
+            </div>
           </div>
 
           <button 

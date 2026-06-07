@@ -40,11 +40,28 @@ class CourseCreateRequest(BaseModel):
     course_name: str
     section: int
     teacher_id: str
+    year: int
+    semester: int
 
 class CheckInPayload(BaseModel):
     student_id: str
     session_id: str
     qr_token: str  # นักศึกษาส่ง Token ที่สแกนได้มาตรวจความถูกต้อง
+
+# Model สำหรับรับค่าอัปเดตเกณฑ์คะแนน
+class CourseSettingsRequest(BaseModel):
+    total_sessions: int
+    late_threshold_minutes: int
+    absent_threshold_minutes: int
+    max_absence_percent: int
+
+# Model สำหรับแก้ไขข้อมูลวิชา
+class CourseUpdateRequest(BaseModel):
+    course_code: str
+    course_name: str
+    section: int
+    semester: int
+    year: int
 
 app = FastAPI(title="KMUTNB Face Recognition API")
 router = APIRouter()
@@ -431,11 +448,14 @@ async def create_course(payload: CourseCreateRequest):
         course_data = {
             "course_code": payload.course_code.strip(),
             "course_name": payload.course_name.strip(),
+            "teacher_id": payload.teacher_id,
             "section": payload.section,
-            "teacher_id": payload.teacher_id
+            "year": payload.year,
+            "semester": payload.semester
         }
         response = supabase.table('courses').insert(course_data).execute()
-        return {"status": "success", "course": response.data[0]}
+        return {"status": "success",
+                "course": response.data[0]}
     except Exception as e:
         # 🌟 ปรับตรง detail ให้พ่น Error ออกมาฟ้องที่หน้าเว็บ
         raise HTTPException(status_code=500, detail=f"Supabase POST Error: {str(e)}")
@@ -457,10 +477,55 @@ async def get_courses_by_teacher(teacher_id: str):
         # ส่ง Error กลับไปที่หน้าเว็บให้ชัดเจน
         raise HTTPException(status_code=500, detail=str(e))
 
+# 3. API บันทึกการตั้งค่าเกณฑ์วิชา (รองรับ CourseSettings.tsx)
+@app.put("/api/v1/courses/{course_id}/settings")
+async def update_course_settings(course_id: str, payload: CourseSettingsRequest):
+    try:
+        response = supabase.table('courses').update({
+            "total_sessions": payload.total_sessions,
+            "late_threshold_minutes": payload.late_threshold_minutes,
+            "absent_threshold_minutes": payload.absent_threshold_minutes,
+            "max_absence_percent": payload.max_absence_percent
+        }).eq('id', course_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
+        return {"status": "success", "message": "อัปเดตเกณฑ์สำเร็จ"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 4. API แก้ไขข้อมูลรายวิชา (Edit)
+@app.put("/api/v1/courses/{course_id}")
+async def update_course_details(course_id: str, payload: CourseUpdateRequest):
+    try:
+        response = supabase.table('courses').update({
+            "course_code": payload.course_code.strip(),
+            "course_name": payload.course_name.strip(),
+            "section": payload.section,
+            "semester": payload.semester,
+            "year": payload.year
+        }).eq('id', course_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 5. API ลบรายวิชา (Delete)
+@app.delete("/api/v1/courses/{course_id}")
+async def delete_course(course_id: str):
+    try:
+        response = supabase.table('courses').delete().eq('id', course_id).execute()
+        # หมายเหตุ: หากฐานข้อมูลมีข้อมูลตารางอื่นผูกอยู่ ต้องแน่ใจว่าตั้งค่า ON DELETE CASCADE ไว้ที่ Supabase
+        return {"status": "success", "message": "ลบรายวิชาเรียบร้อยแล้ว"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="ไม่สามารถลบวิชาได้ เนื่องจากอาจมีประวัติการเช็คชื่อผูกอยู่")
+
 @router.post("/api/v1/attendance/checkin")
 async def student_check_in(payload: CheckInPayload):
     try:
-        # 1. ตรวจสอบว่า เซสชันนี้มีอยู่จริง, เปิดอยู่ และ QR Token ตรงกันปัจจุบันหรือไม่
+        # 5.1. ตรวจสอบว่า เซสชันนี้มีอยู่จริง, เปิดอยู่ และ QR Token ตรงกันปัจจุบันหรือไม่
         session_res = supabase.table('attendance_sessions') \
             .select('*, courses(*)') \
             .eq('id', payload.session_id) \
@@ -477,14 +542,14 @@ async def student_check_in(payload: CheckInPayload):
         if session_info['qr_token'] != payload.qr_token:
             raise HTTPException(status_code=400, detail="Dynamic QR Code ไม่ถูกต้องหรือหมดอายุแล้ว")
             
-        # 2. คำนวณเวลาส่วนต่าง (หน่วยนาที)
+        # 5.2. คำนวณเวลาส่วนต่าง (หน่วยนาที)
         created_at_str = session_info['created_at'] # เวลาเปิดเซสชัน (เวลาเริ่มคาบ)
         session_start_time = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
         current_time = datetime.now(timezone.utc)
         
         minutes_diff = (current_time - session_start_time).total_seconds() / 60
         
-        # 3. ตรวจสอบเกณฑ์แบบ Dynamic ตามที่ตั้งค่าไว้ในตารางวิชานั้นๆ
+        # 5.3. ตรวจสอบเกณฑ์แบบ Dynamic ตามที่ตั้งค่าไว้ในตารางวิชานั้นๆ
         late_limit = course_config['late_threshold_minutes']       # ค่าปกติคือ 15
         absent_limit = course_config['absent_threshold_minutes']   # ค่าปกติคือ 45
         
@@ -495,7 +560,7 @@ async def student_check_in(payload: CheckInPayload):
         elif minutes_diff > late_limit:
             calculated_status = "late"    # เกิน 15 นาที -> มาสาย
             
-        # 4. บันทึกประวัติการเช็คชื่อลงตารางประวัตินักศึกษา (attendance_records)
+        # 5.4. บันทึกประวัติการเช็คชื่อลงตารางประวัตินักศึกษา (attendance_records)
         attendance_data = {
             "session_id": payload.session_id,
             "student_id": payload.student_id,

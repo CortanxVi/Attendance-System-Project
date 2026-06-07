@@ -49,7 +49,7 @@ export default function CourseSettingsModal({
     } catch (error: any) {
       console.error(error);
       const detailMsg = error.response?.data?.detail || error.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลตั้งค่า';
-      alert(`❌ ${detailMsg}`);
+      alert(`${detailMsg}`);
     } finally {
       setIsSaving(false);
     }
