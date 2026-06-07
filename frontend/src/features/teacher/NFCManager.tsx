@@ -10,9 +10,9 @@ interface NFCManagerProps {
 
 export default function NFCManager({ defaultCourseCode, activeSessionId, onClose }: NFCManagerProps) {
   const [scanUid, setScanUid] = useState('');
-  const [statusMessage, setStatusMessage] = useState({ text: '🔴 รอกล่องสแกนบัตร...', type: 'info' });
+  const [statusMessage, setStatusMessage] = useState({ text: '🔴 กำลังรอการสแกนบัตร...', type: 'info' });
   const [latestCheckIns, setLatestCheckIns] = useState<any[]>([]); // เก็บประวัติคนสแกนล่าสุดแสดงบนจอ
-  const rfidInputRef = useRef<HTMLInputElement>(null);
+  const rfidInputRef = useRef<HTMLInputElement>(null); // เก็บการเรียกใช้ DOM Element
 
   // บังคับให้ Cursor โฟกัสที่ช่อง Input ตลอดเวลาเพื่อรอรับค่าจากเครื่องสแกน
   useEffect(() => {
@@ -21,15 +21,16 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
     return () => clearInterval(interval);
   }, []);
 
+  // จับ focus อัตโนมัติ
   const focusInput = () => {
     if (rfidInputRef.current) {
-      rfidInputRef.current.focus();
+      rfidInputRef.current.focus(); // เรียกให้ input นี้ focus อยู่เสมอถ้าไม่ focus input จะไม่รับ keyboard input ได้
     }
   };
 
   // ฟังก์ชันจังหวะที่เครื่องสแกนยิงรหัส UID เข้ามา (กด Enter อัตโนมัติ)
   const handleCardScanned = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault(); // ป้องกัน form reload หน้าเพจ กำกับไว้เพื่อให้ React จัดการเอง
     const currentUid = scanUid.trim();
     if (!currentUid) return;
 
@@ -43,19 +44,20 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
       setStatusMessage({ text: '⌛ กำลังตรวจสอบข้อมูลบัตร...', type: 'loading' });
       
       // 🌟 ยิง API ไปที่หลังบ้านเพื่อทำการเช็คชื่อด้วย NFC UID
-      const response = await axios.post('/api/v1/attendance/checkin-nfc', {
-        session_id: activeSessionId,
-        nfc_uid: currentUid
+      const response = await axios.post('/api/v1/nfc/checkin', {
+        nfc_uid: currentUid,
+        session_id: activeSessionId
       });
 
       if (response.data.status === 'success') {
+        let receiveInfo = response.data.student_info;
         setStatusMessage({ 
-          text: `✅ เช็คชื่อสำเร็จ: รหัสนักศึกษา ${response.data.student_id} (${response.data.calculated_status})`, 
+          text: `✅ เช็คชื่อสำเร็จ: รหัสนักศึกษา ${receiveInfo.student_id} (${response.data.status})`, 
           type: 'success' 
         });
         
         // เพิ่มรายชื่อนักศึกษาที่เพิ่งสแกนเข้าไปในรายการแสดงผลหน้าจอ
-        setLatestCheckIns(prev => [response.data.student_info, ...prev].slice(0, 5));
+        setLatestCheckIns(prev => [receiveInfo, ...prev].slice(0, 5));
       }
     } catch (error: any) {
       setStatusMessage({ 
@@ -96,7 +98,7 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
           </div>
 
           {/* ซ่อนช่องรับค่า Input นี้ไว้เบื้องหลัง (แต่โฟกัสไว้) เพื่อรับค่าจากเครื่องสแกนคีย์บอร์ดจำลอง */}
-          <form onSubmit={handleCardScanned} className="opacity-0 absolute">
+          <form onSubmit={handleCardScanned} className="opacity-0 absolute"> {/* opacity-0 absolute Hidden Auto-focus Input ซ่อนกล่องข้อความ */ }
             <input
               ref={rfidInputRef}
               type="text"

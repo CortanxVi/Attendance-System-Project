@@ -57,6 +57,13 @@ supabase: Client = create_client(supabase_url, supabase_rkey)
 
 # เกณฑ์คะแนนความเหมือนใบหน้า (0.45 - 0.50 ถือว่าแม่นยำและปลอดภัยสูงสำหรับ CPU)
 FACE_THRESHOLD = 0.45
+SUPABASE_ERROR_MESSAGES = {
+    '23505': 'นักศึกษาเช็คชื่อในคาบนี้ไปแล้ว',
+    '23503': 'ไม่พบ session หรือนักศึกษาในระบบ',
+    '23502': 'ข้อมูลไม่ครบถ้วน กรุณาลองใหม่',
+    '42501': 'ไม่มีสิทธิ์ดำเนินการ (RLS policy)',
+    'PGRST116': 'ไม่พบข้อมูลในฐานข้อมูล',
+}
 
 # เปิด CORS เพื่อให้ Frontend (localhost) ยิงหาหลังบ้านได้
 app.add_middleware(
@@ -73,6 +80,37 @@ def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
     """แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV"""
     nparr = np.frombuffer(image_bytes, np.uint8)
     return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+def parse_supabase_error(error_str_or_dict) -> str:
+    """
+    ฟังก์ชันช่วยแปลง Error จาก Supabase/PostgreSQL ให้เป็นข้อความที่ผู้ใช้งานทั่วไปเข้าใจได้ง่ายขึ้น
+    """
+    try:
+        import ast
+        # กรณีที่ error ส่งมาเป็น string แต่มีหน้าตาเหมือน dict (เช่น "{'message': '...'}")
+        if isinstance(error_str_or_dict, str) and error_str_or_dict.startswith("{"):
+            error_dict = ast.literal_eval(error_str_or_dict)
+        elif isinstance(error_str_or_dict, dict):
+            error_dict = error_str_or_dict
+        else:
+            return str(error_str_or_dict)
+
+        code = error_dict.get("code")
+        
+        # 🌟 คลังคำศัพท์ Error ภาษาไทยที่พบบ่อย 🌟
+        if code == "23505":
+            return "นักศึกษาคนนี้ได้ทำการเช็คชื่อในคาบเรียนนี้ไปเรียบร้อยแล้ว (ข้อมูลซ้ำ)"
+        elif code == "23503":
+            return "ข้อมูลอ้างอิงไม่ถูกต้อง (ไม่พบรหัสนักศึกษาหรือรหัสห้องเรียนนี้ในระบบ)"
+        elif code == "23502":
+            return "ข้อมูลไม่ครบถ้วน (มีช่องว่างที่ฐานข้อมูลบังคับให้ต้องกรอก)"
+        
+        # ถ้าหาโค้ดไม่เจอ ให้ดึงเอาข้อความ Details ภาษาอังกฤษมาผสมกัน
+        return f"ข้อผิดพลาดฐานข้อมูล ({code}): {error_dict.get('message', 'Unknown Error')}"
+
+    except Exception:
+        # ถ้าเกิดแปลงร่างไม่สำเร็จ ก็ส่งกลับไปดิบๆ เพื่อป้องกันระบบพังซ้ำซ้อน
+        return str(error_str_or_dict)
 
 @app.post("/api/v1/enrollment/register-face")
 async def register_face(
@@ -221,22 +259,53 @@ async def register_nfc_card(payload: NFCRegisterRequest):
                 status_code=400, 
                 detail=f"ไม่สามารถลงทะเบียนได้: รหัส UID ต้องมีความยาว 10 หลักเท่านั้น (ค่าที่ส่งมามี {len(uid_clean)} หลัก)"
             )
+        
+        # where student_id = student_id ที่อ่านค่าได้
+        resCheck = supabase.table('profiles') \
+            .select("student_id, nfc_uid, full_name") \
+            .eq('student_id', payload.student_id) \
+            .execute()
+        student_data = resCheck.data[0]
+
+        # where nfc_uid = nfc_uid ที่อ่านค่าได้
+        card_check = supabase.table('profiles') \
+            .select("student_id") \
+            .eq('nfc_uid', uid_clean) \
+            .execute()
 
         # ค้นหานักศึกษาและอัปเดตเลข nfc_uid ลงในตาราง profiles
+        # where student_id = student_id ที่อ่านค่าได้
         response = supabase.table('profiles') \
             .update({'nfc_uid': uid_clean}) \
             .eq('student_id', payload.student_id) \
             .execute()
+
+        if not resCheck.data:
+            raise HTTPException(status_code=404, detail="ไม่พบรหัสนักศึกษาในระบบ กรุณาเพิ่มรายชื่อก่อนผูกบัตร")
+        
+        # รหัสนักศึกษาเลขนี้มีหมายเลข nfc_uid อยู่ในฐานข้อมูลหรือไม่ ถ้ามีคืน error ถ้าไม่มี ปล่อยผ่าน
+        if student_data.get('nfc_uid'):
+            raise HTTPException(
+                status_code=409, # 409 Conflict เหมาะกับกรณีข้อมูลซ้ำ
+                detail=f"นักศึกษารหัส {payload.student_id} มีการผูกบัตร NFC ไว้ในระบบเรียบร้อยแล้ว ไม่สามารถผูกซ้ำได้"
+            )
+
+        # ดึงค่ารหัสนักศึกษาออกมาดูถ้ามีแสดงว่า nfc_uid ที่อ่านได้ถูกใช้งานไปแล้ว
+        if card_check.data:
+            raise HTTPException(
+                status_code=409,
+                detail="บัตร NFC ใบนี้ถูกใช้งานและผูกกับนักศึกษาคนอื่นไปแล้ว กรุณาใช้บัตรใบใหม่"
+            )
         
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบรหัสนักศึกษาในระบบ")
-            
-        return {"status": "success", "message": f"ผูกบัตร NFC กับรหัส {payload.student_id} สำเร็จ"}
-    except HTTPException as he:
-        raise he
+        return {"status": "success",
+                "message": f"ผูกบัตร NFC กับรหัส {payload.student_id} สำเร็จ"}
+    
+    except HTTPException as ea:
+        raise ea
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/api/v1/nfc/checkin")
 async def nfc_checkin(payload: NFCCheckInRequest):
@@ -245,13 +314,15 @@ async def nfc_checkin(payload: NFCCheckInRequest):
         user_response = supabase.table('profiles') \
             .select('id', 'student_id', 'full_name') \
             .eq('nfc_uid', payload.nfc_uid) \
-            .single() \
             .execute()
             
         if not user_response.data:
-            raise HTTPException(status_code=404, detail="บัตร NFC ใบนี้ยังไม่ได้ลงทะเบียนในระบบ")
+            raise HTTPException(
+                status_code=404,
+                detail="บัตร NFC ใบนี้ยังไม่ได้ลงทะเบียนในระบบ"
+            )
             
-        student = user_response.data
+        student = user_response.data[0]
         student_uuid = student['id'] # UUID จาก auth.users
 
         # 2. ทำการบันทึกข้อมูลการเช็คชื่อเข้าตาราง attendance_records
@@ -267,6 +338,12 @@ async def nfc_checkin(payload: NFCCheckInRequest):
             .insert(attendance_data) \
             .execute()
             
+        if not record_response.data:
+            raise HTTPException(
+                status_code=400,
+                detail="ไม่สามารถบันทึกประวัติการเข้าเรียนลงฐานข้อมูลได้",
+            )
+        
         return {
             "status": "success",
             "message": "เช็คชื่อผ่าน NFC สำเร็จ",
@@ -276,8 +353,16 @@ async def nfc_checkin(payload: NFCCheckInRequest):
                 "method": "nfc" # face_ocr, nfc, manual 
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # 🌟 นำฟังก์ชันมาครอบตรงนี้ 🌟
+        error_message = parse_supabase_error(str(e))
+        
+        raise HTTPException(
+            status_code=500, 
+            detail=f"เกิดข้อผิดพลาด: {error_message}"
+        )
 
 # API สำหรับอาจารย์กดสร้างห้องเรียน (เปิด Session)
 @app.post("/api/v1/sessions/start")
