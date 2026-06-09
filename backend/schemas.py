@@ -43,3 +43,10 @@ class AttendanceSummary(BaseModel):
     late: int
     absent: int
     leave: int
+
+class AttendanceCheckIn(BaseModel):
+    session_id: str
+    student_uuid: str
+    status: str = "present"
+    method: str
+    similarity_score: Optional[float] = None
