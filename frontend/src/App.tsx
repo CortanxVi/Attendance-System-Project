@@ -11,6 +11,13 @@ import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
 import RegisterNFC from './features/teacher/RegisterNFC';
 
+import AdminLayout from './components/layout/AdminLayout';
+import AdminDashboard from './features/admin/AdminDashboard';
+import UserManagement from './features/admin/UserManagement';
+import AllCoursesManagement from './features/admin/AllCoursesManagement';
+import SystemLogs from './features/admin/SystemLogs';
+import ExportReports from './features/admin/ExportReports';
+
 interface UserProfile {
   id: string;
   email: string;
@@ -92,8 +99,19 @@ export default function App() {
           </Route>
         )}
 
-        {/* เส้นทางสำหรับอาจารย์ (และแอดมินใช้ร่วมกันก่อน) */}
-        {(profile.role === 'teacher' || profile.role === 'admin') && (
+        {/* เส้นทางสำหรับแอดมิน */}
+        {profile.role === 'admin' && (
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<AdminDashboard />} />
+            <Route path="users" element={<UserManagement />} />
+            <Route path="courses" element={<AllCoursesManagement />} />
+            <Route path="logs" element={<SystemLogs />} />
+            <Route path="reports" element={<ExportReports />} />
+          </Route>
+        )}
+
+        {/* เส้นทางสำหรับอาจารย์ */}
+        {profile.role === 'teacher' && (
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
             <Route path="register-nfc" element={<RegisterNFC />} />
@@ -106,7 +124,7 @@ export default function App() {
         {/* หากเข้ามา URL ผิด หรือเข้าหน้าหลัก (/) ให้ Redirect ไปที่หน้าของตัวเอง */}
         <Route 
           path="*" 
-          element={<Navigate to={profile.role === 'student' ? "/student" : "/teacher"} replace />} 
+          element={<Navigate to={profile.role === 'admin' ? "/admin" : profile.role === 'student' ? "/student" : "/teacher"} replace />} 
         />
       </Routes>
     </BrowserRouter>

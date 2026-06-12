@@ -13,9 +13,11 @@ from typing import Optional
 from enum import Enum
 from datetime import datetime, timezone
 
-# นำเข้าเครื่องมือจาก services ที่เราปรับปรุงใหม่
 from services.easyocr_service import ocr_service
 from services.insightface_service import face_service
+
+# นำเข้า Router สำหรับ Admin
+from routers.admin import admin_router
 
 class NFCRegisterRequest(BaseModel):
     student_id: str
@@ -92,6 +94,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(admin_router)
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
     """แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV"""

@@ -16,12 +16,15 @@
     "@tailwindcss/vite": "^4.3.0",
     "@yudiel/react-qr-scanner": "^2.6.0",
     "axios": "^1.16.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.16.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.15.1",
-    "react-webcam": "^7.2.0"
+    "react-webcam": "^7.2.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
