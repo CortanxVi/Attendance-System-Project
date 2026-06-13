@@ -31,7 +31,7 @@ export default function TeacherLayout() {
 
   // ชื่อหน้าปัจจุบันสำหรับแสดงบน mobile header
   const currentPageName = menuItems.find(item => isActive(item.path))?.name || 'ระบบจัดการการเข้าเรียน';
-
+  
   return (
     <div className="flex h-screen bg-gray-100">
       {/* แถบดำทับหน้าจอเมื่อเปิด Sidebar บนมือถือ */}
