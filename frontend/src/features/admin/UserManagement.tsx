@@ -5,12 +5,12 @@ import {
   ShieldAlert,
   User,
   ShieldCheck,
-  Plus,
   Edit,
   Trash2,
   X,
 } from "lucide-react";
 
+// 🌟 1. Interface สำหรับข้อมูลผู้ใช้ที่ดึงมาจาก API
 interface UserProfile {
   id: string;
   student_id: string;
@@ -20,26 +20,42 @@ interface UserProfile {
   nfc_uid: string | null;
 }
 
+// 🌟 2. Interface สำหรับ Form Data (ข้อมูลในช่องกรอก)
+interface UserFormData {
+  student_id: string;
+  full_name: string;
+  role: string;
+}
+
+// 🌟 3. Interface สำหรับ Payload ที่จะส่งไป API หลังบ้าน (ใช้ Partial เพื่อให้ฟิลด์บางตัวเป็น Optional ได้)
+interface UpdateUserPayload extends Partial<UserFormData> {
+  admin_id: string; // บังคับว่าต้องมี admin_id เสมอเพื่อเอาไปบันทึก Log
+}
+
 export default function UserManagement() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [adminId, setAdminId] = useState("");
 
-  // 🌟 States สำหรับจัดการ Modal (เพิ่ม / แก้ไข ผู้ใช้งาน)
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<"edit" | "delete" | unknown>("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
-  // States สำหรับข้อมูลในฟอร์ม
-  const [formData, setFormData] = useState({
+  // นำ Interface มาผูกกับ State
+  const [formData, setFormData] = useState<UserFormData>({
     student_id: "",
     full_name: "",
     role: "student",
   });
+  
+  const [originalData, setOriginalData] = useState<UserFormData>({
+    student_id: "",
+    full_name: "",
+    role: "student",
+  });
+  
   const [formSubmitLoading, setFormSubmitLoading] = useState(false);
 
   useEffect(() => {
-    // ดึงรหัสแอดมินปัจจุบันเพื่อใช้ในการบันทึก Log
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user?.id) {
         setAdminId(session.user.id);
@@ -60,70 +76,86 @@ export default function UserManagement() {
     }
   };
 
-  // 🔄 ฟังก์ชันเปลี่ยน Role แบบด่วนจาก Dropdown (โค้ดเดิมคงไว้)
-  const handleChangeRole = async (userId: string, newRole: string) => {
-    if (
-      !window.confirm(
-        `ต้องการเปลี่ยนสิทธิ์ผู้ใช้นี้เป็น ${newRole.toUpperCase()} ใช่หรือไม่?`,
-      )
-    )
-      return;
-    try {
-      await axios.put(`/api/v1/admin/users/${userId}/role`, {
-        role: newRole,
-        admin_id: adminId,
-      });
-      alert("เปลี่ยนสิทธิ์สำเร็จ");
-      fetchUsers();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || "เกิดข้อผิดพลาดในการเปลี่ยนสิทธิ์");
-    }
-  };
-
-  // 🛠️ เปิด Modal สำหรับแก้ไขข้อมูลผู้ใช้เดิม
   const openEditModal = (user: UserProfile) => {
-    setModalMode("edit");
     setSelectedUserId(user.id);
-    setFormData({
+    
+    const initialData: UserFormData = {
       student_id: user.student_id || "",
       full_name: user.full_name || "",
       role: user.role,
-    });
+    };
+    
+    setFormData(initialData);
+    setOriginalData(initialData); 
     setIsModalOpen(true);
   };
 
-  // 💾 ฟังก์ชันบันทึกข้อมูล (ทั้ง Add และ Edit)
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // 🌟 ดักจับ Error กรณีไม่มี ID
+    if (!selectedUserId) {
+      alert("เกิดข้อผิดพลาด: ไม่พบ ID ของผู้ใช้งาน");
+      return;
+    }
+
     if (!formData.full_name.trim()) {
       alert("กรุณากรอกชื่อ-นามสกุล");
       return;
     }
 
+    // 🌟 จัดเตรียม Payload โดยบังคับใส่ admin_id เสมอ
+    const payload: UpdateUserPayload = {
+      admin_id: adminId,
+    };
+
+    let hasChanges = false;
+
+    // เช็คทีละฟิลด์ ถ้าอันไหนเปลี่ยน ค่อยยัดใส่ Payload
+    if (formData.student_id !== originalData.student_id) {
+      payload.student_id = formData.student_id;
+      hasChanges = true;
+    }
+    if (formData.full_name !== originalData.full_name) {
+      payload.full_name = formData.full_name;
+      hasChanges = true;
+    }
+    if (formData.role !== originalData.role) {
+      payload.role = formData.role;
+      hasChanges = true;
+    }
+
+    // ถ้าไม่มีการเปลี่ยนแปลง ให้ปิด Modal ไปเลย ไม่ต้องส่ง API
+    if (!hasChanges) {
+      setIsModalOpen(false);
+      return;
+    }
+
     try {
       setFormSubmitLoading(true);
-      await axios.put(`/api/v1/admin/users/${selectedUserId}/info`, {
-        ...formData,
-        admin_id: adminId,
-      });
+      
+      // ส่ง payload ที่มีเฉพาะข้อมูลที่ถูกแก้ + admin_id ไปที่ API
+      await axios.put(`/api/v1/admin/users/${selectedUserId}/info`, payload);
+      
       alert("แก้ไขข้อมูลผู้ใช้งานสำเร็จ");
       setIsModalOpen(false);
-      fetchUsers(); // รีเฟรชตารางข้อมูล
+      fetchUsers(); 
     } catch (err: any) {
-      alert(err.response?.data?.detail || "เกิดข้อผิดพลาดในการบันทึกข้อมูล");
+      const detail = err.response?.data?.detail;
+      let errMsg = "เกิดข้อผิดพลาดในการบันทึกข้อมูล";
+      if (typeof detail === 'string') {
+        errMsg = detail;
+      } else if (Array.isArray(detail)) {
+        errMsg = detail.map((d: any) => `${d.loc?.join('.')} : ${d.msg}`).join('\\n');
+      }
+      alert(errMsg);
     } finally {
       setFormSubmitLoading(false);
     }
   };
 
-  // ❌ ฟังก์ชันลบผู้ใช้งาน
   const handleDeleteUser = async (userId: string, userName: string) => {
-    if (
-      !window.confirm(
-        `⚠️ คุณแน่ใจหรือไม่ว่าต้องการลบผู้ใช้ "${userName}"ออกจากระบบ?\n\nการดำเนินการนี้ไม่สามารถย้อนกลับได้`,
-      )
-    )
-      return;
+    if (!window.confirm(`⚠️ คุณแน่ใจหรือไม่ว่าต้องการลบผู้ใช้ "${userName}" ออกจากระบบ?\n\nการดำเนินการนี้ไม่สามารถย้อนกลับได้`)) return;
     try {
       await axios.delete(`/api/v1/admin/users/${userId}`, {
         params: { admin_id: adminId },
@@ -137,7 +169,6 @@ export default function UserManagement() {
 
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6 animate-fade-in">
-      {/* ส่วนหัวหน้าเว็บและปุ่มเพิ่มผู้ใช้ */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-100 pb-4">
         <div className="flex items-center gap-3">
           <div className="bg-red-50 p-2 rounded-xl text-red-500">
@@ -148,14 +179,12 @@ export default function UserManagement() {
               จัดการผู้ใช้งานและสิทธิ์ (User Management)
             </h2>
             <p className="text-sm text-gray-500">
-              ตรวจสอบสิทธิ์ เปลี่ยนระดับผู้ใช้งาน
-              และจัดการข้อมูลนักศึกษา/อาจารย์
+              ตรวจสอบสิทธิ์ เปลี่ยนระดับผู้ใช้งาน และจัดการข้อมูลนักศึกษา/อาจารย์
             </p>
           </div>
         </div>
       </div>
 
-      {/* ตารางแสดงข้อมูล */}
       {loading ? (
         <div className="text-center py-8 text-gray-500">
           กำลังโหลดข้อมูลผู้ใช้งาน...
@@ -218,33 +247,16 @@ export default function UserManagement() {
                   </td>
                   <td className="py-3 px-4 text-right">
                     <div className="flex items-center justify-end gap-3">
-                      {/* Dropdown เปลี่ยนบทบาทด่วน (โค้ดเดิมคงไว้เพื่อความสะดวก) */}
-                      <select
-                        className="border border-gray-300 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
-                        value={user.role}
-                        onChange={(e) =>
-                          handleChangeRole(user.id, e.target.value)
-                        }
-                      >
-                        <option value="student">Student</option>
-                        <option value="teacher">Teacher</option>
-                        <option value="admin">Admin</option>
-                      </select>
-
-                      {/* ปุ่มแก้ไขข้อมูล */}
                       <button
                         onClick={() => openEditModal(user)}
                         className="text-blue-500 hover:text-blue-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm cursor-pointer"
-                        title="แก้ไขข้อมูลรายละเอียด"
+                        title="แก้ไขข้อมูลรายละเอียดและสิทธิ์"
                       >
                         <Edit size={16} />
                       </button>
 
-                      {/* ปุ่มลบผู้ใช้ */}
                       <button
-                        onClick={() =>
-                          handleDeleteUser(user.id, user.full_name)
-                        }
+                        onClick={() => handleDeleteUser(user.id, user.full_name)}
                         className="text-red-500 hover:text-red-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm cursor-pointer"
                         title="ลบผู้ใช้งาน"
                       >
@@ -266,19 +278,13 @@ export default function UserManagement() {
         </div>
       )}
 
-      {/* 🖥️ หน้าต่าง Modal สำหรับเพิ่ม/แก้ไขผู้ใช้งาน (Popup Form) */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-xl border border-gray-100 overflow-hidden transform transition-all">
-            {/* ส่วนหัว Modal */}
             <div className="bg-slate-50 px-6 py-4 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                {
-                  <>
-                    <Edit size={18} className="text-blue-500" />{" "}
-                    แก้ไขข้อมูลผู้ใช้งาน
-                  </>
-                }
+                <Edit size={18} className="text-blue-500" />{" "}
+                แก้ไขข้อมูลผู้ใช้งาน
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
@@ -288,7 +294,6 @@ export default function UserManagement() {
               </button>
             </div>
 
-            {/* ฟอร์มกรอกข้อมูล */}
             <form onSubmit={handleSaveUser} className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">
@@ -298,11 +303,9 @@ export default function UserManagement() {
                   type="text"
                   required
                   placeholder="เช่น นายสมชาย ใจดี"
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={formData.full_name}
-                  onChange={(e) =>
-                    setFormData({ ...formData, full_name: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
                 />
               </div>
 
@@ -312,12 +315,10 @@ export default function UserManagement() {
                 </label>
                 <input
                   type="text"
-                  placeholder="เช่น 64010123 (ระบุเฉพาะกลุ่มนักศึกษา/อาจารย์)"
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500 font-mono"
+                  placeholder="เช่น 64010123"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                   value={formData.student_id}
-                  onChange={(e) =>
-                    setFormData({ ...formData, student_id: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
                 />
               </div>
 
@@ -326,11 +327,9 @@ export default function UserManagement() {
                   สิทธิ์การใช้งาน (Role)
                 </label>
                 <select
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={formData.role}
-                  onChange={(e) =>
-                    setFormData({ ...formData, role: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                 >
                   <option value="student">Student (นักศึกษา)</option>
                   <option value="teacher">Teacher (อาจารย์)</option>
@@ -338,7 +337,6 @@ export default function UserManagement() {
                 </select>
               </div>
 
-              {/* ปุ่มกดยืนยัน / ยกเลิก */}
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-100 mt-6">
                 <button
                   type="button"
@@ -350,11 +348,7 @@ export default function UserManagement() {
                 <button
                   type="submit"
                   disabled={formSubmitLoading}
-                  className={`px-4 py-2 rounded-xl text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer ${
-                    modalMode === "delete"
-                      ? "bg-red-600 hover:bg-red-700 disabled:bg-red-400"
-                      : "bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400"
-                  }`}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400"
                 >
                   {formSubmitLoading ? "กำลังบันทึก..." : "บันทึกข้อมูล"}
                 </button>

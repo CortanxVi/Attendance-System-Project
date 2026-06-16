@@ -1,8 +1,8 @@
 import os
 import json
 import uuid  # นำเข้าเพื่อใช้สร้าง ID ชั่วคราวให้ผู้ใช้ใหม่
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, status, Query
+from pydantic import BaseModel, field_validator
 from typing import Optional, Any
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -19,12 +19,26 @@ class UpdateRoleRequest(BaseModel):
     role: str # 'student', 'teacher', 'admin'
     admin_id: str # รหัสแอดมินที่ทำการแก้ไข (เพื่อเก็บ Log)
 
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v):
+        if v not in ['student', 'teacher', 'admin']:
+            raise ValueError("Role ต้องเป็น 'student', 'teacher' หรือ 'admin' เท่านั้น")
+        return v
+
 # เพิ่ม Model สำหรับรับข้อมูลเมื่อแก้ไขโปรไฟล์ผู้ใช้
 class UserInfoRequest(BaseModel):
-    student_id: str
-    full_name: str
-    role: str
+    student_id: Optional[str] = None
+    full_name: Optional[str] = None
+    role: Optional[str] = None
     admin_id: str
+
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v):
+        if v is not None and v not in ['student', 'teacher', 'admin']:
+            raise ValueError("Role ต้องเป็น 'student', 'teacher' หรือ 'admin' เท่านั้น")
+        return v
 
 # เพิ่ม Model สำหรับรับข้อมูลเมื่อสร้างผู้ใช้ใหม่
 class CreateUserRequest(BaseModel):
@@ -32,6 +46,13 @@ class CreateUserRequest(BaseModel):
     full_name: str
     role: str
     admin_id: str
+
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v):
+        if v not in ['student', 'teacher', 'admin']:
+            raise ValueError("Role ต้องเป็น 'student', 'teacher' หรือ 'admin' เท่านั้น")
+        return v
 
 class AuditLogRequest(BaseModel):
     admin_id: str
@@ -68,9 +89,6 @@ async def get_all_users():
 @admin_router.put("/users/{user_id}/role")
 async def update_user_role(user_id: str, payload: UpdateRoleRequest):
     """เปลี่ยนสิทธิ์การใช้งาน (Role) ของผู้ใช้"""
-    if payload.role not in ['student', 'teacher', 'admin']:
-        raise HTTPException(status_code=400, detail="Role ไม่ถูกต้อง")
-        
     try:
         response = supabase.table("profiles").update({"role": payload.role}).eq("id", user_id).execute()
         if not response.data:
@@ -88,18 +106,16 @@ async def update_user_role(user_id: str, payload: UpdateRoleRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ➕ [เพิ่มใหม่] API สำหรับสร้างผู้ใช้ใหม่ (ตาราง profiles)
+# API สำหรับสร้างผู้ใช้ใหม่ (ตาราง profiles)
 @admin_router.post("/users")
 async def create_user(payload: CreateUserRequest):
     """เพิ่มผู้ใช้งานใหม่เข้าไปในระบบ"""
     try:
-        # Best Practice: ตรวจสอบความปลอดภัย ป้องกันข้อมูลรหัสนักศึกษาซ้ำซ้อน
         if payload.student_id:
             existing = supabase.table("profiles").select("id").eq("student_id", payload.student_id).execute()
             if existing.data:
                 raise HTTPException(status_code=400, detail="รหัสนักศึกษา/พนักงานนี้มีอยู่ในระบบแล้ว")
         
-        # เจนเนอเรต ID แบบสุ่มขึ้นมาให้กับผู้ใช้ใหม่
         user_id = str(uuid.uuid4())
         new_user = {
             "id": user_id,
@@ -114,7 +130,6 @@ async def create_user(payload: CreateUserRequest):
         if not response.data:
             raise HTTPException(status_code=400, detail="ไม่สามารถเพิ่มผู้ใช้งานได้")
             
-        # บันทึกประวัติการทำงานลง Audit Logs
         log_admin_action(
             admin_id=payload.admin_id,
             action="CREATE_USER",
@@ -129,28 +144,31 @@ async def create_user(payload: CreateUserRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 🛠️ [ซ่อมแซม & ปรับปรุง] API สำหรับแก้ไขรายละเอียดผู้ใช้งาน
+# API สำหรับแก้ไขรายละเอียดผู้ใช้งาน
 @admin_router.put("/users/{user_id}/info")
 async def update_user_info(user_id: str, payload: UserInfoRequest):
     """แก้ไขข้อมูลรายละเอียดของผู้ใช้ (รหัส, ชื่อ-นามสกุล, สิทธิ์)"""
     try:
-        # ตรวจสอบรหัสนักศึกษาซ้ำ (ยกเว้นตัวของเขาเอง)
         if payload.student_id:
             existing = supabase.table("profiles").select("id").eq("student_id", payload.student_id).neq("id", user_id).execute()
             if existing.data:
                 raise HTTPException(status_code=400, detail="รหัสนักศึกษา/พนักงานนี้ถูกใช้งานโดยผู้ใช้อื่นแล้ว")
 
-        update_data = {
-            "student_id": payload.student_id,
-            "full_name": payload.full_name,
-            "role": payload.role
-        }
+        update_data = {}
+        if payload.student_id is not None:
+            update_data["student_id"] = payload.student_id
+        if payload.full_name is not None:
+            update_data["full_name"] = payload.full_name
+        if payload.role is not None:
+            update_data["role"] = payload.role
+
+        if not update_data:
+             return {"status": "success", "message": "ไม่มีข้อมูลให้แก้ไข"}
         
         response = supabase.table("profiles").update(update_data).eq("id", user_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้นี้ในระบบ")
             
-        # บันทึกประวัติการทำงานลง Audit Logs
         log_admin_action(
             admin_id=payload.admin_id,
             action="UPDATE_USER_INFO",
@@ -165,16 +183,15 @@ async def update_user_info(user_id: str, payload: UserInfoRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ❌ [เพิ่มใหม่] API สำหรับลบผู้ใช้งาน
+# API สำหรับลบผู้ใช้งาน
 @admin_router.delete("/users/{user_id}")
-async def delete_user(user_id: str, admin_id: str):
+async def delete_user(user_id: str, admin_id: str = Query(..., description="รหัส UUID ของแอดมินผู้ลบ")):
     """ลบผู้ใช้งานออกจากระบบ"""
     try:
         response = supabase.table("profiles").delete().eq("id", user_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้นี้ในระบบหรือลบไม่สำเร็จ")
             
-        # บันทึกประวัติการทำงานลง Audit Logs
         log_admin_action(
             admin_id=admin_id,
             action="DELETE_USER",
@@ -199,11 +216,44 @@ async def get_all_courses():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ❌ [เพิ่มใหม่ตามโครงสร้างหน้าบ้าน] API สำหรับลบรายวิชาในฐานะ Admin
+@admin_router.delete("/courses/{course_id}")
+async def delete_course(course_id: str, admin_id: str = Query(..., description="รหัส UUID ของแอดมินผู้ลบ")):
+    """ลบรายวิชาออกจากระบบโดยสิทธิ์ Admin (รวมถึงประวัติการลงเวลาเรียนที่ผูกกับวิชานี้)"""
+    try:
+        # 1. ค้นหาข้อมูลวิชาก่อนลบ เพื่อใช้บันทึกใน Audit Log
+        course_res = supabase.table("courses").select("course_code, course_name").eq("id", course_id).execute()
+        if not course_res.data:
+            raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
+        
+        course_info = course_res.data[0]
+        
+        # 2. ทำการลบข้อมูลวิชาออก (ตารางที่มี Foreign Key Cascade จะโดนลบตามอัตโนมัติ)
+        response = supabase.table("courses").delete().eq("id", course_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=400, detail="ไม่สามารถลบรายวิชาได้")
+            
+        # 3. บันทึกประวัติการทำงานของแอดมินลง Audit Logs
+        log_admin_action(
+            admin_id=admin_id,
+            action="DELETE_COURSE",
+            target_type="COURSE",
+            target_id=course_id,
+            details={"course_code": course_info["course_code"], "course_name": course_info["course_name"]}
+        )
+        
+        return {"status": "success", "message": f"ลบรายวิชา {course_info['course_code']} ออกจากระบบเรียบร้อยแล้ว"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Endpoints: Audit Logs ---
 
 @admin_router.get("/logs")
 async def get_audit_logs():
-    """ดึงประวัติการทำงานในระบบทั้งหมด (อิงตาม schema ใหม่)"""
+    """ดึงประวัติการทำงานในระบบทั้งหมด"""
     try:
         response = supabase.table("audit_logs") \
             .select("*") \
