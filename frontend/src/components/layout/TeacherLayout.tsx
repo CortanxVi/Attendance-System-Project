@@ -15,7 +15,6 @@ export default function TeacherLayout() {
 
   const menuItems = [
     { name: 'รายวิชาที่สอน', path: '/teacher', icon: BookOpen },
-    { name: 'ลงทะเบียนบัตร NFC', path: '/teacher/register-nfc', icon: UserPlus },
     { name: 'รายงานการเข้าเรียน', path: '/teacher/reports', icon: FileText },
     { name: 'จัดการนักศึกษา', path: '/teacher/students', icon: Users },
     { name: 'ตั้งค่าระบบ', path: '/teacher/settings', icon: Settings },

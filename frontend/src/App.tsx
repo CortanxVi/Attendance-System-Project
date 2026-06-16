@@ -9,14 +9,14 @@ import StudentLayout from './components/layout/StudentLayout';
 import StudentHome from './features/student/StudentHome';
 import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
-import RegisterNFC from './features/teacher/RegisterNFC';
 
 import AdminLayout from './components/layout/AdminLayout';
-import AdminDashboard from './features/admin/AdminDashboard';
+import SystemOverview from './features/admin/SystemOverview';
 import UserManagement from './features/admin/UserManagement';
 import AllCoursesManagement from './features/admin/AllCoursesManagement';
 import SystemLogs from './features/admin/SystemLogs';
 import ExportReports from './features/admin/ExportReports';
+import RegistrationManagement from './features/admin/RegistrationManagement';
 
 interface UserProfile {
   id: string;
@@ -102,9 +102,10 @@ export default function App() {
         {/* เส้นทางสำหรับแอดมิน */}
         {profile.role === 'admin' && (
           <Route path="/admin" element={<AdminLayout />}>
-            <Route index element={<AdminDashboard />} />
+            <Route index element={<SystemOverview />} />
             <Route path="users" element={<UserManagement />} />
             <Route path="courses" element={<AllCoursesManagement />} />
+            <Route path="registration" element={<RegistrationManagement />} />
             <Route path="logs" element={<SystemLogs />} />
             <Route path="reports" element={<ExportReports />} />
           </Route>
@@ -114,7 +115,6 @@ export default function App() {
         {profile.role === 'teacher' && (
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
-            <Route path="register-nfc" element={<RegisterNFC />} />
             <Route path="reports" element={<div className="p-8">หน้ารายงาน (รอดำเนินการ)</div>} />
             <Route path="students" element={<div className="p-8">หน้าจัดการนักศึกษา (รอดำเนินการ)</div>} />
             <Route path="settings" element={<div className="p-8">หน้าตั้งค่าระบบ (รอดำเนินการ)</div>} />

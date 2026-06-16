@@ -480,9 +480,10 @@ async def get_courses_by_teacher(teacher_id: str):
         # ส่ง Error กลับไปที่หน้าเว็บให้ชัดเจน
         raise HTTPException(status_code=500, detail=str(e))
 
-# 3. API บันทึกการตั้งค่าเกณฑ์วิชา (รองรับ CourseSettings.tsx)
+# 3. API บันทึกการตั้งค่าเกณฑ์วิชา
 @app.put("/api/v1/courses/{course_id}/settings")
-async def update_course_settings(course_id: str, payload: CourseSettingsRequest):
+async def update_course_settings(course_id: str, payload: CourseSettingsRequest, admin_id: str = None):
+    # 💡 รับ admin_id เพิ่มมาเป็น Query Parameter (?admin_id=...)
     try:
         response = supabase.table('courses').update({
             "total_sessions": payload.total_sessions,
@@ -493,13 +494,25 @@ async def update_course_settings(course_id: str, payload: CourseSettingsRequest)
         
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
+            
+        # 🌟 บันทึก Audit Log 
+        if admin_id:
+            supabase.table("audit_logs").insert({
+                "admin_id": admin_id,
+                "action": "UPDATE_COURSE_SETTINGS",
+                "target_type": "courses",
+                "target_id": course_id,
+                "details": payload.dict() # บันทึกเกณฑ์ใหม่ลงไปใน details เลย
+            }).execute()
+
         return {"status": "success", "message": "อัปเดตเกณฑ์สำเร็จ"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # 4. API แก้ไขข้อมูลรายวิชา (Edit)
 @app.put("/api/v1/courses/{course_id}")
-async def update_course_details(course_id: str, payload: CourseUpdateRequest):
+async def update_course_details(course_id: str, payload: CourseUpdateRequest, admin_id: str = None):
+     # 💡 รับ admin_id เพิ่มมาเป็น Query Parameter (?admin_id=...)
     try:
         response = supabase.table('courses').update({
             "course_code": payload.course_code.strip(),
@@ -511,10 +524,21 @@ async def update_course_details(course_id: str, payload: CourseUpdateRequest):
         
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
+            
+        # 🌟 บันทึก Audit Log 
+        if admin_id:
+             supabase.table("audit_logs").insert({
+                "admin_id": admin_id,
+                "action": "UPDATE_COURSE_DETAILS",
+                "target_type": "courses",
+                "target_id": course_id,
+                "details": payload.dict() # บันทึกข้อมูลที่ถูกแก้ลงไปใน details
+            }).execute()
+
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 # 5. API ลบรายวิชา (Delete)
 @app.delete("/api/v1/courses/{course_id}")
 async def delete_course(course_id: str):

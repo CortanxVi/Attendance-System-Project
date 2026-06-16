@@ -1,11 +1,12 @@
+// Initial Page and for all menus
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabaseClient';
 import { Users, BookOpen, ShieldCheck } from 'lucide-react';
 import axios from 'axios';
 
-export default function AdminDashboard() {
+export default function SystemOverview() {
   const [stats, setStats] = useState({ users: 0, courses: 0, adminCount: 0 });
 
+  // display on overview
   useEffect(() => {
     fetchStats();
   }, []);
