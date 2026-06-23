@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, SessionLocal
@@ -7,7 +8,22 @@ from routers import import_api, report_api, attendance_api
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Attendance System API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Startup ──
+    db = SessionLocal()
+    course = db.query(models.Course).filter(models.Course.course_code == "CS101").first()
+    if not course:
+        course = models.Course(course_code="CS101", course_name="Introduction to Computer Science")
+        db.add(course)
+        db.commit()
+    db.close()
+
+    yield  # แอปทำงานอยู่ตรงนี้
+
+    # ── Shutdown (ถ้าต้องการเพิ่มในอนาคต) ──
+
+app = FastAPI(title="Attendance System API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,14 +40,3 @@ app.include_router(attendance_api.router)
 @app.get("/")
 def root():
     return {"message": "Welcome to Attendance System API"}
-
-# Create dummy course for testing
-@app.on_event("startup")
-def startup_event():
-    db = SessionLocal()
-    course = db.query(models.Course).filter(models.Course.course_code == "CS101").first()
-    if not course:
-        course = models.Course(course_code="CS101", course_name="Introduction to Computer Science")
-        db.add(course)
-        db.commit()
-    db.close()

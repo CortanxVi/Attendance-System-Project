@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+sqlalchemy
+pandas
+python-dotenv
+supabase
+reportlab
