@@ -9,31 +9,31 @@ const CourseList: React.FC = () => {
   ];
 
   return (
-    <div>
-      <h1 style={{ marginBottom: '8px', fontSize: '2rem', fontWeight: 700 }}>My Courses</h1>
-      <p style={{ color: 'var(--text-secondary)', marginBottom: '32px' }}>Manage attendance and view reports for your classes.</p>
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <h1 className="text-3xl font-extrabold text-slate-900 mb-2">My Courses</h1>
+      <p className="text-slate-500 mb-8 text-lg">Manage attendance and view reports for your classes.</p>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '24px' }}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {courses.map(course => (
-          <div key={course.id} className="card card-hoverable" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
-              <div style={{ padding: '12px', backgroundColor: '#EFF6FF', borderRadius: '12px', color: 'var(--primary-color)' }}>
+          <div key={course.id} className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 hover:shadow-lg hover:-translate-y-1 hover:border-blue-200 transition-all duration-300 flex flex-col gap-5 group">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-blue-50 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors duration-300">
                 <Book size={24} />
               </div>
               <div>
-                <h2 style={{ fontSize: '1.25rem', color: 'var(--text-primary)', fontWeight: 600 }}>{course.code}</h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginTop: '4px' }}>{course.name}</p>
+                <h2 className="text-xl font-bold text-slate-800">{course.code}</h2>
+                <p className="text-slate-500 text-sm mt-1">{course.name}</p>
               </div>
             </div>
             
-            <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }}></div>
+            <div className="h-px bg-slate-100 my-1 w-full"></div>
             
-            <div style={{ display: 'flex', gap: '12px', marginTop: 'auto' }}>
-              <Link to={`/courses/${course.id}/import`} className="btn btn-outline" style={{ flex: 1 }}>
-                <Users size={18} /> Import Data
+            <div className="flex gap-3 mt-auto">
+              <Link to={`/courses/${course.id}/import`} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:border-blue-600 hover:text-blue-600 hover:bg-blue-50 transition-all">
+                <Users size={18} /> Import
               </Link>
-              <Link to={`/courses/${course.id}/report`} className="btn btn-primary" style={{ flex: 1 }}>
-                <FileBarChart size={18} /> View Report
+              <Link to={`/courses/${course.id}/report`} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/40 transition-all">
+                <FileBarChart size={18} /> Report
               </Link>
             </div>
           </div>

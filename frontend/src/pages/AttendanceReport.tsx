@@ -31,98 +31,90 @@ const AttendanceReport: React.FC = () => {
   }, [courseId]);
 
   return (
-    <div style={{ paddingBottom: '40px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '40px' }}>
+    <div className="pb-10 animate-in fade-in duration-500">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
         <div>
-          <Link to="/courses" style={{ 
-            display: 'inline-flex', alignItems: 'center', gap: '8px', 
-            marginBottom: '20px', color: 'var(--text-secondary)', 
-            fontWeight: 600, transition: 'color 0.2s',
-            backgroundColor: 'white', padding: '8px 16px', borderRadius: '20px',
-            boxShadow: '0 2px 5px rgba(0,0,0,0.02)'
-          }} 
-          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--primary-color)'} 
-          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}>
+          <Link to="/courses" className="inline-flex items-center gap-2 mb-4 text-slate-500 font-medium hover:text-blue-600 transition-colors bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 hover:shadow-md">
             <ArrowLeft size={18} /> Back to Courses
           </Link>
-          <h1 style={{ fontSize: '2.5rem', fontWeight: 800, color: '#0F172A' }}>Attendance Report</h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '8px', fontSize: '1.1rem' }}>Comprehensive overview of student attendance records.</p>
+          <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">Attendance Report</h1>
+          <p className="text-slate-500 mt-2 text-lg">Comprehensive overview of student attendance records.</p>
         </div>
-        
-        <div style={{ display: 'flex', gap: '16px' }}>
-          <a href={getExportUrl(Number(courseId), 'excel')} className="btn btn-outline" style={{ color: '#16A34A', borderColor: '#BBF7D0' }}>
+
+        <div className="flex flex-wrap gap-3">
+          <a href={getExportUrl(Number(courseId), 'excel')} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-green-200 text-green-700 bg-green-50 hover:bg-green-100 transition-colors font-medium">
             <FileSpreadsheet size={20} /> Excel
           </a>
-          <a href={getExportUrl(Number(courseId), 'csv')} className="btn btn-outline" style={{ color: '#475569', borderColor: '#E2E8F0' }}>
+          <a href={getExportUrl(Number(courseId), 'csv')} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 transition-colors font-medium">
             <FileText size={20} /> CSV
           </a>
-          <a href={getExportUrl(Number(courseId), 'pdf')} className="btn btn-outline" style={{ color: '#DC2626', borderColor: '#FECACA' }}>
+          <a href={getExportUrl(Number(courseId), 'pdf')} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition-colors font-medium">
             <Download size={20} /> PDF
           </a>
         </div>
       </div>
 
-      <div className="card" style={{ padding: '0', overflow: 'hidden', border: '1px solid rgba(226, 232, 240, 0.8)' }}>
+      <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
         {loading ? (
-          <div style={{ padding: '32px' }}>
-            <div style={{ display: 'flex', gap: '24px', marginBottom: '32px', paddingBottom: '20px', borderBottom: '1px solid var(--border-color)' }}>
-              <div className="skeleton" style={{ height: '24px', width: '120px' }}></div>
-              <div className="skeleton" style={{ height: '24px', width: '250px' }}></div>
-              <div className="skeleton" style={{ height: '24px', width: '80px', marginLeft: 'auto' }}></div>
-              <div className="skeleton" style={{ height: '24px', width: '80px' }}></div>
+          <div className="p-8">
+            <div className="flex gap-6 mb-8 pb-5 border-b border-slate-100">
+              <div className="h-6 w-24 bg-slate-200 rounded animate-pulse"></div>
+              <div className="h-6 w-48 bg-slate-200 rounded animate-pulse"></div>
+              <div className="h-6 w-16 bg-slate-200 rounded animate-pulse ml-auto"></div>
+              <div className="h-6 w-16 bg-slate-200 rounded animate-pulse"></div>
             </div>
             {[1, 2, 3, 4, 5].map(i => (
-              <div key={i} style={{ display: 'flex', gap: '24px', marginBottom: '28px' }}>
-                <div className="skeleton" style={{ height: '24px', width: '100px' }}></div>
-                <div className="skeleton" style={{ height: '24px', width: '200px' }}></div>
-                <div className="skeleton" style={{ height: '32px', width: '60px', marginLeft: 'auto', borderRadius: '16px' }}></div>
-                <div className="skeleton" style={{ height: '32px', width: '60px', borderRadius: '16px' }}></div>
+              <div key={i} className="flex gap-6 mb-6">
+                <div className="h-6 w-20 bg-slate-100 rounded animate-pulse"></div>
+                <div className="h-6 w-40 bg-slate-100 rounded animate-pulse"></div>
+                <div className="h-8 w-14 bg-slate-100 rounded-full animate-pulse ml-auto"></div>
+                <div className="h-8 w-14 bg-slate-100 rounded-full animate-pulse"></div>
               </div>
             ))}
           </div>
         ) : data.length === 0 ? (
-          <div style={{ padding: '80px 40px', textAlign: 'center' }}>
-            <div style={{ display: 'inline-block', padding: '24px', backgroundColor: '#F8FAFC', borderRadius: '50%', marginBottom: '24px', border: '1px solid #E2E8F0' }}>
-              <FileText size={56} color="#94A3B8" />
+          <div className="py-20 px-8 text-center">
+            <div className="inline-flex p-6 bg-slate-50 rounded-full mb-6 border border-slate-200">
+              <FileText size={56} className="text-slate-400" />
             </div>
-            <h3 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '12px' }}>No Data Available</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }}>You haven't imported any students for this course yet.</p>
+            <h3 className="text-2xl font-bold text-slate-900 mb-3">No Data Available</h3>
+            <p className="text-slate-500 text-lg">You haven't imported any students for this course yet.</p>
           </div>
         ) : (
-          <div className="table-container" style={{ border: 'none', borderRadius: '0' }}>
-            <table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr>
-                  <th style={{ paddingLeft: '32px' }}>Student ID</th>
-                  <th>Name</th>
-                  <th style={{ textAlign: 'center', color: '#059669', backgroundColor: '#ECFDF5' }}>Present</th>
-                  <th style={{ textAlign: 'center', color: '#D97706', backgroundColor: '#FFFBEB' }}>Late</th>
-                  <th style={{ textAlign: 'center', color: '#DC2626', backgroundColor: '#FEF2F2' }}>Absent</th>
-                  <th style={{ textAlign: 'center', color: '#2563EB', backgroundColor: '#EFF6FF', paddingRight: '32px' }}>Leave</th>
+                <tr className="bg-slate-50 border-b border-slate-200 text-sm uppercase tracking-wider text-slate-500 font-semibold">
+                  <th className="py-4 pl-8 pr-4">Student ID</th>
+                  <th className="py-4 px-4">Name</th>
+                  <th className="py-4 px-4 text-center text-green-700 bg-green-50/50">Present</th>
+                  <th className="py-4 px-4 text-center text-amber-700 bg-amber-50/50">Late</th>
+                  <th className="py-4 px-4 text-center text-red-700 bg-red-50/50">Absent</th>
+                  <th className="py-4 pl-4 pr-8 text-center text-blue-700 bg-blue-50/50">Leave</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {data.map(student => (
-                  <tr key={student.student_id}>
-                    <td style={{ color: 'var(--text-secondary)', fontWeight: 600, paddingLeft: '32px' }}>{student.student_code}</td>
-                    <td style={{ fontWeight: 600 }}>{student.first_name} {student.last_name}</td>
-                    <td style={{ textAlign: 'center', backgroundColor: '#F0FDF4' }}>
-                      <span className="pill" style={{ backgroundColor: 'white', color: '#059669', border: '1px solid #A7F3D0', boxShadow: '0 2px 4px rgba(5, 150, 105, 0.05)' }}>
+                  <tr key={student.student_id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="py-4 pl-8 pr-4 text-slate-500 font-medium font-mono text-sm">{student.student_code}</td>
+                    <td className="py-4 px-4 font-semibold text-slate-800">{student.first_name} {student.last_name}</td>
+                    <td className="py-4 px-4 text-center bg-green-50/30">
+                      <span className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 bg-white border border-green-200 text-green-700 font-semibold rounded-full shadow-sm text-sm">
                         {student.present}
                       </span>
                     </td>
-                    <td style={{ textAlign: 'center', backgroundColor: '#FFFBEB' }}>
-                      <span className="pill" style={{ backgroundColor: 'white', color: '#D97706', border: '1px solid #FDE68A', boxShadow: '0 2px 4px rgba(217, 119, 6, 0.05)' }}>
+                    <td className="py-4 px-4 text-center bg-amber-50/30">
+                      <span className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 bg-white border border-amber-200 text-amber-700 font-semibold rounded-full shadow-sm text-sm">
                         {student.late}
                       </span>
                     </td>
-                    <td style={{ textAlign: 'center', backgroundColor: '#FEF2F2' }}>
-                      <span className="pill" style={{ backgroundColor: 'white', color: '#DC2626', border: '1px solid #FECACA', boxShadow: '0 2px 4px rgba(220, 38, 38, 0.05)' }}>
+                    <td className="py-4 px-4 text-center bg-red-50/30">
+                      <span className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 bg-white border border-red-200 text-red-700 font-semibold rounded-full shadow-sm text-sm">
                         {student.absent}
                       </span>
                     </td>
-                    <td style={{ textAlign: 'center', backgroundColor: '#EFF6FF', paddingRight: '32px' }}>
-                      <span className="pill" style={{ backgroundColor: 'white', color: '#2563EB', border: '1px solid #BFDBFE', boxShadow: '0 2px 4px rgba(37, 99, 235, 0.05)' }}>
+                    <td className="py-4 pl-4 pr-8 text-center bg-blue-50/30">
+                      <span className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 bg-white border border-blue-200 text-blue-700 font-semibold rounded-full shadow-sm text-sm">
                         {student.leave}
                       </span>
                     </td>

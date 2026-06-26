@@ -4,45 +4,18 @@ import { BookOpen } from 'lucide-react';
 
 const Navbar: React.FC = () => {
   return (
-    <nav style={{ 
-      backgroundColor: 'rgba(255, 255, 255, 0.85)', 
-      backdropFilter: 'blur(12px)',
-      borderBottom: '1px solid rgba(226, 232, 240, 0.8)', 
-      padding: '16px 0',
-      position: 'sticky',
-      top: 0,
-      zIndex: 50,
-      boxShadow: '0 4px 20px -10px rgba(0, 0, 0, 0.05)'
-    }}>
-      <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ 
-            padding: '10px', 
-            background: 'linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)', 
-            borderRadius: '14px', 
-            color: 'white',
-            boxShadow: '0 4px 10px rgba(37, 99, 235, 0.3)'
-          }}>
+    <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200/80 shadow-sm py-4">
+      <div className="container mx-auto px-4 max-w-6xl flex items-center justify-between">
+        <Link to="/" className="flex items-center gap-3 group">
+          <div className="p-2.5 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl text-white shadow-lg shadow-blue-500/30 group-hover:scale-105 transition-transform duration-300">
             <BookOpen size={24} strokeWidth={2.5} />
           </div>
-          <span style={{ fontWeight: 800, fontSize: '1.4rem', fontFamily: 'Outfit, sans-serif', letterSpacing: '-0.03em' }}>
-            Attendance<span style={{color: 'var(--primary-color)'}}>Sys</span>
+          <span className="font-extrabold text-2xl tracking-tight font-sans text-slate-800">
+            Attendance<span className="text-blue-600">Sys</span>
           </span>
         </Link>
-        <div style={{ display: 'flex', gap: '32px' }}>
-          <Link to="/courses" style={{ 
-            color: 'var(--text-primary)', 
-            fontWeight: 600, 
-            transition: 'all 0.2s',
-            padding: '8px 16px',
-            borderRadius: '8px'
-          }} onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#F1F5F9';
-            e.currentTarget.style.color = 'var(--primary-color)';
-          }} onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'transparent';
-            e.currentTarget.style.color = 'var(--text-primary)';
-          }}>
+        <div className="flex gap-8">
+          <Link to="/courses" className="text-slate-600 font-semibold transition-all duration-200 hover:text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg">
             My Courses
           </Link>
         </div>

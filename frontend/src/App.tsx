@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import CourseList from './pages/CourseList';
 import ImportPage from './pages/ImportPage';
@@ -8,10 +8,10 @@ import './index.css';
 
 function App() {
   return (
-    <Router>
-      <div className="min-h-screen bg-gray-50">
+    <BrowserRouter>
+      <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-blue-300">
         <Navbar />
-        <main className="container" style={{ paddingTop: '32px', paddingBottom: '64px' }}>
+        <main className="container mx-auto px-4 pt-8 pb-16 max-w-6xl">
           <Routes>
             <Route path="/" element={<Navigate to="/courses" replace />} />
             <Route path="/courses" element={<CourseList />} />
@@ -20,7 +20,7 @@ function App() {
           </Routes>
         </main>
       </div>
-    </Router>
+    </BrowserRouter>
   );
 }
 

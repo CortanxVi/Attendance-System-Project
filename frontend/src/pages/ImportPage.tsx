@@ -32,59 +32,49 @@ const ImportPage: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: '640px', margin: '0 auto' }}>
-      <Link to="/courses" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '24px', color: 'var(--text-secondary)', fontWeight: 500, transition: 'color 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'} onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}>
+    <div className="max-w-2xl mx-auto animate-in fade-in duration-500">
+      <Link to="/courses" className="inline-flex items-center gap-2 mb-6 text-slate-500 font-medium hover:text-slate-800 transition-colors">
         <ArrowLeft size={18} /> Back to Courses
       </Link>
       
-      <div className="card">
-        <h2 style={{ marginBottom: '8px', fontSize: '1.5rem', fontWeight: 600 }}>Import Student Data</h2>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', lineHeight: 1.5 }}>
-          Upload a CSV file containing student information. The file must include <code style={{backgroundColor:'#F1F5F9', padding:'2px 6px', borderRadius:'4px', color:'#3B82F6'}}>student_code</code>, <code style={{backgroundColor:'#F1F5F9', padding:'2px 6px', borderRadius:'4px', color:'#3B82F6'}}>first_name</code>, and <code style={{backgroundColor:'#F1F5F9', padding:'2px 6px', borderRadius:'4px', color:'#3B82F6'}}>last_name</code> columns.
+      <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200">
+        <h2 className="text-2xl font-bold text-slate-900 mb-2">Import Student Data</h2>
+        <p className="text-slate-500 mb-8 leading-relaxed">
+          Upload a CSV file containing student information. The file must include <code className="bg-slate-100 px-2 py-0.5 rounded text-blue-600 font-mono text-sm">student_code</code>, <code className="bg-slate-100 px-2 py-0.5 rounded text-blue-600 font-mono text-sm">first_name</code>, and <code className="bg-slate-100 px-2 py-0.5 rounded text-blue-600 font-mono text-sm">last_name</code> columns.
         </p>
         
-        <div style={{ 
-          border: '2px dashed #CBD5E1', 
-          borderRadius: '16px', 
-          padding: '48px 24px', 
-          textAlign: 'center',
-          backgroundColor: file ? '#EFF6FF' : '#F8FAFC',
-          borderColor: file ? '#60A5FA' : '#CBD5E1',
-          marginBottom: '32px',
-          transition: 'all 0.2s ease',
-          position: 'relative'
-        }}>
+        <div className={`border-2 border-dashed rounded-2xl p-12 text-center mb-8 transition-all duration-300 relative ${file ? 'bg-blue-50 border-blue-400' : 'bg-slate-50 border-slate-300 hover:bg-slate-100 hover:border-slate-400'}`}>
           {file ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-              <div style={{ padding: '16px', backgroundColor: '#DBEAFE', borderRadius: '50%', color: 'var(--primary-color)' }}>
+            <div className="flex flex-col items-center gap-3 animate-in zoom-in-95 duration-300">
+              <div className="p-4 bg-blue-100 rounded-full text-blue-600">
                 <FileText size={40} />
               </div>
               <div>
-                <p style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '1.1rem' }}>{file.name}</p>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>{(file.size / 1024).toFixed(1)} KB</p>
+                <p className="font-semibold text-slate-900 text-lg">{file.name}</p>
+                <p className="text-slate-500 text-sm mt-1">{(file.size / 1024).toFixed(1)} KB</p>
               </div>
               <button 
                 onClick={() => setFile(null)} 
-                style={{ marginTop: '8px', background: 'none', border: 'none', color: '#EF4444', fontWeight: 500, cursor: 'pointer', textDecoration: 'underline' }}
+                className="mt-2 text-red-500 font-medium hover:text-red-700 underline underline-offset-2 transition-colors"
               >
                 Remove file
               </button>
             </div>
           ) : (
             <>
-              <div style={{ padding: '16px', backgroundColor: 'white', borderRadius: '50%', display: 'inline-block', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', marginBottom: '16px', color: 'var(--text-secondary)' }}>
+              <div className="p-4 bg-white rounded-full inline-block shadow-sm mb-4 text-slate-400">
                 <Upload size={32} />
               </div>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>Select a CSV file to upload</h3>
-              <p style={{ marginBottom: '24px', color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Drag and drop it here, or click to browse</p>
+              <h3 className="text-lg font-semibold text-slate-900 mb-2">Select a CSV file to upload</h3>
+              <p className="mb-6 text-slate-500">Drag and drop it here, or click to browse</p>
               <input 
                 type="file" 
                 accept=".csv" 
                 onChange={handleFileChange} 
                 id="file-upload" 
-                style={{ display: 'none' }} 
+                className="hidden" 
               />
-              <label htmlFor="file-upload" className="btn btn-outline" style={{ backgroundColor: 'white' }}>
+              <label htmlFor="file-upload" className="inline-block cursor-pointer px-6 py-2.5 rounded-xl border-2 border-slate-200 text-slate-700 font-semibold bg-white hover:border-slate-300 hover:bg-slate-50 transition-colors">
                 Browse Files
               </label>
             </>
@@ -92,34 +82,21 @@ const ImportPage: React.FC = () => {
         </div>
 
         {result && (
-          <div style={{ 
-            padding: '16px', 
-            borderRadius: '12px', 
-            marginBottom: '32px',
-            backgroundColor: result.status === 'success' ? '#F0FDF4' : '#FEF2F2',
-            border: `1px solid ${result.status === 'success' ? '#BBF7D0' : '#FECACA'}`,
-            color: result.status === 'success' ? '#166534' : '#991B1B',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            fontSize: '0.95rem',
-            fontWeight: 500
-          }}>
-            {result.status === 'success' ? <CheckCircle size={20} color="#10B981" /> : <AlertCircle size={20} color="#EF4444" />}
+          <div className={`p-4 rounded-xl mb-8 flex items-center gap-3 text-sm font-medium animate-in slide-in-from-top-2 duration-300 ${result.status === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+            {result.status === 'success' ? <CheckCircle size={20} className="text-green-500 shrink-0" /> : <AlertCircle size={20} className="text-red-500 shrink-0" />}
             {result.message}
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
+        <div className="flex justify-end border-t border-slate-100 pt-6">
           <button 
-            className="btn btn-primary" 
+            className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-semibold flex items-center justify-center gap-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/40 transition-all min-w-[140px]"
             onClick={handleUpload} 
             disabled={!file || loading}
-            style={{ width: loading ? '140px' : 'auto' }}
           >
             {loading ? (
               <>
-                <div className="spinner" style={{ width: '18px', height: '18px', borderWidth: '2px' }}></div>
+                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white/30 border-t-white"></div>
                 Uploading...
               </>
             ) : (
