@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { FileText, Download, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import { jsPDF } from "jspdf"; // ไม่มีคำสั่งสร้างตารางสำเร็จรูป
+import autoTable from "jspdf-autotable";
 
 export default function ExportReports() {
   const [courses, setCourses] = useState<any[]>([]);
@@ -32,7 +32,7 @@ export default function ExportReports() {
       const course = res.data.course;
 
       if (data.length === 0) {
-        alert("ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้");
+        alert("ไม่มีข้อมูลการเช็คชื่อในรายวิชานี้");
         return;
       }
 
@@ -49,16 +49,18 @@ export default function ExportReports() {
       const filename = `Attendance_${courseCode}_${new Date().getTime()}`;
 
       if (format === 'excel') {
-        const worksheet = XLSX.utils.json_to_sheet(formattedData);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
-        XLSX.writeFile(workbook, `${filename}.xlsx`);
+        // แปลงข้อมูลประเภท Array of Objects (JSON) ให้กลายเป็นโครงสร้างข้อมูลแบบ Worksheet (แผ่นงาน)
+        const worksheet = XLSX.utils.json_to_sheet(formattedData);       // หน้าแท็บชีต (Sheet1, Sheet2)" ที่อยู่ข้างในไฟล์ Excel
+        const workbook = XLSX.utils.book_new();                          // สร้าง Workbook (ไฟล์ Excel เปล่าๆ) ขึ้นมาใหม่ 1 ไฟล์
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance"); // นำ Worksheet ประกอบร่างเข้าไปใน Workbook (ไฟล์หลัก, แผ่นงานที่ต้องการใส่, "ชื่อแท็บของชีตนั้น")
+        XLSX.writeFile(workbook, `${filename}.xlsx`);                    // สร้างเป็นไฟล์จริงๆ และทริกเกอร์ให้เบราว์เซอร์ดาวน์โหลดไฟล์ลงเครื่องของผู้ใช้
       } 
       else if (format === 'csv') {
         const worksheet = XLSX.utils.json_to_sheet(formattedData);
-        const csv = XLSX.utils.sheet_to_csv(worksheet);
+        const csv = XLSX.utils.sheet_to_csv(worksheet); // แปลงโครงสร้างข้อมูล Worksheet ให้กลายเป็นข้อความ (String) ในรูปแบบ CSV
         // สร้างไฟล์และสั่งดาวน์โหลด
-        const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+        // \uFEFF BOM (Byte Order Mark) เป็นเทคนิคที่ใส่ไว้เพื่อให้โปรแกรมอย่าง Microsoft Excel รู้ว่าไฟล์ CSV นี้เข้ารหัสแบบ UTF-8 หากไม่ใส่ตรงนี้ เวลาเปิด CSV ด้วย Excel ภาษาไทยมักจะกลายเป็นตัวอักษรต่างด้าว
+        const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' }); // แก้ปัญหาภาษาไทยเพี้ยนใน CSV
         const link = document.createElement("a");
         const url = URL.createObjectURL(blob);
         link.setAttribute("href", url);
@@ -69,30 +71,68 @@ export default function ExportReports() {
         document.body.removeChild(link);
       }
       else if (format === 'pdf') {
-        const doc = new jsPDF();
-        
-        // ฟอนต์ภาษาไทยสำหรับ PDF อาจจะต้องเตรียมฟอนต์ฝังในระบบ (ปัจจุบันใช้ ASCII ไปก่อนหรือจัดโครงสร้างง่ายๆ)
-        // เพื่อความเรียบง่าย ใช้ jsPDF พิมพ์ภาษาอังกฤษแทน หรือสามารถปรับปรุงภายหลังโดยการเพิ่ม Custom Font
-        const tableColumn = ["No", "Student ID", "Name", "Status", "Method", "Time"];
+        // 1. สร้างกระดาษ A4 แนวนอน (Landscape)
+        const doc = new jsPDF({ orientation: 'landscape' }); 
+        try {
+            // 2. ดึงไฟล์ฟอนต์จากโฟลเดอร์ public/fonts/
+            const fontUrl = '/fonts/THSarabunNew.ttf'; 
+            const fontResponse = await fetch(fontUrl);
+            
+            if (!fontResponse.ok) {
+                throw new Error("ไม่พบไฟล์ฟอนต์ THSarabunNew.ttf ในโฟลเดอร์ public/fonts/");
+            }
+
+            // 3. แปลงไฟล์ฟอนต์ให้กลายเป็น Base64 เพื่อฝังลง PDF
+            const fontBuffer = await fontResponse.arrayBuffer();
+            const fontBytes = new Uint8Array(fontBuffer);
+            let binary = '';
+            for (let i = 0; i < fontBytes.byteLength; i++) {
+                binary += String.fromCharCode(fontBytes[i]);
+            }
+            const fontBase64 = window.btoa(binary);
+
+            // 4. ติดตั้งฟอนต์ภาษาไทยเข้าสู่ jsPDF
+            doc.addFileToVFS('THSarabun.ttf', fontBase64);
+            doc.addFont('THSarabun.ttf', 'THSarabun', 'normal');
+            doc.setFont('THSarabun'); // สั่งให้ใช้ฟอนต์นี้เป็นค่าเริ่มต้น
+        } catch (fontErr) {
+            console.warn("โหลดฟอนต์ไทยไม่สำเร็จ จะใช้ค่าเริ่มต้นแทน", fontErr);
+            alert("คำเตือน: โหลดฟอนต์ภาษาไทยไม่สำเร็จ ตัวอักษรอาจแสดงผลผิดเพี้ยน");
+        }
+
+        // 5. เตรียมข้อมูลให้ตรงกันกับ Excel และเป็นภาษาไทย
+        const tableColumn = ["ลำดับ", "รหัสนักศึกษา", "ชื่อ-นามสกุล", "สถานะ", "วิธีการเช็คชื่อ", "เวลา"];
         const tableRows = data.map((row: any, index: number) => [
           index + 1,
           row.student_id,
-          // การแสดงผลภาษาไทยใน PDF ต้องใช้ฟอนต์ที่รองรับ ถ้าไม่รองรับอาจจะแสดงเป็นตัวยึกยือ
-          // ในที่นี้อาจจะใช้แค่รหัสนักศึกษาไปก่อน
           row.full_name, 
-          row.status,
-          row.method,
-          new Date(row.check_in_time).toLocaleString('en-GB')
+          row.status === 'present' ? 'มาเรียน' : row.status === 'late' ? 'มาสาย' : 'ขาดเรียน',
+          row.method === 'nfc' ? 'NFC' : row.method === 'face_ocr' ? 'Face Scan' : 'Manual',
+          new Date(row.check_in_time).toLocaleString('th-TH') // เวลาภาษาไทย
         ]);
 
-        doc.text(`Attendance Report - Course: ${courseCode}`, 14, 15);
+        // 6. พิมพ์หัวรายงาน (ตั้งค่าขนาดฟอนต์เป็น 16)
+        doc.setFontSize(16);
+        doc.text(`รายงานประวัติการเข้าเรียน - รหัสวิชา: ${courseCode}`, 14, 15);
         
-        (doc as any).autoTable({
-          head: [tableColumn],
-          body: tableRows,
-          startY: 20,
+        // 7. วาดตาราง (กำหนดสไตล์ให้ใช้ฟอนต์ THSarabun)
+        // เรียกใช้ฟังก์ชัน autoTable() โดยตรงแล้วส่ง doc เข้าไป
+        autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 20, // ให้ตารางเริ่มต่ำลงมาจากข้อความบรรทัดบน
+          styles: { 
+            font: 'THSarabun', // บังคับให้ตารางใช้ฟอนต์ภาษาไทย
+            fontSize: 12 
+          },
+          headStyles: {
+            fillColor: [220, 38, 38], // เปลี่ยนสีหัวตารางเป็นสีแดง (อิงตามธีมระบบคุณ)
+            textColor: [255, 255, 255],
+            fontStyle: 'bold'
+          }
         });
         
+        // 8. บันทึกและดาวน์โหลด
         doc.save(`${filename}.pdf`);
       }
 
