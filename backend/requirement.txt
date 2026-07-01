@@ -16,6 +16,7 @@ fastapi==0.136.1
 filelock==3.29.0
 flatbuffers==25.12.19
 fsspec==2026.4.0
+greenlet==3.5.2
 h11==0.16.0
 h2==4.3.0
 hpack==4.1.0
@@ -57,6 +58,7 @@ onnxruntime==1.26.0
 opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
 packaging==26.2
+pandas==3.0.3
 pillow==12.2.0
 postgrest==2.30.0
 propcache==0.5.2
@@ -76,6 +78,7 @@ python-dotenv==1.2.2
 python-multipart==0.0.29
 PyYAML==6.0.3
 realtime==2.30.0
+reportlab==5.0.0
 requests==2.34.2
 rich==14.3.4
 scikit-image==0.26.0
@@ -83,6 +86,7 @@ scipy==1.17.1
 setuptools==81.0.0
 shapely==2.1.2
 six==1.17.0
+SQLAlchemy==2.0.51
 starlette==1.0.1
 storage3==2.30.0
 StrEnum==0.4.15
