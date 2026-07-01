@@ -16,9 +16,8 @@
     "@tailwindcss/vite": "^4.3.0",
     "@yudiel/react-qr-scanner": "^2.6.0",
     "axios": "^1.16.1",
-    "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.16.0",
+    "pdfmake": "^0.3.11",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -29,6 +28,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.12.3",
+    "@types/pdfmake": "^0.3.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/react-webcam": "^1.1.0",

@@ -2,8 +2,17 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { FileText, Download, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { jsPDF } from "jspdf"; // ไม่มีคำสั่งสร้างตารางสำเร็จรูป
-import autoTable from "jspdf-autotable";
+import pdfMake from 'pdfmake/build/pdfmake';
+// 🌟 ตั้งค่าฟอนต์ภาษาไทยให้กับ pdfmake (โหลดจากโฟลเดอร์ public/fonts)
+const pdfMakeAny = pdfMake as any;
+pdfMakeAny.fonts = {
+  THSarabunNew: {
+    normal: `${window.location.origin}/fonts/THSarabunNew.ttf`,
+    bold: `${window.location.origin}/fonts/THSarabunNew Bold.ttf`,
+    italics: `${window.location.origin}/fonts/THSarabunNew Italic.ttf`,
+    bolditalics: `${window.location.origin}/fonts/THSarabunNew BoldItalic.ttf`
+  }
+};
 
 export default function ExportReports() {
   const [courses, setCourses] = useState<any[]>([]);
@@ -32,11 +41,11 @@ export default function ExportReports() {
       const course = res.data.course;
 
       if (data.length === 0) {
-        alert("ไม่มีข้อมูลการเช็คชื่อในรายวิชานี้");
+        alert("ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้");
         return;
       }
 
-      // เตรียมข้อมูลให้อ่านง่าย
+      // เตรียมข้อมูลดิบ
       const formattedData = data.map((row: any, index: number) => ({
         "ลำดับ": index + 1,
         "รหัสนักศึกษา": row.student_id,
@@ -49,18 +58,15 @@ export default function ExportReports() {
       const filename = `Attendance_${courseCode}_${new Date().getTime()}`;
 
       if (format === 'excel') {
-        // แปลงข้อมูลประเภท Array of Objects (JSON) ให้กลายเป็นโครงสร้างข้อมูลแบบ Worksheet (แผ่นงาน)
-        const worksheet = XLSX.utils.json_to_sheet(formattedData);       // หน้าแท็บชีต (Sheet1, Sheet2)" ที่อยู่ข้างในไฟล์ Excel
-        const workbook = XLSX.utils.book_new();                          // สร้าง Workbook (ไฟล์ Excel เปล่าๆ) ขึ้นมาใหม่ 1 ไฟล์
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance"); // นำ Worksheet ประกอบร่างเข้าไปใน Workbook (ไฟล์หลัก, แผ่นงานที่ต้องการใส่, "ชื่อแท็บของชีตนั้น")
-        XLSX.writeFile(workbook, `${filename}.xlsx`);                    // สร้างเป็นไฟล์จริงๆ และทริกเกอร์ให้เบราว์เซอร์ดาวน์โหลดไฟล์ลงเครื่องของผู้ใช้
+        const worksheet = XLSX.utils.json_to_sheet(formattedData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
+        XLSX.writeFile(workbook, `${filename}.xlsx`);
       } 
       else if (format === 'csv') {
         const worksheet = XLSX.utils.json_to_sheet(formattedData);
-        const csv = XLSX.utils.sheet_to_csv(worksheet); // แปลงโครงสร้างข้อมูล Worksheet ให้กลายเป็นข้อความ (String) ในรูปแบบ CSV
-        // สร้างไฟล์และสั่งดาวน์โหลด
-        // \uFEFF BOM (Byte Order Mark) เป็นเทคนิคที่ใส่ไว้เพื่อให้โปรแกรมอย่าง Microsoft Excel รู้ว่าไฟล์ CSV นี้เข้ารหัสแบบ UTF-8 หากไม่ใส่ตรงนี้ เวลาเปิด CSV ด้วย Excel ภาษาไทยมักจะกลายเป็นตัวอักษรต่างด้าว
-        const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' }); // แก้ปัญหาภาษาไทยเพี้ยนใน CSV
+        const csv = XLSX.utils.sheet_to_csv(worksheet);
+        const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
         const url = URL.createObjectURL(blob);
         link.setAttribute("href", url);
@@ -70,70 +76,67 @@ export default function ExportReports() {
         link.click();
         document.body.removeChild(link);
       }
+      
+      // 🌟 [ปรับปรุงใหม่] สร้าง PDF ด้วย pdfmake
       else if (format === 'pdf') {
-        // 1. สร้างกระดาษ A4 แนวนอน (Landscape)
-        const doc = new jsPDF({ orientation: 'landscape' }); 
-        try {
-            // 2. ดึงไฟล์ฟอนต์จากโฟลเดอร์ public/fonts/
-            const fontUrl = '/fonts/THSarabunNew.ttf'; 
-            const fontResponse = await fetch(fontUrl);
-            
-            if (!fontResponse.ok) {
-                throw new Error("ไม่พบไฟล์ฟอนต์ THSarabunNew.ttf ในโฟลเดอร์ public/fonts/");
-            }
-
-            // 3. แปลงไฟล์ฟอนต์ให้กลายเป็น Base64 เพื่อฝังลง PDF
-            const fontBuffer = await fontResponse.arrayBuffer();
-            const fontBytes = new Uint8Array(fontBuffer);
-            let binary = '';
-            for (let i = 0; i < fontBytes.byteLength; i++) {
-                binary += String.fromCharCode(fontBytes[i]);
-            }
-            const fontBase64 = window.btoa(binary);
-
-            // 4. ติดตั้งฟอนต์ภาษาไทยเข้าสู่ jsPDF
-            doc.addFileToVFS('THSarabun.ttf', fontBase64);
-            doc.addFont('THSarabun.ttf', 'THSarabun', 'normal');
-            doc.setFont('THSarabun'); // สั่งให้ใช้ฟอนต์นี้เป็นค่าเริ่มต้น
-        } catch (fontErr) {
-            console.warn("โหลดฟอนต์ไทยไม่สำเร็จ จะใช้ค่าเริ่มต้นแทน", fontErr);
-            alert("คำเตือน: โหลดฟอนต์ภาษาไทยไม่สำเร็จ ตัวอักษรอาจแสดงผลผิดเพี้ยน");
-        }
-
-        // 5. เตรียมข้อมูลให้ตรงกันกับ Excel และเป็นภาษาไทย
-        const tableColumn = ["ลำดับ", "รหัสนักศึกษา", "ชื่อ-นามสกุล", "สถานะ", "วิธีการเช็คชื่อ", "เวลา"];
-        const tableRows = data.map((row: any, index: number) => [
-          index + 1,
-          row.student_id,
-          row.full_name, 
-          row.status === 'present' ? 'มาเรียน' : row.status === 'late' ? 'มาสาย' : 'ขาดเรียน',
-          row.method === 'nfc' ? 'NFC' : row.method === 'face_ocr' ? 'Face Scan' : 'Manual',
-          new Date(row.check_in_time).toLocaleString('th-TH') // เวลาภาษาไทย
-        ]);
-
-        // 6. พิมพ์หัวรายงาน (ตั้งค่าขนาดฟอนต์เป็น 16)
-        doc.setFontSize(16);
-        doc.text(`รายงานประวัติการเข้าเรียน - รหัสวิชา: ${courseCode}`, 14, 15);
-        
-        // 7. วาดตาราง (กำหนดสไตล์ให้ใช้ฟอนต์ THSarabun)
-        // เรียกใช้ฟังก์ชัน autoTable() โดยตรงแล้วส่ง doc เข้าไป
-        autoTable(doc, {
-        head: [tableColumn],
-        body: tableRows,
-        startY: 20, // ให้ตารางเริ่มต่ำลงมาจากข้อความบรรทัดบน
-          styles: { 
-            font: 'THSarabun', // บังคับให้ตารางใช้ฟอนต์ภาษาไทย
-            fontSize: 12 
+        // กำหนดโครงสร้างเอกสาร (Document Definition)
+        const docDefinition: any = {
+          pageSize: 'A4',
+          pageOrientation: 'landscape',
+          defaultStyle: {
+            font: 'THSarabunNew', // เรียกใช้ฟอนต์ไทยเป็นค่าเริ่มต้น
+            fontSize: 14
           },
-          headStyles: {
-            fillColor: [220, 38, 38], // เปลี่ยนสีหัวตารางเป็นสีแดง (อิงตามธีมระบบคุณ)
-            textColor: [255, 255, 255],
-            fontStyle: 'bold'
+          content: [
+            { 
+              text: `รายงานประวัติการเข้าเรียน - รหัสวิชา: ${courseCode}`, 
+              style: 'header',
+              margin: [0, 0, 0, 15] // เว้นระยะห่างด้านล่าง 15
+            },
+            {
+              table: {
+                headerRows: 1,
+                widths: ['auto', 'auto', '*', 'auto', 'auto', 'auto'], // '*' หมายถึงให้ขยายความกว้างเต็มพื้นที่ที่เหลือ
+                body: [
+                  [
+                    { text: 'ลำดับ', style: 'tableHeader' },
+                    { text: 'รหัสนักศึกษา', style: 'tableHeader' },
+                    { text: 'ชื่อ-นามสกุล', style: 'tableHeader' },
+                    { text: 'สถานะ', style: 'tableHeader' },
+                    { text: 'วิธีการเช็คชื่อ', style: 'tableHeader' },
+                    { text: 'เวลา', style: 'tableHeader' }
+                  ],
+                  // ข้อมูลนักศึกษา
+                  ...data.map((row: any, index: number) => [
+                    (index + 1).toString(),
+                    row.student_id,
+                    row.full_name,
+                    row.status === 'present' ? 'มาเรียน' : row.status === 'late' ? 'มาสาย' : 'ขาดเรียน',
+                    row.method === 'nfc' ? 'NFC' : row.method === 'face_ocr' ? 'Face Scan' : 'Manual',
+                    new Date(row.check_in_time).toLocaleString('th-TH')
+                  ])
+                ]
+              },
+              layout: 'lightHorizontalLines' // ใส่เส้นขอบแบบบางแนวนอนให้ดูสะอาดตา
+            }
+          ],
+          styles: {
+            header: {
+              fontSize: 18,
+              bold: true
+            },
+            tableHeader: {
+              bold: true,
+              fontSize: 14,
+              color: 'white',
+              fillColor: '#dc2626', // สีแดงแบบฉบับโปรเจกต์คุณ
+              alignment: 'center'
+            }
           }
-        });
-        
-        // 8. บันทึกและดาวน์โหลด
-        doc.save(`${filename}.pdf`);
+        };
+
+        // สั่งสร้างและดาวน์โหลด
+        pdfMake.createPdf(docDefinition).download(`${filename}.pdf`);
       }
 
     } catch (err: any) {

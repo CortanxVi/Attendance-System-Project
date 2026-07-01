@@ -171,7 +171,7 @@ export default function RegistrationManagement() {
                 <input 
                   type="text" 
                   value={nfcStudentId} onChange={(e) => setNfcStudentId(e.target.value)}
-                  placeholder="เช่น 6401012345"
+                  placeholder="เช่น 66xxxxxxxxxxx"
                   className="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-red-500"
                   required
                 />
