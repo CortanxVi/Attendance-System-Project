@@ -11,13 +11,6 @@ import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
 import RegisterNFC from './features/teacher/RegisterNFC';
 
-import AdminLayout from './components/layout/AdminLayout';
-import AdminDashboard from './features/admin/AdminDashboard';
-import UserManagement from './features/admin/UserManagement';
-import AllCoursesManagement from './features/admin/AllCoursesManagement';
-import SystemLogs from './features/admin/SystemLogs';
-import ExportReports from './features/admin/ExportReports';
-
 interface UserProfile {
   id: string;
   email: string;
@@ -96,17 +89,6 @@ export default function App() {
             {/* สร้าง Placeholder เปล่าๆ ป้องกัน Error หน้าที่ยังไม่ได้ทำ */}
             <Route path="history" element={<div className="p-6 text-center mt-10">หน้าประวัติ (รอดำเนินการ)</div>} />
             <Route path="profile" element={<div className="p-6 text-center mt-10">หน้าโปรไฟล์ (รอดำเนินการ)</div>} />
-          </Route>
-        )}
-
-        {/* เส้นทางสำหรับแอดมิน */}
-        {profile.role === 'admin' && (
-          <Route path="/admin" element={<AdminLayout />}>
-            <Route index element={<AdminDashboard />} />
-            <Route path="users" element={<UserManagement />} />
-            <Route path="courses" element={<AllCoursesManagement />} />
-            <Route path="logs" element={<SystemLogs />} />
-            <Route path="reports" element={<ExportReports />} />
           </Route>
         )}
 
