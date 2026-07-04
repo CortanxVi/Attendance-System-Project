@@ -7,8 +7,11 @@ import Login from './features/auth/Login';
 // นำเข้า Layouts และ Pages ที่เพิ่งสร้าง
 import StudentLayout from './components/layout/StudentLayout';
 import StudentHome from './features/student/StudentHome';
+import AttendanceHistory from './features/student/AttendanceHistory';
 import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
+import TeacherExportReports from './features/teacher/ExportReports';
+import ImportStudents from './features/teacher/ImportStudents';
 
 import AdminLayout from './components/layout/AdminLayout';
 import SystemOverview from './features/admin/SystemOverview';
@@ -93,8 +96,7 @@ export default function App() {
         {profile.role === 'student' && (
           <Route path="/student" element={<StudentLayout />}>
             <Route index element={<StudentHome />} />
-            {/* สร้าง Placeholder เปล่าๆ ป้องกัน Error หน้าที่ยังไม่ได้ทำ */}
-            <Route path="history" element={<div className="p-6 text-center mt-10">หน้าประวัติ (รอดำเนินการ)</div>} />
+            <Route path="history" element={<AttendanceHistory />} />
             <Route path="profile" element={<div className="p-6 text-center mt-10">หน้าโปรไฟล์ (รอดำเนินการ)</div>} />
           </Route>
         )}
@@ -115,8 +117,8 @@ export default function App() {
         {profile.role === 'teacher' && (
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
-            <Route path="reports" element={<div className="p-8">หน้ารายงาน (รอดำเนินการ)</div>} />
-            <Route path="students" element={<div className="p-8">หน้าจัดการนักศึกษา (รอดำเนินการ)</div>} />
+            <Route path="reports" element={<TeacherExportReports />} />
+            <Route path="students" element={<ImportStudents />} />
             <Route path="settings" element={<div className="p-8">หน้าตั้งค่าระบบ (รอดำเนินการ)</div>} />
           </Route>
         )}

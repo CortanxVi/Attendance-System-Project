@@ -18,6 +18,8 @@ from services.insightface_service import face_service
 
 # นำเข้า Router สำหรับ Admin
 from routers.admin import admin_router
+from routers.student import student_router
+from routers.teacher import teacher_router
 
 class NFCRegisterRequest(BaseModel):
     student_id: str
@@ -95,6 +97,8 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(admin_router)
+app.include_router(student_router)
+app.include_router(teacher_router)
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
     """แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV"""
