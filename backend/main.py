@@ -4,7 +4,11 @@ import os
 import re
 import json
 import uuid
+import asyncio
+import io
+from PIL import Image, ImageOps
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status, APIRouter
+from starlette.concurrency import run_in_threadpool
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,8 +22,8 @@ from services.insightface_service import face_service
 
 # นำเข้า Router สำหรับ Admin
 from routers.admin import admin_router
+# นำเข้า Router สำหรับนักศึกษา (หน้าประวัติ + สถิติ)
 from routers.student import student_router
-from routers.teacher import teacher_router
 
 class NFCRegisterRequest(BaseModel):
     student_id: str
@@ -98,12 +102,73 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(admin_router)
 app.include_router(student_router)
-app.include_router(teacher_router)
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
-    """แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV"""
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    """
+    แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV
+
+    🌟 [แก้ไข] เพิ่มการแก้ไข EXIF Orientation ก่อนแปลงเป็นภาพ
+    เหตุผล: ภาพถ่ายจากมือถือหลายรุ่น (โดยเฉพาะตอนถ่ายแนวตั้ง) จะไม่หมุนพิกเซลจริง แต่จะแนบ
+    EXIF tag บอกทิศทางที่ควรหมุนตอนแสดงผลแทน เบราว์เซอร์/แอปดูรูปจะหมุนให้อัตโนมัติตาม tag นี้
+    ทำให้ผู้ใช้เห็นภาพหน้าตรงปกติในหน้าพรีวิว แต่ cv2.imdecode (วิธีเดิม) ไม่รู้จัก EXIF เลย
+    จะอ่านพิกเซลดิบตามที่บันทึกจริง ซึ่งอาจเอียง/หมุนไป 90/180/270 องศาโดยไม่รู้ตัว ส่งผลให้
+    โมเดล AI ตรวจจับใบหน้าผิดพลาด (คะแนนความชัดตก หรือเจอจุดปลอมถูกตีความเป็นใบหน้าที่ 2)
+
+    วิธีแก้: ใช้ Pillow เปิดภาพ แล้วเรียก ImageOps.exif_transpose() เพื่อหมุนพิกเซลจริง
+    ให้ตรงกับที่ EXIF ระบุไว้ก่อน ค่อยแปลงเป็น array ให้ OpenCV ใช้งานต่อ
+    """
+    try:
+        # เปิดภาพด้วย Pillow (อ่านค่า EXIF ได้ ต่างจาก cv2.imdecode)
+        pil_image = Image.open(io.BytesIO(image_bytes))
+        # หมุนพิกเซลจริงตามค่า EXIF Orientation แล้วลบ EXIF tag ทิ้ง (กันไม่ให้ถูกหมุนซ้ำที่อื่น)
+        pil_image = ImageOps.exif_transpose(pil_image)
+        # แปลงเป็นโหมดสี RGB เสมอ กันกรณีภาพเป็น RGBA/Grayscale/CMYK ที่ถ้าแปลงตรงๆ สีจะเพี้ยน
+        pil_image = pil_image.convert("RGB")
+        # Pillow ให้ค่าสีแบบ RGB แต่ OpenCV ใช้ลำดับสีแบบ BGR จึงต้องสลับช่องสีก่อนส่งต่อ
+        rgb_array = np.array(pil_image)
+        return cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        # 🛡️ Fallback: ถ้า Pillow เปิดไฟล์ไม่ได้ไม่ว่าด้วยเหตุผลใด (ไฟล์เสีย/ฟอร์แมตแปลกๆ)
+        # ให้ใช้วิธีเดิม (cv2.imdecode) แทน เพื่อไม่ให้ทั้งระบบพังเพราะไฟล์เดียว
+        print(f"⚠️ อ่านภาพแบบรู้จัก EXIF ไม่สำเร็จ กำลังใช้วิธีสำรอง: {str(e)}")
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+def resize_image_if_needed(img: np.ndarray, max_dimension: int = 1280) -> np.ndarray:
+    """
+    🌟 [เพิ่มใหม่] ย่อขนาดภาพก่อนส่งเข้าโมเดล AI ถ้าด้านที่ยาวที่สุดเกิน max_dimension พิกเซล
+    เหตุผล: รูปถ่ายจากกล้องมือถือมักมีความละเอียดสูงมาก (เช่น 3000x4000 พิกเซลขึ้นไป) ทั้งที่
+    EasyOCR และ InsightFace ไม่ได้ต้องการความละเอียดขนาดนั้นเพื่อความแม่นยำ ยิ่งภาพใหญ่ยิ่งใช้เวลา
+    ประมวลผลนานขึ้นโดยไม่จำเป็น ย่อขนาดลงมาก่อนจะช่วยลดเวลาประมวลผลได้ชัดเจน โดยความคมชัดยังพอ
+    สำหรับอ่านตัวเลขบนบัตร/จดจำใบหน้าอยู่ (ถ้าพบว่า OCR อ่านผิดบ่อยขึ้น ให้ลองปรับค่านี้ให้สูงขึ้นได้)
+    """
+    height, width = img.shape[:2]
+    longest_side = max(height, width)
+    if longest_side <= max_dimension:
+        return img  # ภาพเล็กพออยู่แล้ว ไม่ต้องย่อ
+    scale = max_dimension / longest_side
+    new_size = (int(width * scale), int(height * scale))
+    return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+def calculate_attendance_status(session_created_at: str, late_threshold_minutes: int, absent_threshold_minutes: int) -> tuple[str, float]:
+    """
+    🌟 ฟังก์ชันกลาง: คำนวณว่านักศึกษา "มาเรียน / มาสาย / ขาดเรียน" จากเวลาที่ผ่านไปนับตั้งแต่เปิดคาบ
+    เทียบกับเกณฑ์ที่อาจารย์/แอดมินตั้งไว้ในตาราง courses (late_threshold_minutes, absent_threshold_minutes)
+
+    ใช้ร่วมกันทั้งจุดเช็คชื่อด้วย QR (/api/v1/attendance/checkin) และสแกนหน้า+บัตร (/api/v1/attendance/verify)
+    เพื่อไม่ให้ต้องเขียนตรรกะเดิมซ้ำสองที่
+
+    คืนค่าเป็น (สถานะ, จำนวนนาทีที่ผ่านไป)
+    """
+    session_start_time = datetime.fromisoformat(session_created_at.replace('Z', '+00:00'))
+    current_time = datetime.now(timezone.utc)
+    minutes_diff = (current_time - session_start_time).total_seconds() / 60
+
+    if minutes_diff > absent_threshold_minutes:
+        return "absent", round(minutes_diff, 2)
+    elif minutes_diff > late_threshold_minutes:
+        return "late", round(minutes_diff, 2)
+    return "present", round(minutes_diff, 2)
 
 def parse_supabase_error(error_str_or_dict) -> str:
     """
@@ -145,7 +210,15 @@ async def register_face(
         # 1. แปลงไฟล์ภาพที่อัปโหลดมาให้เป็น OpenCV (BGR)
         face_bytes = await face_image.read()
         img_selfie = bytes_to_cv2_image(face_bytes)
-        
+
+        # 🌟 [แก้ไข] ย่อขนาดภาพก่อนส่งเข้าโมเดล เหมือนกับที่ endpoint verify ทำอยู่แล้ว
+        # เหตุผล: เดิม endpoint นี้ไม่ได้ย่อขนาดภาพเลย ทำให้ภาพความละเอียดสูงมากจากกล้องมือถือ
+        # (เช่น 3000x4000 พิกเซลขึ้นไป) ถูกส่งเข้าโมเดลตรงๆ นอกจากจะช้าลงโดยไม่จำเป็นแล้ว ภาพที่มี
+        # รายละเอียดพื้นหลังเยอะๆ ยังเพิ่มโอกาสที่โมเดลจะตรวจจับจุดที่ไม่ใช่ใบหน้าจริงผิดพลาดเป็น
+        # "คนที่ 2" ได้ง่ายขึ้นด้วย การย่อขนาดให้เท่ากับฝั่ง verify ช่วยให้พฤติกรรมของทั้งสอง endpoint
+        # สอดคล้องกัน และลดปัญหานี้ลง
+        img_selfie = resize_image_if_needed(img_selfie)
+
         # 2. ส่งภาพไปให้ Service ประมวลผลและเช็คกฎเกณฑ์
         embedding_list, error_msg = face_service.extract_face_for_registration(img_selfie)
         
@@ -183,24 +256,50 @@ async def register_face(
 @app.post("/api/v1/attendance/verify")
 async def verify_FaceReg_OCR_attendance(
     face_image: UploadFile = File(...),
-    id_card_image: UploadFile = File(...)
+    id_card_image: UploadFile = File(...),
+    # 🌟 [เพิ่มใหม่] รับ session_id แบบ "ไม่บังคับ" — ถ้า Frontend ยังไม่ได้ส่งมา (เช่น ตอนนี้ flow
+    # สแกน QR ก่อนหน้ายังมีบั๊กอยู่) endpoint นี้จะยังทำงานเหมือนเดิมทุกอย่าง ไม่มีอะไรพัง
+    # แต่ถ้าส่งมา จะนำไปบันทึกคู่กับประวัติ เพื่อให้หน้า "ประวัติของนักศึกษา" และรายงานของอาจารย์/แอดมิน
+    # รู้ว่าการเช็คชื่อครั้งนี้เป็นของวิชา/คาบเรียนไหน
+    session_id: Optional[str] = Form(None)
 ):
     try:
-        # ─── STEP 1: แปลงไฟล์เป็นรูปภาพ ───
-        img_live = bytes_to_cv2_image(await face_image.read())
-        img_card = bytes_to_cv2_image(await id_card_image.read())
-        
-        # ─── STEP 2: OCR อ่านรหัส 13 หลักจากภาพบัตร ───
-        extracted_student_id = ocr_service.extract_student_id(img_card)
+        # ─── STEP 1: แปลงไฟล์เป็นรูปภาพ + ย่อขนาดถ้าใหญ่เกินไป (ช่วยให้ประมวลผลเร็วขึ้น) ───
+        img_live = resize_image_if_needed(bytes_to_cv2_image(await face_image.read()))
+        img_card = resize_image_if_needed(bytes_to_cv2_image(await id_card_image.read()))
+
+        # ─── STEP 2 + 4 (รวมเป็นขั้นตอนเดียว): รัน OCR อ่านบัตร และสกัดใบหน้าจากภาพสด "พร้อมกัน" ───
+        # 🌟 [แก้ใหม่] เดิมสองงานนี้รันเรียงต่อกันทีละอย่าง (รอ OCR เสร็จก่อน ค่อยเริ่มสกัดใบหน้า) ทั้งที่
+        # จริงๆ ไม่ต้องพึ่งพากันเลย (คนละภาพ) เปลี่ยนมารันพร้อมกันด้วย asyncio.gather() แทน ทำให้เวลารวม
+        # เหลือประมาณเท่ากับงานที่ช้าที่สุดงานเดียว แทนที่จะเป็นผลรวมเวลาของทั้งสองงานบวกกัน
+        #
+        # นอกจากนี้ ทั้งสองฟังก์ชัน (ocr_service, face_service) เป็นโค้ดแบบ sync ที่ใช้เวลานาน (CPU-heavy)
+        # จึงต้องส่งไปรันใน thread pool ผ่าน run_in_threadpool ไม่เช่นนั้นจะไปบล็อก event loop หลักของ
+        # FastAPI ทำให้ endpoint อื่นๆ (เช่น หน้า Admin/อาจารย์ที่กำลังเรียกดูข้อมูลอยู่พร้อมกัน) ค้างตามไป
+        # ด้วยระหว่างที่ endpoint นี้กำลังประมวลผลอยู่ — เป็นจุดสำคัญที่ทำให้ระบบเช็คชื่อ "เป็นอิสระ" จาก
+        # ระบบ Web Dashboard อื่นๆ ตามที่ต้องการ
+        extracted_student_id, emb_live = await asyncio.gather(
+            run_in_threadpool(ocr_service.extract_student_id, img_card),
+            run_in_threadpool(face_service.extract_face_embedding, img_live),
+        )
+
         if not extracted_student_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail="ไม่สามารถอ่านรหัสนักศึกษาจากบัตรได้ กรุณาถ่ายภาพบัตรให้ชัดเจนและไม่มีแสงสะท้อน"
             )
-            
+        if emb_live is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="ตรวจไม่พบใบหน้าในภาพสแกนสด กรุณาหันหน้าเข้าหากล้องตรงๆ"
+            )
+
         # ─── STEP 3: ดึงข้อมูล Face Embedding และ UUID จาก Supabase ───
-        # 🌟 [แก้ตรงนี้] เพิ่ม 'id' เข้าไปในคำสั่ง select 🌟
-        db_response = supabase.table('profiles').select('id, face_embedding').eq('student_id', extracted_student_id).execute()
+        # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool ด้วย เพราะ supabase-python เป็น sync client
+        # (เรียก Supabase ตรงๆ ก็ยังบล็อก event loop ได้เหมือนกัน แม้จะเป็นแค่ network call ก็ตาม)
+        db_response = await run_in_threadpool(
+            lambda: supabase.table('profiles').select('id, face_embedding').eq('student_id', extracted_student_id).execute()
+        )
         
         if len(db_response.data) == 0:
             raise HTTPException(
@@ -227,14 +326,6 @@ async def verify_FaceReg_OCR_attendance(
 
         registered_embedding = np.array(registered_embedding_list, dtype=np.float32)
 
-        # ─── STEP 4: AI สกัดใบหน้าจาก 'กล้องสด' เพียงรูปเดียว ───
-        emb_live = face_service.extract_face_embedding(img_live)
-        if emb_live is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="ตรวจไม่พบใบหน้าในภาพสแกนสด กรุณาหันหน้าเข้าหากล้องตรงๆ"
-            )
-
         # ─── STEP 5: เปรียบเทียบใบหน้าสด กับ ใบหน้าในฐานข้อมูลโดยตรง ───
         similarity_score = face_service.calculate_similarity(emb_live, registered_embedding)
 
@@ -245,19 +336,54 @@ async def verify_FaceReg_OCR_attendance(
                 detail=f"การยืนยันตัวตนล้มเหลว ใบหน้าไม่ตรงกับข้อมูลที่ลงทะเบียนไว้ (Score: {round(similarity_score, 4)})"
             )
 
-        # ─── STEP 6: ผ่านเกณฑ์ -> บันทึกประวัติลงตาราง attendance ───
-        supabase.table('attendance_records').insert({
-            'student_id': profile_uuid, 
-            'status': 'present',
+        # ─── STEP 6: ผ่านเกณฑ์ -> คำนวณสถานะ (มา/สาย/ขาด) แล้วบันทึกประวัติลงตาราง attendance ───
+        # ค่าเริ่มต้น: ถือว่า "มาเรียน" (กรณีนี้ใช้เมื่อไม่มี session_id ส่งมา เช่น flow เก่าที่ยังไม่ผูก QR)
+        calculated_status = "present"
+        minutes_diff = None
+
+        if session_id:
+            # ดึงเวลาเปิดคาบ + เกณฑ์สาย/ขาดของวิชานั้น มาคำนวณสถานะจริง (ใช้ฟังก์ชันกลางร่วมกับ /checkin)
+            # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool เหมือนจุดอื่น (เหตุผลเดียวกัน: ไม่บล็อก event loop)
+            session_res = await run_in_threadpool(
+                lambda: supabase.table('attendance_sessions')
+                    .select('created_at, courses(late_threshold_minutes, absent_threshold_minutes)')
+                    .eq('id', session_id)
+                    .execute()
+            )
+
+            if session_res.data:
+                session_row = session_res.data[0]
+                course_cfg = session_row.get('courses') or {}
+                # ถ้าวิชายังไม่ได้ตั้งค่าเกณฑ์ไว้ ใช้ค่า default ที่สมเหตุสมผล (สาย 15 นาที / ขาด 45 นาที)
+                late_limit = course_cfg.get('late_threshold_minutes') or 15
+                absent_limit = course_cfg.get('absent_threshold_minutes') or 45
+                calculated_status, minutes_diff = calculate_attendance_status(
+                    session_row['created_at'], late_limit, absent_limit
+                )
+            # ถ้าไม่เจอ session (เช่น session_id ผิด/ถูกลบไปแล้ว) ปล่อยให้เป็น 'present' ตามค่าเริ่มต้น
+            # ไม่ทำให้การเช็คชื่อทั้งหมด fail เพราะใบหน้า+บัตรผ่านการยืนยันตัวตนแล้วจริงๆ
+
+        attendance_data = {
+            'student_id': profile_uuid,
+            'status': calculated_status,
             'method': 'face_ocr', # face_ocr, nfc, manual 
             'similarity_score': round(similarity_score, 4)
-        }).execute()
+        }
+        # ใส่ session_id เข้าไปด้วยเฉพาะตอนที่มีการส่งมาจริง (กัน error ถ้า Frontend ยังไม่ได้อัปเดตให้ส่งมา)
+        if session_id:
+            attendance_data['session_id'] = session_id
+
+        # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool เช่นกัน (จุดสุดท้ายที่เหลือของ endpoint นี้)
+        await run_in_threadpool(
+            lambda: supabase.table('attendance_records').insert(attendance_data).execute()
+        )
 
         # คืนค่าความสำเร็จกลับไปให้หน้าบ้าน (Frontend)
         return {
             "success": True,
             "student_id": extracted_student_id, # ตรงนี้ส่งรหัส 13 หลักกลับไปให้ Frontend โชว์ได้ปกติ
             "score": round(similarity_score, 4),
+            "calculated_status": calculated_status,  # 🌟 [เพิ่มใหม่] present / late / absent ให้ Frontend โชว์ได้ตรงจริง
             "message": f"เช็คชื่อนักศึกษา รหัส {extracted_student_id} สำเร็จเรียบร้อยแล้ว!"
         }
 
@@ -448,6 +574,73 @@ async def close_attendance_session(session_id: str):
         print(f"❌ [Error] Close Session Failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# 🌟 [เพิ่มใหม่] API สำหรับ "หมุน" QR Token จริงๆ (แก้บั๊กเดิมที่ฝั่ง React เขียนลงคอลัมน์
+# current_token/expires_at ที่ไม่มีอยู่จริงในตาราง — ที่ถูกต้องคือต้องอัปเดตคอลัมน์ qr_token
+# เพราะ endpoint /api/v1/attendance/checkin เช็คกับคอลัมน์นี้เท่านั้น)
+# ฝั่งอาจารย์ (LiveAttendance.tsx) ควรเรียก endpoint นี้ทุกๆ qr_refresh_rate_seconds แทนการยิง Supabase ตรงๆ
+@app.post("/api/v1/sessions/{session_id}/rotate-token")
+async def rotate_session_qr_token(session_id: str, teacher_id: str):
+    # 💡 บังคับให้ส่ง teacher_id มาด้วย และเช็คว่าเป็นเจ้าของคาบนี้จริง กันคนอื่นมาหมุน token แทนอาจารย์เจ้าของวิชา
+    try:
+        session_res = supabase.table('attendance_sessions') \
+            .select('id, opened_by, status') \
+            .eq('id', session_id) \
+            .execute()
+
+        if not session_res.data:
+            raise HTTPException(status_code=404, detail="ไม่พบคาบเรียนนี้ในระบบ")
+
+        session_row = session_res.data[0]
+        if session_row['status'] != 'open':
+            raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดไปแล้ว ไม่สามารถหมุน QR ต่อได้")
+        if session_row['opened_by'] != teacher_id:
+            raise HTTPException(status_code=403, detail="คุณไม่ใช่เจ้าของคาบเรียนนี้ ไม่มีสิทธิ์หมุน QR")
+
+        new_token = str(uuid.uuid4())
+        supabase.table('attendance_sessions').update({
+            "qr_token": new_token
+        }).eq('id', session_id).execute()
+
+        return {
+            "status": "success",
+            "qr_token": new_token,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 🌟 [เพิ่มใหม่] API ให้นักศึกษาตรวจสอบว่า QR ที่สแกนมายังใช้ได้อยู่ไหม ก่อนจะไปขั้นตอนสแกนหน้า
+# (แก้บั๊กเดิมที่ QRScanner.tsx ไป query ตาราง active_sessions ที่ไม่มีอยู่จริงในระบบ)
+@app.get("/api/v1/sessions/{session_id}/validate")
+async def validate_session_qr_token(session_id: str, token: str):
+    try:
+        session_res = supabase.table('attendance_sessions') \
+            .select('status, qr_token, courses(course_code, course_name)') \
+            .eq('id', session_id) \
+            .execute()
+
+        if not session_res.data:
+            raise HTTPException(status_code=404, detail="ไม่พบคาบเรียนนี้ในระบบ (QR อาจไม่ถูกต้อง)")
+
+        session_row = session_res.data[0]
+        if session_row['status'] != 'open':
+            raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อไปแล้ว")
+        if session_row['qr_token'] != token:
+            raise HTTPException(status_code=400, detail="QR Code หมดอายุแล้ว กรุณาสแกน QR อันล่าสุดใหม่อีกครั้ง")
+
+        course_info = session_row.get('courses') or {}
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "course_code": course_info.get('course_code'),
+            "course_name": course_info.get('course_name'),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # 1. API สำหรับกดบันทึกเพิ่มรายวิชาใหม่ลงตาราง courses
 @app.post("/api/v1/courses")
 async def create_course(payload: CourseCreateRequest):
@@ -555,6 +748,11 @@ async def delete_course(course_id: str):
 
 @router.post("/api/v1/attendance/checkin")
 async def student_check_in(payload: CheckInPayload):
+    # ⚠️ [คำเตือนสำคัญ] endpoint นี้ยืนยันแค่ "QR Token ตรงกันไหม" เท่านั้น
+    # ไม่มีการตรวจสอบตัวตนของนักศึกษาเลย (ไม่เช็คใบหน้า/บัตร) รับ student_id ตรงๆ จาก Frontend
+    # ตอนนี้ยังไม่มีหน้าจอไหนในระบบเรียกใช้ endpoint นี้จริง (ฝั่งนักศึกษาใช้ /api/v1/attendance/verify
+    # ที่มีการสแกนหน้า+บัตรแทน) ถ้าจะนำมาใช้งานจริงในอนาคต ควรเพิ่มการยืนยันตัวตนก่อนเสมอ
+    # ไม่เช่นนั้นใครก็ตามที่รู้ QR token ปัจจุบันจะเช็คชื่อแทนคนอื่นได้
     try:
         # 5.1. ตรวจสอบว่า เซสชันนี้มีอยู่จริง, เปิดอยู่ และ QR Token ตรงกันปัจจุบันหรือไม่
         session_res = supabase.table('attendance_sessions') \
@@ -573,29 +771,18 @@ async def student_check_in(payload: CheckInPayload):
         if session_info['qr_token'] != payload.qr_token:
             raise HTTPException(status_code=400, detail="Dynamic QR Code ไม่ถูกต้องหรือหมดอายุแล้ว")
             
-        # 5.2. คำนวณเวลาส่วนต่าง (หน่วยนาที)
-        created_at_str = session_info['created_at'] # เวลาเปิดเซสชัน (เวลาเริ่มคาบ)
-        session_start_time = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-        current_time = datetime.now(timezone.utc)
-        
-        minutes_diff = (current_time - session_start_time).total_seconds() / 60
-        
-        # 5.3. ตรวจสอบเกณฑ์แบบ Dynamic ตามที่ตั้งค่าไว้ในตารางวิชานั้นๆ
+        # 5.2 - 5.3. คำนวณสถานะ (มา/สาย/ขาด) ด้วยฟังก์ชันกลาง (ใช้ร่วมกับ /api/v1/attendance/verify)
         late_limit = course_config['late_threshold_minutes']       # ค่าปกติคือ 15
         absent_limit = course_config['absent_threshold_minutes']   # ค่าปกติคือ 45
-        
-        calculated_status = "present"  # สถานะเริ่มต้น: มาเรียนปกติ
-        
-        if minutes_diff > absent_limit:
-            calculated_status = "absent"  # เกิน 45 นาที -> ขาดเรียน
-        elif minutes_diff > late_limit:
-            calculated_status = "late"    # เกิน 15 นาที -> มาสาย
+        calculated_status, minutes_diff = calculate_attendance_status(
+            session_info['created_at'], late_limit, absent_limit
+        )
             
         # 5.4. บันทึกประวัติการเช็คชื่อลงตารางประวัตินักศึกษา (attendance_records)
         attendance_data = {
             "session_id": payload.session_id,
             "student_id": payload.student_id,
-            "check_in_time": current_time.isoformat(),
+            "check_in_time": datetime.now(timezone.utc).isoformat(),
             "status": calculated_status  # เก็บเป็น 'present', 'late', หรือ 'absent'
         }
         
@@ -604,9 +791,11 @@ async def student_check_in(payload: CheckInPayload):
         return {
             "status": "success",
             "calculated_status": calculated_status,
-            "minutes_diff": round(minutes_diff, 2)
+            "minutes_diff": minutes_diff
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -673,4 +862,12 @@ async def get_course_attendance_summary(course_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+    # 🌟 [หมายเหตุสำคัญสำหรับตอน Deploy จริง] คำสั่งนี้ (reload=True) เหมาะกับตอนพัฒนา/แก้โค้ดเท่านั้น
+    # และรันได้แค่ 1 worker process เท่านั้น (reload=True ใช้พร้อม workers หลายตัวไม่ได้)
+    #
+    # ตอน deploy ใช้งานจริง ควรปิด reload แล้วรันหลาย worker process แทน เพื่อให้ต่อให้ worker
+    # ตัวหนึ่งกำลังยุ่งอยู่กับการประมวลผลเช็คชื่อ (หนักๆ) worker ตัวอื่นก็ยังรับ request จาก
+    # หน้า Admin/อาจารย์ ได้ตามปกติ (เสริมจากการแก้ให้ไม่บล็อก event loop ในโค้ดข้างบนแล้ว)
+    # ตัวอย่างคำสั่งรันจริง (ไม่ต้องใช้ reload=True ในไฟล์นี้แล้ว):
+    #   uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -1,38 +1,42 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../../lib/supabaseClient';
-import { Clock, Users, XCircle } from 'lucide-react';
+import { Clock, Users, XCircle, AlertTriangle } from 'lucide-react';
 
 // 🌟 1. อัปเดต Interface มารับ activeSessionId จากคอมโพเนนต์แม่ (TeacherDashboard)
 interface LiveAttendanceProps {
   courseCode?: string;
   activeSessionId: string; // รหัส Session จริงจากตาราง attendance_sessions
+  teacherId: string; // 🌟 [เพิ่มใหม่] ต้องส่งมาด้วย เพื่อให้ backend ยืนยันว่าเป็นเจ้าของคาบเรียนนี้ตอนหมุน QR
   onClose?: () => void;
 }
 
-export default function LiveAttendance({ courseCode = "CS301", activeSessionId, onClose }: LiveAttendanceProps) {
+export default function LiveAttendance({ courseCode = "CS301", activeSessionId, teacherId, onClose }: LiveAttendanceProps) {
   const [token, setToken] = useState<string>(''); 
   const [countdown, setCountdown] = useState<number>(60);
+  const [tokenError, setTokenError] = useState<string | null>(null);
   
   // 🌟 เพิ่ม State สำหรับนับจำนวนนักศึกษาที่เช็คชื่อแล้วแบบ Real-time
   const [attendanceCount, setAttendanceCount] = useState<number>(0);
 
-  // ฟังก์ชันสุ่มรหัส Token ใหม่
-  const generateNewToken = () => {
-    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-  };
-
-  // 🌟 2. ปรับปรุงฟังก์ชันอัปเดต Token: ยิงเข้าตารางจริง และไม่ต้องมีคำสั่งสร้างแถวใหม่ (Insert) อีกต่อไป
-  const updateSessionToken = async (currentToken: string) => {
-    const expiresAt = new Date(Date.now() + 60000).toISOString(); // Token มีอายุ 60 วินาที (1 นาที)
-    
-    await supabase
-      .from('attendance_sessions') // เปลี่ยนชื่อตารางให้ตรงกับฐานข้อมูลจริง
-      .update({ 
-        current_token: currentToken, 
-        expires_at: expiresAt 
-      })
-      .eq('id', activeSessionId); // อัปเดตตรงไปที่ ID ของคลาสนี้
+  // 🌟 2. [แก้ใหม่] เดิมฟังก์ชันนี้สุ่ม token เองฝั่ง browser แล้วเขียนตรงเข้า Supabase ลงคอลัมน์
+  // current_token/expires_at ที่ไม่มีอยู่จริงในตาราง (บั๊กเดิม) — ตอนนี้เปลี่ยนไปให้ backend
+  // เป็นคนสร้าง token และอัปเดตคอลัมน์ qr_token ที่ถูกต้องแทน ผ่าน endpoint ที่สร้างไว้ใน Step ก่อนหน้า
+  const rotateToken = async () => {
+    try {
+      const res = await axios.post(
+        `/api/v1/sessions/${activeSessionId}/rotate-token`,
+        null,
+        { params: { teacher_id: teacherId } }
+      );
+      setToken(res.data.qr_token);
+      setTokenError(null);
+    } catch (err: any) {
+      // ถ้าหมุนไม่สำเร็จ (เช่น คาบถูกปิดไปแล้ว) ต้องแจ้งเตือนทันที ไม่ปล่อยให้ QR ค้างเป็นค่าเก่าเงียบๆ
+      // เพราะ QR เก่าจะใช้เช็คชื่อไม่ได้แล้วจริงๆ (ตรวจกับ backend ตรงๆ)
+      setTokenError(err.response?.data?.detail || 'ไม่สามารถหมุน QR Code ใหม่ได้ กรุณาลองใหม่');
+    }
   };
 
   // 🌟 3. ฟังก์ชันดึงยอดนักศึกษาล่าสุด และดักจับความเปลี่ยนแปลงแบบเรียลไทม์ (Supabase Realtime)
@@ -75,22 +79,18 @@ export default function LiveAttendance({ courseCode = "CS301", activeSessionId, 
     };
   }, [activeSessionId]);
 
-  // 🌟 4. ลูปควบคุมเวลาและเปลี่ยนรหัส Token ตัว QR Code
+  // 🌟 4. ลูปควบคุมเวลาและหมุน Token ตัว QR Code ผ่าน backend
   useEffect(() => {
     let timer: number;
-    
-    // สร้างและอัปเดต Token ครั้งแรกทันที
-    const initialToken = generateNewToken();
-    setToken(initialToken);
-    updateSessionToken(initialToken);
+
+    // หมุน Token ครั้งแรกทันทีตอนเปิดหน้าจอ
+    rotateToken();
 
     // ตั้งรอบการทำงานนับถอยหลังทุกๆ 1 วินาที
     timer = window.setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          const newToken = generateNewToken();
-          setToken(newToken);
-          updateSessionToken(newToken); // อัปเดต Token ชุดใหม่ลงฐานข้อมูล
+          rotateToken(); // หมุน Token ชุดใหม่ผ่าน backend
           return 60; // รีเซ็ตตัวเลขกลับไปที่ 60 วินาที
         }
         return prev - 1;
@@ -102,7 +102,7 @@ export default function LiveAttendance({ courseCode = "CS301", activeSessionId, 
     return () => {
       clearInterval(timer);
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, teacherId]);
 
   // ข้อมูลที่จะฝังลงไปใน QR Code
   const qrData = JSON.stringify({
@@ -131,6 +131,14 @@ export default function LiveAttendance({ courseCode = "CS301", activeSessionId, 
             <Clock size={16} />
             QR Code อัปเดตความปลอดภัยทุกๆ 60 วินาที
           </div>
+
+          {/* 🌟 [เพิ่มใหม่] แจ้งเตือนถ้าหมุน QR ไม่สำเร็จ เช่น เซสชันถูกปิดไปแล้วจากอีกหน้าจอ */}
+          {tokenError && (
+            <div className="flex items-center gap-2 text-sm font-medium text-red-600 bg-red-50 px-4 py-2 rounded-full border border-red-200 mt-3">
+              <AlertTriangle size={16} />
+              {tokenError}
+            </div>
+          )}
         </div>
 
         {/* ฝั่งขวา: แผงควบคุมยอดนักศึกษา */}

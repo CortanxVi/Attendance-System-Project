@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as Lucide from 'lucide-react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabaseClient';
 import LiveAttendance from './LiveAttendance'; 
 import NFCManager from './NFCManager';
@@ -24,7 +23,6 @@ interface Course {
 }
 
 export default function TeacherDashboard() {
-  const navigate = useNavigate();
   // 🌟 State ของระบบเช็คชื่อ
   const [isLive, setIsLive] = useState(false); 
   const [isNfcOpen, setIsNfcOpen] = useState(false); 
@@ -137,7 +135,7 @@ export default function TeacherDashboard() {
     <div className="flex flex-col h-full bg-transparent">
       
       {/* โซน Modals ต่างๆ (โค้ดเดิม) */}
-      {isLive && activeSessionId && <LiveAttendance courseCode={currentSelectedCourseCode} activeSessionId={activeSessionId} onClose={() => setIsLive(false)} />}
+      {isLive && activeSessionId && <LiveAttendance courseCode={currentSelectedCourseCode} activeSessionId={activeSessionId} teacherId={teacherId} onClose={() => setIsLive(false)} />}
       {isNfcOpen && activeSessionId && <NFCManager defaultCourseCode={currentSelectedCourseCode} activeSessionId={activeSessionId} onClose={() => setIsNfcOpen(false)} />}
       {isAddModalOpen && <AddCourseModal teacherId={teacherId} onClose={() => setIsAddModalOpen(false)} onSuccess={() => fetchCourses(teacherId)} />}
       
@@ -167,13 +165,6 @@ export default function TeacherDashboard() {
               <button onClick={() => setViewMode('grid')} className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-orange-100 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`} title="Grid View"><Lucide.Grid size={20} /></button>
               <button onClick={() => setViewMode('list')} className={`p-2 rounded-lg transition-colors ${viewMode === 'list' ? 'bg-orange-100 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`} title="List View"><Lucide.List size={20} /></button> {/*<List size={20} />*/}
             </div>
-            
-            <button onClick={() => navigate('/teacher/reports')} className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm font-semibold transition-all shadow-sm">
-              <Lucide.FileSpreadsheet size={18} className="text-green-600" /> ส่งออกรายงาน
-            </button>
-            <button onClick={() => navigate('/teacher/students')} className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm font-semibold transition-all shadow-sm">
-              <Lucide.UploadCloud size={18} className="text-blue-600" /> นำเข้านักศึกษา
-            </button>
 
             <button onClick={() => setIsAddModalOpen(true)} className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm font-semibold transition-all shadow-md w-full md:w-auto">
               <Lucide.Plus size={18} /> เพิ่มรายวิชา

@@ -7,8 +7,6 @@ from typing import Optional, Any
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-from services.attendance_export_service import export_service
-
 load_dotenv()
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
@@ -290,16 +288,31 @@ async def get_audit_logs():
 async def get_export_attendance_data(course_id: str):
     """ดึงข้อมูลสำหรับนำไปสร้างไฟล์ Excel/CSV/PDF ที่หน้าบ้าน"""
     try:
-        data, error = export_service.get_export_data(course_id)
-        if error:
-            raise HTTPException(status_code=404, detail=error)
-            
+        course_res = supabase.table("courses").select("*").eq("id", course_id).execute()
+        if not course_res.data:
+             raise HTTPException(status_code=404, detail="ไม่พบวิชา")
+        course = course_res.data[0]
+
+        records_res = supabase.table("attendance_records") \
+            .select("check_in_time, status, method, profiles(student_id, full_name), attendance_sessions!inner(course_id)") \
+            .eq("attendance_sessions.course_id", course_id) \
+            .order("check_in_time", desc=False) \
+            .execute()
+
+        export_data = []
+        for r in records_res.data:
+            export_data.append({
+                "student_id": r["profiles"]["student_id"] if r["profiles"] else "N/A",
+                "full_name": r["profiles"]["full_name"] if r["profiles"] else "Unknown",
+                "check_in_time": r["check_in_time"],
+                "status": r["status"],
+                "method": r["method"]
+            })
+
         return {
             "status": "success",
-            "course": data["course"],
-            "records": data["records"]
+            "course": course,
+            "records": export_data
         }
-    except HTTPException:
-        raise
     except Exception as e:
          raise HTTPException(status_code=500, detail=str(e))

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import QRScanner from './QRScanner'; 
+import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner from './LivenessScanner';
 import { faceService } from '../../services/api';
 import { base64ToFile } from '../../utils/imageUtils';
@@ -9,6 +9,8 @@ import { UploadCloud, CheckCircle, XCircle, Loader2, UserCheck } from 'lucide-re
 export default function StudentHome() {
   const [isScanning, setIsScanning] = useState(false);
   const [verifiedCourse, setVerifiedCourse] = useState<string | null>(null);
+  // 🌟 [เพิ่มใหม่] เก็บ session_id ที่ผ่านการตรวจสอบ QR แล้วไว้ใช้ตอนส่งเช็คชื่อจริง (ต่อสายให้ครบใน Step ถัดไป)
+  const [verifiedSessionId, setVerifiedSessionId] = useState<string | null>(null);
   const [isLivenessActive, setIsLivenessActive] = useState(false);
 
   // สถานะเก็บรูปภาพ
@@ -22,10 +24,12 @@ export default function StudentHome() {
   const [resultMessage, setResultMessage] = useState<string>('');  // ข้อความจากหลังบ้าน
   const [resultStudentId, setResultStudentId] = useState<string>(''); // รหัสนักศึกษาจากหลังบ้าน
   const [resultScore, setResultScore] = useState<number | null>(null); // คะแนนความเหมือน
+  const [resultStatus, setResultStatus] = useState<string>(''); // 🌟 [เพิ่มใหม่] สถานะจริง present/late/absent
 
-  const handleVerifySuccess = (course: string) => {
+  const handleVerifySuccess = (info: VerifiedSessionInfo) => {
     setIsScanning(false);
-    setVerifiedCourse(course);
+    setVerifiedCourse(info.courseCode || info.courseName);
+    setVerifiedSessionId(info.sessionId);
   };
 
   const handleFaceCapture = (imageSrc: string) => {
@@ -55,12 +59,16 @@ export default function StudentHome() {
       const faceFile = base64ToFile(capturedFaceData, 'liveness_face.jpg');
 
       // 2. ส่งข้อมูลไปยัง FastAPI Backend (POST /api/v1/attendance/verify)
-      const result = await faceService.verifyAttendance(faceFile, idCardFile);
+      // 🌟 [แก้ใหม่] ส่ง verifiedSessionId ที่ได้จากตอนสแกน QR ผ่านไปด้วย เพื่อให้ backend ผูกกับ
+      // คาบเรียนจริง และคำนวณสาย/ขาดให้ถูกต้อง (ถ้าเข้าเช็คชื่อโดยไม่ผ่าน QR เลย ค่านี้จะเป็น null
+      // ซึ่ง backend จะ fallback เป็น 'present' เหมือนพฤติกรรมเดิม ไม่ทำให้ใครเช็คชื่อไม่ได้)
+      const result = await faceService.verifyAttendance(faceFile, idCardFile, verifiedSessionId);
 
       // 3. สำเร็จ — เก็บข้อมูลจากหลังบ้านเพื่อแสดงผล
       setResultMessage(result.message);
       setResultStudentId(result.student_id || '');
       setResultScore(result.score ?? null);
+      setResultStatus(result.calculated_status || '');
       setFinalResult('success');
       
     } catch (error: any) {
@@ -85,6 +93,11 @@ export default function StudentHome() {
           <h2 className="text-2xl font-bold text-green-700 mb-2">เช็คชื่อสำเร็จ!</h2>
           <p className="text-gray-600 mb-2">{resultMessage}</p>
           {resultStudentId && <p className="text-sm text-gray-500">รหัสนักศึกษา: {resultStudentId}</p>}
+          {resultStatus && (
+            <p className={`text-sm font-bold mt-1 ${resultStatus === 'present' ? 'text-green-600' : resultStatus === 'late' ? 'text-orange-600' : 'text-red-600'}`}>
+              สถานะ: {resultStatus === 'present' ? 'มาเรียน' : resultStatus === 'late' ? 'มาสาย' : 'ขาดเรียน'}
+            </p>
+          )}
           {resultScore !== null && <p className="text-sm text-gray-500">คะแนนความเหมือน: {resultScore}</p>}
         </div>
       ) : finalResult === 'failed' ? (

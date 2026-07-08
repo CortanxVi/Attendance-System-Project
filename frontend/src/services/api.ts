@@ -15,6 +15,7 @@ export interface VerifyResponse {
   success: boolean;
   student_id?: string;
   score?: number;
+  calculated_status?: 'present' | 'late' | 'absent'; // 🌟 [เพิ่มใหม่] สถานะจริงที่คำนวณจากเวลาที่ผ่านมา (มีก็ต่อเมื่อส่ง sessionId มาด้วย)
   message: string;
   detail?: string; // กรณีเกิด Error จาก FastAPI
 }
@@ -47,10 +48,15 @@ export const faceService = {
   },
 
   // ฟังก์ชันยิง API ยืนยันตัวตนเช็คชื่อ (ใบหน้าสด + รูปบัตรนักศึกษา)
-  verifyAttendance: async (faceImage: File, idCardImage: File): Promise<VerifyResponse> => {
+  // 🌟 [เพิ่มใหม่] sessionId เป็น parameter แบบไม่บังคับ — ถ้ามี (มาจากการสแกน QR ผ่านแล้ว)
+  // จะถูกส่งไปให้ backend ผูกกับคาบเรียนจริง และคำนวณสาย/ขาดให้ถูกต้อง
+  verifyAttendance: async (faceImage: File, idCardImage: File, sessionId?: string | null): Promise<VerifyResponse> => {
     const formData = new FormData();
     formData.append('face_image', faceImage);       // ภาพถ่ายใบหน้าสดจาก Liveness
     formData.append('id_card_image', idCardImage);   // ภาพบัตรนักศึกษา
+    if (sessionId) {
+      formData.append('session_id', sessionId);
+    }
 
     try {
       const response = await axios.post<VerifyResponse>(
