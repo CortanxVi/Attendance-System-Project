@@ -4,6 +4,7 @@ import axios from 'axios';
 import { supabase } from '../../lib/supabaseClient';
 import LiveAttendance from './LiveAttendance'; 
 import NFCManager from './NFCManager';
+import LiveCheckInFeed from './LiveCheckInFeed';
 import AddCourseModal from './AddCourseModal';
 import EditCourseModal from './EditCourseModal';
 import CourseSettingsModal from './CourseSettings';
@@ -171,6 +172,12 @@ export default function TeacherDashboard() {
             </button>
           </div>
         </div>
+
+        {/* 🌟 [เพิ่มใหม่] รายชื่อ+จำนวนผู้เช็คชื่อแล้วแบบเรียลไทม์ โชว์ตลอดเวลาที่มีคาบเรียนเปิดอยู่
+            (ไม่ต้องเปิดหน้าจอ QR หรือ NFC ค้างไว้ก็เห็นได้ รวมทั้ง 2 ช่องทางในที่เดียว) */}
+        {activeSessionId && (
+          <LiveCheckInFeed sessionId={activeSessionId} courseCode={currentSelectedCourseCode} />
+        )}
 
         {isLoading ? (
           <div className="text-center py-12 text-gray-500">กำลังโหลดข้อมูลรายวิชา...</div>
