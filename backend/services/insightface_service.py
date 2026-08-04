@@ -13,10 +13,10 @@ class FaceService:
     MIN_RELATIVE_SIZE_FOR_COUNTING = 0.3   # ต้องมีพื้นที่อย่างน้อย 30% ของหน้าที่ใหญ่ที่สุดในภาพ ถึงจะนับ
 
     def __init__(self):
-        print("👤 Loading InsightFace Model...")
+        print("Loading InsightFace Model...")
         self.app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
         self.app.prepare(ctx_id=0, det_size=(640, 640))
-        print("✅ InsightFace Model Loaded Successfully!")
+        print("InsightFace Model Loaded Successfully!")
 
     def _add_padding(self, img: np.ndarray, pad_percent: float = 0.25) -> np.ndarray:
         h, w = img.shape[:2]

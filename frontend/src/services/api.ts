@@ -47,13 +47,18 @@ export const faceService = {
     }
   },
 
-  // ฟังก์ชันยิง API ยืนยันตัวตนเช็คชื่อ (ใบหน้าสด + รูปบัตรนักศึกษา)
+  // ฟังก์ชันยิง API ยืนยันตัวตนเช็คชื่อ (ใบหน้าสด + รูปบัตรนักศึกษาหรือรหัสนักศึกษา)
   // 🌟 [เพิ่มใหม่] sessionId เป็น parameter แบบไม่บังคับ — ถ้ามี (มาจากการสแกน QR ผ่านแล้ว)
   // จะถูกส่งไปให้ backend ผูกกับคาบเรียนจริง และคำนวณสาย/ขาดให้ถูกต้อง
-  verifyAttendance: async (faceImage: File, idCardImage: File, sessionId?: string | null): Promise<VerifyResponse> => {
+  verifyAttendance: async (faceImage: File, idCardImage?: File | null, sessionId?: string | null, studentId?: string | null): Promise<VerifyResponse> => {
     const formData = new FormData();
     formData.append('face_image', faceImage);       // ภาพถ่ายใบหน้าสดจาก Liveness
-    formData.append('id_card_image', idCardImage);   // ภาพบัตรนักศึกษา
+    if (idCardImage) {
+      formData.append('id_card_image', idCardImage);   // ภาพบัตรนักศึกษา
+    }
+    if (studentId) {
+      formData.append('student_id', studentId);
+    }
     if (sessionId) {
       formData.append('session_id', sessionId);
     }

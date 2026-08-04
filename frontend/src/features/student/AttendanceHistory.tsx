@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { supabase } from '../../lib/supabaseClient';
 import { CalendarClock, BookOpen, AlertTriangle, CheckCircle2, Clock3, XCircle } from 'lucide-react';

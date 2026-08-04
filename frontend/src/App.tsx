@@ -1,5 +1,6 @@
+import React from 'react';
 // src/App.tsx
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './lib/supabaseClient';
 import Login from './features/auth/Login';
@@ -8,8 +9,10 @@ import Login from './features/auth/Login';
 import StudentLayout from './components/layout/StudentLayout';
 import StudentHome from './features/student/StudentHome';
 import AttendanceHistory from './features/student/AttendanceHistory';
+import StudentRegister from './features/student/StudentRegister';
 import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
+import TeacherExportReports from './features/teacher/ExportReports';
 
 import AdminLayout from './components/layout/AdminLayout';
 import SystemOverview from './features/admin/SystemOverview';
@@ -26,10 +29,17 @@ interface UserProfile {
   role: string;
 }
 
+export const RoleContext = React.createContext<{
+  originalRole: string;
+  currentRole: string;
+  setImpersonatedRole: (role: string | null) => void;
+} | null>(null);
+
 export default function App() {
   const [session, setSession] = useState<any>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null); // เก็บข้อมูลแบบ object
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [impersonatedRole, setImpersonatedRole] = useState<string | null>(null);
 
   useEffect(() => {
     // ดูเรื่องการเชืื่อมต่อเซสชัน ตรวจสอบ session ที่มีอยู่แล้ว และคอยฟังการเปลี่ยนแปลงสถานะ login ตลอดเวลา
@@ -85,23 +95,42 @@ export default function App() {
     return <Login />;
   }
 
+  const activeRole = impersonatedRole || profile.role;
+
   // Component สำหรับแยกทาง (Routing Gatekeeper)
   // ถ้านักศึกษาไปเข้า URL ของอาจารย์ จะถูกดีดกลับมาหน้าแรกของตัวเอง
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* เส้นทางสำหรับนักศึกษา */}
-        {profile.role === 'student' && (
-          <Route path="/student" element={<StudentLayout />}>
+    <RoleContext.Provider value={{
+      originalRole: profile.role,
+      currentRole: activeRole,
+      setImpersonatedRole
+    }}>
+      <BrowserRouter>
+        {impersonatedRole && (
+          <div className="bg-orange-600 text-white text-center py-2 px-4 sticky top-0 z-[100] flex justify-center items-center gap-4 shadow-md font-medium text-sm">
+            <span>⚠️ คุณกำลังจำลองสิทธิ์การเข้าใช้งานเป็นมุมมองของ: <b className="uppercase">{impersonatedRole}</b></span>
+            <button 
+              onClick={() => setImpersonatedRole(null)}
+              className="bg-white text-orange-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-orange-50 transition-colors shadow-sm"
+            >
+              คืนสิทธิ์เดิม
+            </button>
+          </div>
+        )}
+        <Routes>
+          {/* เส้นทางสำหรับนักศึกษา */}
+          {activeRole === 'student' && (
+            <Route path="/student" element={<StudentLayout />}>
             <Route index element={<StudentHome />} />
             <Route path="history" element={<AttendanceHistory />} />
+            <Route path="register" element={<StudentRegister />} />
             {/* หน้าโปรไฟล์ยังไม่ได้อยู่ใน scope ของงานตอนนี้ คง Placeholder ไว้เหมือนเดิม */}
             <Route path="profile" element={<div className="p-6 text-center mt-10">หน้าโปรไฟล์ (รอดำเนินการ)</div>} />
           </Route>
         )}
 
         {/* เส้นทางสำหรับแอดมิน */}
-        {profile.role === 'admin' && (
+        {activeRole === 'admin' && (
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<SystemOverview />} />
             <Route path="users" element={<UserManagement />} />
@@ -113,10 +142,10 @@ export default function App() {
         )}
 
         {/* เส้นทางสำหรับอาจารย์ */}
-        {profile.role === 'teacher' && (
+        {activeRole === 'teacher' && (
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
-            <Route path="reports" element={<div className="p-8">หน้ารายงาน (รอดำเนินการ)</div>} />
+            <Route path="reports" element={<TeacherExportReports />} />
             <Route path="students" element={<div className="p-8">หน้าจัดการนักศึกษา (รอดำเนินการ)</div>} />
             <Route path="settings" element={<div className="p-8">หน้าตั้งค่าระบบ (รอดำเนินการ)</div>} />
           </Route>
@@ -125,9 +154,10 @@ export default function App() {
         {/* หากเข้ามา URL ผิด หรือเข้าหน้าหลัก (/) ให้ Redirect ไปที่หน้าของตัวเอง */}
         <Route 
           path="*" 
-          element={<Navigate to={profile.role === 'admin' ? "/admin" : profile.role === 'student' ? "/student" : "/teacher"} replace />} 
+          element={<Navigate to={activeRole === 'admin' ? "/admin" : activeRole === 'student' ? "/student" : "/teacher"} replace />} 
         />
       </Routes>
     </BrowserRouter>
+    </RoleContext.Provider>
   );
 }

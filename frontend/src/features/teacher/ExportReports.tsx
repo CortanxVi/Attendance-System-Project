@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Download, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import pdfMake from 'pdfmake/build/pdfmake';
 import { supabase } from '../../lib/supabaseClient';
+import CourseAttendanceView from './CourseAttendanceView';
 
 const pdfMakeAny = pdfMake as any;
 pdfMakeAny.fonts = {
@@ -18,6 +19,10 @@ pdfMakeAny.fonts = {
 export default function ExportReports() {
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // States for viewing data in table
+  const [isViewOpen, setIsViewOpen] = useState(false);
+  const [selectedCourseForView, setSelectedCourseForView] = useState<any>(null);
 
   useEffect(() => {
     fetchTeacherCourses();
@@ -163,8 +168,13 @@ export default function ExportReports() {
                     <span className="inline-block px-3 py-1 bg-orange-50 text-orange-700 text-xs font-bold rounded-full mb-2">
                       {course.course_code}
                     </span>
-                    <h3 className="font-bold text-lg text-gray-900">{course.course_name}</h3>
-                    <p className="text-sm text-gray-500">เทอม {course.semester}/{course.year} | Sec {course.section}</p>
+                    <button 
+                      onClick={() => { setSelectedCourseForView(course); setIsViewOpen(true); }}
+                      className="block text-left hover:text-orange-600 transition-colors"
+                    >
+                      <h3 className="font-bold text-lg text-gray-900 underline decoration-gray-300 decoration-1 underline-offset-4 hover:decoration-orange-400">{course.course_name}</h3>
+                    </button>
+                    <p className="text-sm text-gray-500 mt-1">เทอม {course.semester}/{course.year} | Sec {course.section}</p>
                   </div>
                 </div>
                 
@@ -190,6 +200,15 @@ export default function ExportReports() {
           </div>
         )}
       </div>
+
+      {isViewOpen && selectedCourseForView && (
+        <CourseAttendanceView 
+          courseId={selectedCourseForView.id} 
+          courseCode={selectedCourseForView.course_code}
+          courseName={selectedCourseForView.course_name}
+          onClose={() => setIsViewOpen(false)} 
+        />
+      )}
     </div>
   );
 }

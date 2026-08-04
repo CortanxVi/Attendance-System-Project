@@ -17,13 +17,14 @@ from typing import Optional
 from enum import Enum
 from datetime import datetime, timezone
 
-from services.easyocr_service import ocr_service
 from services.insightface_service import face_service
 
 # นำเข้า Router สำหรับ Admin
 from routers.admin import admin_router
 # นำเข้า Router สำหรับนักศึกษา (หน้าประวัติ + สถิติ)
 from routers.student import student_router
+# นำเข้า Router สำหรับอาจารย์
+from routers.teacher import teacher_router
 
 class NFCRegisterRequest(BaseModel):
     student_id: str
@@ -102,6 +103,7 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(admin_router)
 app.include_router(student_router)
+app.include_router(teacher_router)
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
     """
@@ -256,7 +258,8 @@ async def register_face(
 @app.post("/api/v1/attendance/verify")
 async def verify_FaceReg_OCR_attendance(
     face_image: UploadFile = File(...),
-    id_card_image: UploadFile = File(...),
+    id_card_image: Optional[UploadFile] = File(None),
+    student_id: Optional[str] = Form(None),
     # 🌟 [เพิ่มใหม่] รับ session_id แบบ "ไม่บังคับ" — ถ้า Frontend ยังไม่ได้ส่งมา (เช่น ตอนนี้ flow
     # สแกน QR ก่อนหน้ายังมีบั๊กอยู่) endpoint นี้จะยังทำงานเหมือนเดิมทุกอย่าง ไม่มีอะไรพัง
     # แต่ถ้าส่งมา จะนำไปบันทึกคู่กับประวัติ เพื่อให้หน้า "ประวัติของนักศึกษา" และรายงานของอาจารย์/แอดมิน
@@ -266,27 +269,17 @@ async def verify_FaceReg_OCR_attendance(
     try:
         # ─── STEP 1: แปลงไฟล์เป็นรูปภาพ + ย่อขนาดถ้าใหญ่เกินไป (ช่วยให้ประมวลผลเร็วขึ้น) ───
         img_live = resize_image_if_needed(bytes_to_cv2_image(await face_image.read()))
-        img_card = resize_image_if_needed(bytes_to_cv2_image(await id_card_image.read()))
-
-        # ─── STEP 2 + 4 (รวมเป็นขั้นตอนเดียว): รัน OCR อ่านบัตร และสกัดใบหน้าจากภาพสด "พร้อมกัน" ───
-        # 🌟 [แก้ใหม่] เดิมสองงานนี้รันเรียงต่อกันทีละอย่าง (รอ OCR เสร็จก่อน ค่อยเริ่มสกัดใบหน้า) ทั้งที่
-        # จริงๆ ไม่ต้องพึ่งพากันเลย (คนละภาพ) เปลี่ยนมารันพร้อมกันด้วย asyncio.gather() แทน ทำให้เวลารวม
-        # เหลือประมาณเท่ากับงานที่ช้าที่สุดงานเดียว แทนที่จะเป็นผลรวมเวลาของทั้งสองงานบวกกัน
-        #
-        # นอกจากนี้ ทั้งสองฟังก์ชัน (ocr_service, face_service) เป็นโค้ดแบบ sync ที่ใช้เวลานาน (CPU-heavy)
-        # จึงต้องส่งไปรันใน thread pool ผ่าน run_in_threadpool ไม่เช่นนั้นจะไปบล็อก event loop หลักของ
-        # FastAPI ทำให้ endpoint อื่นๆ (เช่น หน้า Admin/อาจารย์ที่กำลังเรียกดูข้อมูลอยู่พร้อมกัน) ค้างตามไป
-        # ด้วยระหว่างที่ endpoint นี้กำลังประมวลผลอยู่ — เป็นจุดสำคัญที่ทำให้ระบบเช็คชื่อ "เป็นอิสระ" จาก
-        # ระบบ Web Dashboard อื่นๆ ตามที่ต้องการ
-        extracted_student_id, emb_live = await asyncio.gather(
-            run_in_threadpool(ocr_service.extract_student_id, img_card),
-            run_in_threadpool(face_service.extract_face_embedding, img_live),
-        )
+        
+        extracted_student_id = student_id
+        
+        # ─── STEP 2: สกัดใบหน้าจากภาพสด ───
+        # ถ้ารู้รหัสนักศึกษาอยู่แล้ว (ส่งมาจาก Frontend) ก็ทำแค่สกัดใบหน้า ไม่ต้องใช้ OCR
+        emb_live = await run_in_threadpool(face_service.extract_face_embedding, img_live)
 
         if not extracted_student_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="ไม่สามารถอ่านรหัสนักศึกษาจากบัตรได้ กรุณาถ่ายภาพบัตรให้ชัดเจนและไม่มีแสงสะท้อน"
+                detail="ไม่พบรหัสนักศึกษา กรุณาส่งรหัสนักศึกษา"
             )
         if emb_live is None:
             raise HTTPException(
@@ -298,7 +291,7 @@ async def verify_FaceReg_OCR_attendance(
         # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool ด้วย เพราะ supabase-python เป็น sync client
         # (เรียก Supabase ตรงๆ ก็ยังบล็อก event loop ได้เหมือนกัน แม้จะเป็นแค่ network call ก็ตาม)
         db_response = await run_in_threadpool(
-            lambda: supabase.table('profiles').select('id, face_embedding').eq('student_id', extracted_student_id).execute()
+            lambda: supabase.table('profiles').select('id, face_embedding, full_name').eq('student_id', extracted_student_id).execute()
         )
         
         if len(db_response.data) == 0:
@@ -308,7 +301,10 @@ async def verify_FaceReg_OCR_attendance(
             )
             
         # 🌟 เก็บค่า UUID เอาไว้ใช้ตอนบันทึกลง attendance_records 🌟
-        profile_uuid = db_response.data[0].get('id') 
+        profile_uuid = db_response.data[0].get('id')
+        full_name = db_response.data[0].get('full_name') or extracted_student_id 
+        full_name = db_response.data[0].get('full_name') or extracted_student_id
+
         
         registered_embedding_data = db_response.data[0].get('face_embedding')
         if not registered_embedding_data:
@@ -382,9 +378,10 @@ async def verify_FaceReg_OCR_attendance(
         return {
             "success": True,
             "student_id": extracted_student_id, # ตรงนี้ส่งรหัส 13 หลักกลับไปให้ Frontend โชว์ได้ปกติ
+            "student_name": full_name,
             "score": round(similarity_score, 4),
             "calculated_status": calculated_status,  # 🌟 [เพิ่มใหม่] present / late / absent ให้ Frontend โชว์ได้ตรงจริง
-            "message": f"เช็คชื่อนักศึกษา รหัส {extracted_student_id} สำเร็จเรียบร้อยแล้ว!"
+            "message": f"เช็คชื่อคุณ {full_name} สำเร็จเรียบร้อยแล้ว!"
         }
 
     except Exception as e:
@@ -657,8 +654,17 @@ async def create_course(payload: CourseCreateRequest):
         return {"status": "success",
                 "course": response.data[0]}
     except Exception as e:
-        # 🌟 ปรับตรง detail ให้พ่น Error ออกมาฟ้องที่หน้าเว็บ
+        # 📝 จับและส่ง detail ของ Error ออกไปฟ้องที่หน้าจอ
         raise HTTPException(status_code=500, detail=f"Supabase POST Error: {str(e)}")
+
+@app.get("/api/v1/courses")
+async def get_all_courses():
+    try:
+        response = supabase.table('courses').select('*').execute()
+        return {"status": "success", "courses": response.data}
+    except Exception as e:
+        print(f"DEBUG ERROR: {str(e)}") 
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 2. API สำหรับดึงรายวิชาทั้งหมดของอาจารย์ท่านนั้นมาแสดงผลบน Dashboard
 @app.get("/api/v1/courses/{teacher_id}")

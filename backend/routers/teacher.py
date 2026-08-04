@@ -3,6 +3,7 @@ import csv
 import io
 import uuid
 from fastapi import APIRouter, HTTPException, File, UploadFile
+from pydantic import BaseModel
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
@@ -26,8 +27,66 @@ async def get_teacher_export_attendance(course_id: str):
         return {
             "status": "success",
             "course": data["course"],
-            "records": data["records"]
+            "records": data["records"],
+            "sessions": data.get("sessions", [])
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ManualAttendanceUpdate(BaseModel):
+    status: str # present, late, absent
+
+@teacher_router.put("/attendance/{record_id}")
+async def update_attendance_manual(record_id: str, payload: ManualAttendanceUpdate):
+    """แก้ไขสถานะการเข้าเรียนแบบ Manual (กรณีระบบผิดพลาด)"""
+    try:
+        if payload.status not in ["present", "late", "absent", "leave"]:
+            raise HTTPException(status_code=400, detail="สถานะไม่ถูกต้อง")
+            
+        update_data = {
+            "status": payload.status,
+            "method": "manual"
+        }
+        
+        response = supabase.table("attendance_records").update(update_data).eq("id", record_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบข้อมูลการเช็คชื่อ")
+            
+        return {"status": "success", "message": "อัปเดตสถานะสำเร็จ", "data": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ManualAttendanceCreate(BaseModel):
+    student_id: str
+    session_id: str
+    status: str
+
+@teacher_router.post("/attendance")
+async def create_attendance_manual(payload: ManualAttendanceCreate):
+    """เพิ่มข้อมูลการเข้าเรียนแบบ Manual (กรณีไม่มีข้อมูลเลย)"""
+    try:
+        if payload.status not in ["present", "late", "absent", "leave"]:
+            raise HTTPException(status_code=400, detail="สถานะไม่ถูกต้อง")
+            
+        # ตรวจสอบว่ามี user หรือไม่
+        profile_res = supabase.table("profiles").select("id").eq("student_id", payload.student_id).execute()
+        if not profile_res.data:
+            raise HTTPException(status_code=404, detail="ไม่พบนักศึกษาในระบบ")
+            
+        insert_data = {
+            "id": str(uuid.uuid4()),
+            "student_id": profile_res.data[0]["id"],
+            "session_id": payload.session_id,
+            "status": payload.status,
+            "method": "manual"
+        }
+        
+        response = supabase.table("attendance_records").insert(insert_data).execute()
+        return {"status": "success", "message": "เพิ่มข้อมูลสำเร็จ", "data": response.data[0]}
     except HTTPException:
         raise
     except Exception as e:

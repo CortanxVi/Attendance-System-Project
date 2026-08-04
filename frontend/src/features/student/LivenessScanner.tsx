@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import Webcam from "react-webcam";
 import * as mpFaceMesh from "@mediapipe/face_mesh";
 import * as mpCamera from "@mediapipe/camera_utils";

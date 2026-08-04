@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { BookOpen, Settings, Edit, Trash2 } from 'lucide-react';
 import EditCourseModal from '../teacher/EditCourseModal';

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, CreditCard, CheckCircle2, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 

@@ -1,0 +1,17 @@
+{
+  "name": "ocr-service",
+  "version": "1.0.0",
+  "description": "OCR Microservice",
+  "main": "ocr-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node ocr-server.js"
+  },
+  "dependencies": {
+    "@arcships/light-ocr": "^0.4.0",
+    "@arcships/light-ocr-win32-x64": "^0.4.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}

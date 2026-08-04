@@ -1,9 +1,11 @@
 // Initial Page and for all menus
-import React, { useEffect, useState } from 'react';
-import { Users, BookOpen, ShieldCheck } from 'lucide-react';
+import { useEffect, useState, useContext } from 'react';
+import { Users, BookOpen, ShieldCheck, UserCircle2, GraduationCap } from 'lucide-react';
 import axios from 'axios';
+import { RoleContext } from '../../App';
 
 export default function SystemOverview() {
+  const roleContext = useContext(RoleContext);
   const [stats, setStats] = useState({ users: 0, courses: 0, adminCount: 0 });
 
   // display on overview
@@ -37,6 +39,22 @@ export default function SystemOverview() {
         <div>
           <h2 className="text-2xl font-bold text-gray-800">ภาพรวมระบบ (System Overview)</h2>
           <p className="text-gray-500 mt-1">ยินดีต้อนรับสู่ศูนย์ควบคุมผู้ดูแลระบบ</p>
+        </div>
+        
+        {/* แผงปุ่มจำลองสิทธิ์สำหรับ Admin */}
+        <div className="flex gap-2">
+          <button 
+            onClick={() => roleContext?.setImpersonatedRole('teacher')}
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <UserCircle2 size={16} /> จำลองสิทธิ์อาจารย์
+          </button>
+          <button 
+            onClick={() => roleContext?.setImpersonatedRole('student')}
+            className="flex items-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <GraduationCap size={16} /> จำลองสิทธิ์นักศึกษา
+          </button>
         </div>
       </div>
 

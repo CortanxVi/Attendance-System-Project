@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import axios from 'axios';
 import { Camera, CreditCard, UserPlus, Image as ImageIcon, CheckCircle, AlertCircle } from 'lucide-react';
 

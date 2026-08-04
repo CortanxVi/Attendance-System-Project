@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { Users, CheckCircle2, Clock3, XCircle, ScanFace, CreditCard, Edit } from 'lucide-react';
 
@@ -67,27 +67,10 @@ export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFe
   useEffect(() => {
     fetchCheckInList();
 
-    // ฟังการเปลี่ยนแปลงแบบ Real-time: มีใครเช็คชื่อใหม่ (ไม่ว่าจะสแกนหน้า หรือแตะบัตร NFC)
-    // ก็ดึงรายชื่อทั้งหมดมาใหม่ทันที (เขียนง่าย เข้าใจง่าย และรองรับขนาดห้องเรียนได้สบายๆ)
-    const channel = supabase
-      .channel(`live-checkin-feed-${sessionId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'attendance_records',
-          filter: `session_id=eq.${sessionId}`,
-        },
-        () => {
-          fetchCheckInList();
-        }
-      )
-      .subscribe();
+    // Polling as fallback since Supabase Realtime might not be enabled for attendance_records
+    const interval = setInterval(fetchCheckInList, 3000);
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, [sessionId]);
 
   return (
