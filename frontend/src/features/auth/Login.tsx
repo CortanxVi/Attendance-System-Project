@@ -18,7 +18,7 @@ export default function Login() {
           queryParams: {
             prompt: 'select_account',
           },
-          // หลังล็อกอินสำเร็จให้เด้งกลับมาที่หน้าเว็บหลักของเรา
+          // หลังล็อกอินสำเร็จให้เด้งกลับมาที่หน้าเว็บหลัก
           redirectTo: window.location.origin,
         },
       });
