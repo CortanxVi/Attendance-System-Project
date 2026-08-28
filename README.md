@@ -300,6 +300,22 @@ npx supabase@latest db push
 จากนั้นใช้ Project Reference ที่หน้า Supabase Dashboard → Project Settings → General.
 ห้ามนำ service-role key ไปใส่ frontend หรือ OCR service
 
+### แก้ปัญหา `/api/v1/auth/me` ตอบ 503 แล้วตามด้วย 401
+
+ตรวจสอบ migration ก่อน หาก Backend เลือกคอลัมน์โปรไฟล์รุ่นใหม่แต่ฐานข้อมูลยังไม่ได้
+ติดตั้ง migration PostgREST จะตอบรหัสเช่น `42703` หรือ `PGRST205` และ Backend จะคืน
+`503 Service Unavailable` ส่วน `401` หมายถึงคำขอนั้นไม่มี session/token ที่ใช้ได้แล้ว
+
+```bash
+npx supabase@latest migration list --linked
+npx supabase@latest db push --dry-run --linked
+npx supabase@latest db push --linked --yes
+```
+
+หลังแก้แล้ว `db push --dry-run` ต้องรายงาน `upToDate: true` จากนั้นเปิดบริการใหม่และ
+เข้าสู่ระบบอีกครั้ง Frontend รุ่นปัจจุบันจะไม่ลบ session เมื่อเกิด `503` ชั่วคราว แต่จะแสดง
+สาเหตุพร้อมปุ่มลองใหม่
+
 ### ตรวจว่าบริการเริ่มครบ
 
 เปิดอีก Terminal แล้วรัน:

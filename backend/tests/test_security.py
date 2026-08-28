@@ -33,6 +33,13 @@ class _ProfileQuery:
         return SimpleNamespace(data=self.rows)
 
 
+class _MissingMigrationQuery(_ProfileQuery):
+    def execute(self):
+        error = RuntimeError("missing column")
+        error.code = "42703"
+        raise error
+
+
 class SecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_bearer_token_is_rejected(self):
         with self.assertRaises(HTTPException) as caught:
@@ -86,6 +93,21 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
                 await get_current_user(credentials)
 
         self.assertEqual(caught.exception.status_code, 403)
+
+    async def test_missing_profile_migration_returns_actionable_503(self):
+        fake_client = Mock()
+        fake_client.auth.get_user.return_value = SimpleNamespace(
+            user=SimpleNamespace(id="user-2", email="teacher@kmutnb.ac.th")
+        )
+        fake_client.table.side_effect = lambda _name: _MissingMigrationQuery([])
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-token")
+
+        with patch("core.security.supabase_db", fake_client):
+            with self.assertRaises(HTTPException) as caught:
+                await get_current_user(credentials)
+
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertIn("migration", caught.exception.detail)
 
     async def test_non_kmutnb_email_is_rejected_even_with_profile(self):
         fake_client = Mock()

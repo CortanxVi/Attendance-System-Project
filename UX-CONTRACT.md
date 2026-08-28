@@ -13,8 +13,8 @@
 
 | Domain / scope | Authoritative source | Source type | Reviewed date |
 |---|---|---|---|
-| Permission model | `backend/core/security.py`, `backend/core/authorization.py`, Supabase migration `20260827135802` | API/schema policy | 2026-08-27 |
-| Dynamic QR lifecycle | `backend/main.py`, Supabase migration `20260824090000` | API/schema | 2026-08-24 |
+| Permission model | `backend/core/security.py`, `backend/core/authorization.py`, Supabase migration `20260827140100` | API/schema policy | 2026-08-27 |
+| Dynamic QR lifecycle | `backend/main.py`, Supabase migration `20260824163017` | API/schema | 2026-08-24 |
 | Attendance data lifecycle | `attendance_records` constraints/migration | Database | 2026-08-24 |
 | OCR policy | `ocr-service/ocr-server.js`, `backend/services/light_ocr_service.py` | Service contract | 2026-08-24 |
 | Temporary admin | `backend/routers/temporary_admin.py`, migration `20260828111609` | API/schema policy | 2026-08-28 |

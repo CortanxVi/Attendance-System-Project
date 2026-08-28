@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import logging
 import re
 from typing import Annotated
 
@@ -9,6 +10,9 @@ from starlette.concurrency import run_in_threadpool
 
 from core.config import supabase_db
 from services.temporary_admin_service import extract_verified_session_id, load_valid_grant
+
+
+logger = logging.getLogger(__name__)
 
 
 class AuthenticatedUser(BaseModel):
@@ -79,6 +83,16 @@ async def get_current_user(
             .execute()
         )
     except Exception as exc:
+        error_code = getattr(exc, "code", None)
+        logger.error(
+            "Supabase profile lookup failed for authenticated user; code=%s",
+            error_code or type(exc).__name__,
+        )
+        if error_code in {"42703", "PGRST205"}:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ฐานข้อมูล Supabase ยังไม่ได้ติดตั้ง migration รุ่นล่าสุด กรุณาอัปเดตฐานข้อมูลแล้วลองใหม่",
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ไม่สามารถตรวจสอบสิทธิ์ผู้ใช้งานจากฐานข้อมูลได้",
