@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Shield, Users, BookOpen, FileText, ClipboardList, LogOut, LayoutDashboard, Menu, X, UserPlus } from 'lucide-react';
+import axios from 'axios';
+import { Shield, Users, BookOpen, FileText, ClipboardList, LogOut, LayoutDashboard, Menu, X, UserPlus, KeyRound } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
+import { useTemporaryAdmin } from '../../contexts/TemporaryAdminContext';
+import { useNotification } from '../notifications/NotificationProvider';
 
-export default function AdminLayout() {
+export default function AdminLayout({ temporary = false }: { temporary?: boolean }) {
   const navigate = useNavigate(); // for Redirect
   const location = useLocation(); // passing state สำหรับรับค่า state มาจาก component อื่น
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const temporaryAdmin = useTemporaryAdmin();
+  const { notify } = useNotification();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -20,7 +25,15 @@ export default function AdminLayout() {
     { name: 'จัดการการลงทะเบียน', path: '/admin/registration', icon: UserPlus },
     { name: 'ตรวจสอบ Log (Audit)', path: '/admin/logs', icon: ClipboardList },
     { name: 'ออกรายงาน (Export)', path: '/admin/reports', icon: FileText },
+    ...(!temporary ? [{ name: 'อนุมัติสิทธิ์ชั่วคราว', path: '/admin/temporary-access', icon: KeyRound }] : []),
   ];
+
+  const leaveTemporaryAdmin = async () => {
+    try { await axios.post('/api/v1/temporary-admin/deactivate'); } catch { /* clear locally even if already expired */ }
+    temporaryAdmin.clear();
+    notify('กลับสู่สิทธิ์อาจารย์แล้ว', 'success');
+    navigate('/teacher/settings');
+  };
 
   /* ตรวจสอบว่า path ที่อยู่ปัจจุบันคือหน้าเพจอะไร เริ่มต้น: /admin
      อื่นๆ เช่น หน้าเพจจัดการผู้ใช้งาน จัดการรายวิชา ฯลฯ */
@@ -88,6 +101,7 @@ export default function AdminLayout() {
       </aside>
 
       <main className="flex-1 overflow-y-auto">
+        {temporary && temporaryAdmin.expiresAt && <div role="status" className="flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-6 py-3 text-sm text-amber-950"><span><strong>กำลังใช้สิทธิ์ผู้ดูแลชั่วคราว</strong> · หมดอายุ {new Date(temporaryAdmin.expiresAt).toLocaleTimeString('th-TH')}</span><button type="button" onClick={leaveTemporaryAdmin} className="rounded-lg border border-amber-700 px-3 py-1.5 font-semibold hover:bg-amber-200">กลับสิทธิ์อาจารย์</button></div>}
         <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 shadow-sm">
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-slate-800 focus:outline-none">

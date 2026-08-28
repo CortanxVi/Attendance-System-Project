@@ -1,8 +1,12 @@
 import { useRef, useState, useEffect } from "react";
 import Webcam from "react-webcam";
-import * as mpFaceMesh from "@mediapipe/face_mesh";
-import * as mpCamera from "@mediapipe/camera_utils";
 import { ShieldCheck, Loader2, Settings } from "lucide-react"; // ✅ จุดที่ 1
+import { loadMediapipe, type CameraInstance, type FaceMeshInstance, type FaceMeshResults } from '../../services/mediapipe';
+
+interface LandmarkPoint {
+  x: number;
+  y: number;
+}
 
 export default function LivenessScanner({
   onCaptureSuccess,
@@ -20,11 +24,11 @@ export default function LivenessScanner({
   const [selectedCameraId, setSelectedCameraId] = useState<string>("");
   const [error, setError] = useState("");
 
-  const calculateDistance = (p1: any, p2: any) => {
+  const calculateDistance = (p1: LandmarkPoint, p2: LandmarkPoint) => {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
   };
 
-  const getEAR = (landmarks: any[], eyeIndices: number[]) => {
+  const getEAR = (landmarks: LandmarkPoint[], eyeIndices: number[]) => {
     const p1 = landmarks[eyeIndices[0]];
     const p2 = landmarks[eyeIndices[1]];
     const p3 = landmarks[eyeIndices[2]];
@@ -41,82 +45,97 @@ export default function LivenessScanner({
 
   useEffect(() => {
     getCameras();
-    let camera: any = null;
+    let camera: CameraInstance | null = null;
+    let faceMesh: FaceMeshInstance | null = null;
+    let cancelled = false;
     let blinkDetectCount = 0;
     let warmUpFrames = 0;
 
-    const FaceMeshClass = (mpFaceMesh as any).FaceMesh || (mpFaceMesh as any).default?.FaceMesh || (window as any).FaceMesh;
-    const CameraClass = (mpCamera as any).Camera || (mpCamera as any).default?.Camera || (window as any).Camera;
-
-    const faceMesh = new FaceMeshClass({
-      locateFile: (file: any) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
-    });
-
-    faceMesh.setOptions({
-      maxNumFaces: 1,
-      refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
-
-    faceMesh.onResults((results: any) => {
-      setIsLoading(false);
-
-      if (hasCapturedRef.current) return;
-
-      setInstruction('กรุณามองตรงและ "กระพริบตา" 1 ครั้ง');
-
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        if (warmUpFrames < 10) {
-          warmUpFrames++;
-          return;
-        }
-
-        const landmarks = results.multiFaceLandmarks[0];
-        const RIGHT_EYE = [33, 160, 158, 133, 153, 144];
-        const LEFT_EYE = [362, 385, 387, 263, 373, 380];
-
-        const rightEAR = getEAR(landmarks, RIGHT_EYE);
-        const leftEAR = getEAR(landmarks, LEFT_EYE);
-        const avgEAR = (rightEAR + leftEAR) / 2.0;
-        const EAR_THRESHOLD = 0.22;
-
-        if (avgEAR < EAR_THRESHOLD) {
-          blinkDetectCount++;
-        } else {
-          if (blinkDetectCount > 1 && !hasCapturedRef.current) {
-            hasCapturedRef.current = true;
-            setIsBlinked(true);
-            setInstruction("กระพริบตาถูกต้อง! กรุณาลืมตาค้างไว้...");
-
-            setTimeout(() => {
-              const imageSrc = webcamRef.current?.getScreenshot();
-              if (imageSrc) {
-                onCaptureSuccess(imageSrc);
-              }
-            }, 600);
-          }
-          blinkDetectCount = 0;
-        }
+    const waitForVideo = async () => {
+      for (let frame = 0; frame < 180; frame += 1) {
+        if (cancelled) return null;
+        const video = webcamRef.current?.video;
+        if (video && video.readyState >= HTMLMediaElement.HAVE_METADATA) return video;
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
-    });
+      return null;
+    };
 
-    if (webcamRef.current?.video) {
-      camera = new CameraClass(webcamRef.current.video, {
-        onFrame: async () => {
-          if (webcamRef.current?.video) {
-            await faceMesh.send({ image: webcamRef.current.video });
+    const initialize = async () => {
+      try {
+        const { FaceMesh, Camera } = await loadMediapipe();
+        const video = await waitForVideo();
+        if (cancelled || !video) throw new Error('กล้องไม่พร้อมใช้งาน');
+
+        faceMesh = new FaceMesh({
+          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+        });
+
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+
+        faceMesh.onResults((results: FaceMeshResults) => {
+          setIsLoading(false);
+
+          if (hasCapturedRef.current) return;
+          setInstruction('กรุณามองตรงและ "กระพริบตา" 1 ครั้ง');
+
+          if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            if (warmUpFrames < 10) {
+              warmUpFrames++;
+              return;
+            }
+
+            const landmarks = results.multiFaceLandmarks[0];
+            const RIGHT_EYE = [33, 160, 158, 133, 153, 144];
+            const LEFT_EYE = [362, 385, 387, 263, 373, 380];
+            const avgEAR = (getEAR(landmarks, RIGHT_EYE) + getEAR(landmarks, LEFT_EYE)) / 2.0;
+
+            if (avgEAR < 0.22) {
+              blinkDetectCount++;
+            } else {
+              if (blinkDetectCount > 1 && !hasCapturedRef.current) {
+                hasCapturedRef.current = true;
+                setIsBlinked(true);
+                setInstruction("กระพริบตาถูกต้อง! กรุณาลืมตาค้างไว้...");
+
+                setTimeout(() => {
+                  const imageSrc = webcamRef.current?.getScreenshot();
+                  if (imageSrc) onCaptureSuccess(imageSrc);
+                }, 600);
+              }
+              blinkDetectCount = 0;
+            }
           }
-        },
-        width: 640,
-        height: 480,
-      });
-      camera.start();
-    }
+        });
+
+        camera = new Camera(video, {
+          onFrame: async () => {
+            const currentVideo = webcamRef.current?.video;
+            if (currentVideo && faceMesh) await faceMesh.send({ image: currentVideo });
+          },
+          width: 640,
+          height: 480,
+        });
+        await camera.start();
+      } catch (initializationError) {
+        if (cancelled) return;
+        console.error('Unable to initialize MediaPipe', initializationError);
+        setError(initializationError instanceof Error ? initializationError.message : 'ไม่สามารถเริ่มระบบตรวจจับใบหน้าได้');
+        setIsLoading(false);
+      }
+    };
+
+    initialize();
 
     return () => {
-      if (camera) camera.stop();
-      faceMesh.close();
+      cancelled = true;
+      camera?.stop();
+      faceMesh?.close();
     };
   }, []);
 
@@ -149,6 +168,12 @@ export default function LivenessScanner({
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/80 z-20 text-white">
           <Loader2 className="animate-spin mb-4" size={48} />
           <p className="font-semibold">กำลังเตรียมระบบตรวจสอบใบหน้า...</p>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="absolute left-4 right-4 top-4 z-30 rounded-lg bg-red-600 px-4 py-3 text-center text-sm font-semibold text-white">
+          {error}
         </div>
       )}
 

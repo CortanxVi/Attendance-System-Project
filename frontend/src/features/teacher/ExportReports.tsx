@@ -5,6 +5,8 @@ import * as XLSX from 'xlsx';
 import pdfMake from 'pdfmake/build/pdfmake';
 import { supabase } from '../../lib/supabaseClient';
 import CourseAttendanceView from './CourseAttendanceView';
+import { useNotification } from '../../components/notifications/NotificationProvider';
+import { sanitizeSpreadsheetRows } from '../../services/spreadsheet';
 
 const pdfMakeAny = pdfMake as any;
 pdfMakeAny.fonts = {
@@ -17,6 +19,7 @@ pdfMakeAny.fonts = {
 };
 
 export default function ExportReports() {
+  const { notify } = useNotification();
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -47,10 +50,9 @@ export default function ExportReports() {
     try {
       const res = await axios.get(`/api/v1/teacher/export/attendance/${courseId}`);
       const data = res.data.records || [];
-      const course = res.data.course;
 
       if (data.length === 0) {
-        alert("ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้");
+        notify('ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้', 'info');
         return;
       }
 
@@ -62,17 +64,18 @@ export default function ExportReports() {
         "วิธีการ": row.method === 'nfc' ? 'NFC' : row.method === 'face_ocr' ? 'Face Scan' : 'Manual',
         "เวลา": new Date(row.check_in_time).toLocaleString('th-TH')
       }));
+      const spreadsheetData = sanitizeSpreadsheetRows(formattedData);
 
       const filename = `Attendance_${courseCode}_${new Date().getTime()}`;
 
       if (format === 'excel') {
-        const worksheet = XLSX.utils.json_to_sheet(formattedData);
+        const worksheet = XLSX.utils.json_to_sheet(spreadsheetData);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
         XLSX.writeFile(workbook, `${filename}.xlsx`);
       } 
       else if (format === 'csv') {
-        const worksheet = XLSX.utils.json_to_sheet(formattedData);
+        const worksheet = XLSX.utils.json_to_sheet(spreadsheetData);
         const csv = XLSX.utils.sheet_to_csv(worksheet);
         const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
@@ -143,7 +146,7 @@ export default function ExportReports() {
       }
 
     } catch (err: any) {
-      alert(`Export ล้มเหลว: ${err.response?.data?.detail || err.message}`);
+      notify(`Export ล้มเหลว: ${err.response?.data?.detail || err.message}`, 'error');
     }
   };
 

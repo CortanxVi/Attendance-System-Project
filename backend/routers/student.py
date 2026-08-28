@@ -1,38 +1,63 @@
-import os
-from fastapi import APIRouter, HTTPException
-from supabase import create_client, Client
-from dotenv import load_dotenv
+from typing import Annotated
 
-# 📌 หมายเหตุ: ตอนนี้ยังสร้าง Supabase client แยกไว้ในไฟล์นี้เหมือนกับ routers/admin.py และ main.py
-# (ในโปรเจกต์นี้ยังไม่ได้รวมจุดเชื่อมต่อ Supabase ไว้ที่เดียว — เป็นเรื่องที่ควรทำความสะอาดในอนาคต
-#  แต่ยังไม่แก้ตรงนี้ตอนนี้ เพื่อไม่ให้ปนกับงาน Step นี้)
-load_dotenv()
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(supabase_url, supabase_key)
+from fastapi import APIRouter, Depends, HTTPException
 
-student_router = APIRouter(prefix="/api/v1/students", tags=["Student"])
+from core.config import supabase_db as supabase
+from core.security import AuthenticatedUser, require_roles
+
+student_router = APIRouter(
+    prefix="/api/v1/students",
+    tags=["Student"],
+    dependencies=[Depends(require_roles("student", "admin"))],
+)
+
+
+@student_router.get("/me/profile")
+async def get_my_student_profile(
+    current_user: Annotated[AuthenticatedUser, Depends(require_roles("student"))],
+):
+    """Return only the signed-in student's own profile and registration status."""
+    try:
+        profile_response = supabase.table("profiles").select(
+            "id, email, student_id, full_name, academic_year, class_level, face_registered, nfc_uid, created_at"
+        ).eq("id", current_user.id).eq("role", "student").limit(1).execute()
+        if not profile_response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบโปรไฟล์นักศึกษา")
+        enrollment_response = supabase.table("enrollments").select(
+            "course_id", count="exact"
+        ).eq("student_id", current_user.id).execute()
+        profile = profile_response.data[0]
+        profile["nfc_registered"] = bool(profile.pop("nfc_uid", None))
+        profile["enrolled_course_count"] = enrollment_response.count or 0
+        return {"status": "success", "profile": profile}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="ไม่สามารถโหลดโปรไฟล์นักศึกษาได้") from exc
 
 
 # --- Endpoint: ดูประวัติการเข้าเรียนของตนเอง + สถิติสรุปรายวิชา ---
 
 @student_router.get("/{student_uuid}/attendance-history")
-async def get_student_attendance_history(student_uuid: str):
+async def get_student_attendance_history(
+    student_uuid: str,
+    current_user: Annotated[
+        AuthenticatedUser,
+        Depends(require_roles("student", "admin")),
+    ],
+):
     """
     ดึงประวัติการเช็คชื่อทั้งหมดของนักศึกษา 1 คน พร้อมสรุปสถิติเป็นรายวิชา
     (ตรงตาม requirement 4.1.1: "สามารถดูประวัติการเข้าเรียนของตนเองย้อนหลังพร้อมสถิติสรุปได้")
 
     student_uuid = profiles.id (ตัวเดียวกับ Supabase Auth user id ที่ได้ตอน login)
 
-    ⚠️ ข้อจำกัดที่ควรรู้:
-    1. ระบบนี้ยังไม่มีการใช้งานตาราง 'enrollments' (รายชื่อนักศึกษาที่ลงเรียนแต่ละวิชา)
-       ดังนั้นวิชาที่จะเห็นในสรุปนี้ คือ "วิชาที่มีประวัติเช็คชื่ออย่างน้อย 1 ครั้ง" เท่านั้น
-       ถ้านักศึกษาขาดเรียนวิชาใดวิชาหนึ่งทุกครั้งเลย (ไม่เคยเช็คชื่อผ่านเลยสักครั้ง) วิชานั้นจะไม่ปรากฏในสรุปนี้
-    2. ประวัติที่ "ไม่ได้ผูก session" ไว้ (เช่น บั๊กเดิมของ endpoint /api/v1/attendance/verify ที่ไม่ได้บันทึก
-       session_id) จะยังโชว์ในรายการ history ได้ (โชว์ชื่อวิชาว่า "ไม่ทราบชื่อวิชา") แต่จะไม่ถูกนำไปคำนวณ
-       สถิติรายวิชา เพราะไม่รู้ว่าเป็นวิชาไหน
+    รายวิชาที่แสดงมาจาก enrollments และประวัติจริง จึงยังเห็นวิชาที่ลงทะเบียนไว้
+    แม้จะยังไม่มีรายการเช็คชื่อสำเร็จ
     """
     try:
+        if current_user.role != "admin" and student_uuid != current_user.id:
+            raise HTTPException(status_code=403, detail="ดูประวัติการเข้าเรียนได้เฉพาะบัญชีของตนเอง")
         # 1. ตรวจสอบว่ามีนักศึกษาคนนี้อยู่จริงในระบบไหม
         student_res = supabase.table('profiles') \
             .select('id, student_id, full_name') \
@@ -43,6 +68,28 @@ async def get_student_attendance_history(student_uuid: str):
             raise HTTPException(status_code=404, detail="ไม่พบข้อมูลนักศึกษาในระบบ")
 
         student_info = student_res.data[0]
+
+        enrollments_res = supabase.table('enrollments') \
+            .select('courses(id, course_code, course_name, total_sessions, max_absence_percent)') \
+            .eq('student_id', student_uuid) \
+            .execute()
+
+        course_stats: dict = {}
+        for enrollment in enrollments_res.data or []:
+            course = enrollment.get('courses') or {}
+            course_id = course.get('id')
+            if not course_id:
+                continue
+            course_stats[course_id] = {
+                "course_id": course_id,
+                "course_code": course.get('course_code', '-'),
+                "course_name": course.get('course_name', 'ไม่ทราบชื่อวิชา'),
+                "total_sessions": course.get('total_sessions') or 0,
+                "max_absence_percent": course.get('max_absence_percent') or 0,
+                "present": 0,
+                "late": 0,
+                "absent": 0,
+            }
 
         # 2. ดึงประวัติเช็คชื่อทั้งหมดของนักศึกษาคนนี้ พร้อมข้อมูลวิชาที่ผูกไว้ผ่าน session
         #    (ไม่ใส่ !inner ตรง attendance_sessions เพราะต้องการให้ยังเห็นแถวที่ไม่มี session_id ด้วย)
@@ -59,8 +106,6 @@ async def get_student_attendance_history(student_uuid: str):
 
         # 3. ไล่ทีละแถว: เก็บลง history list (ดิบ) และรวมยอดสถิติต่อวิชา (course_stats)
         history_list = []
-        course_stats: dict = {}
-
         for rec in records:
             session_info = rec.get('attendance_sessions') or {}
             course = session_info.get('courses') or {}
@@ -122,4 +167,4 @@ async def get_student_attendance_history(student_uuid: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e

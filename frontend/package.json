@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:card-image": "node --experimental-strip-types scripts/test-card-image.mjs",
+    "test:security": "node --experimental-strip-types scripts/test-spreadsheet-security.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

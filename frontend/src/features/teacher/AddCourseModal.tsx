@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import axios from 'axios';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 interface AddCourseModalProps {
   onClose: () => void;      // ฟังก์ชันสำหรับปิดหน้าต่างป็อปอัป
   onSuccess: () => void;    // ฟังก์ชันสั่งให้หน้าหลักรีโหลดข้อมูลหลังบันทึกสำเร็จ
-  teacherId: string;        // ส่ง UUID อาจารย์เข้าไปผูกกับวิชา
 }
 
-export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCourseModalProps) {
+export default function AddCourseModal({ onClose, onSuccess }: AddCourseModalProps) {
+  const { notify } = useNotification();
   const [courseCode, setCourseCode] = useState<string>('');
   const [courseName, setCourseName] = useState<string>('');
   const [section, setSection] = useState<number>(1);
@@ -26,7 +27,6 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
       const response = await axios.post('/api/v1/courses', {
         course_code: courseCode,
         course_name: courseName,
-        teacher_id: teacherId,
         section: Number(section),
         year: Number(year),
         semester: Number(semester),
@@ -39,7 +39,7 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
     } catch (error: any) {
       console.error(error);
       const detailMsg = error.response?.data?.detail || error.message || 'ไม่สามารถบันทึกข้อมูลวิชาเรียนลงฐานข้อมูลได้';
-      alert(`เกิดข้อผิดพลาด: ${detailMsg}`);
+      notify(`เพิ่มรายวิชาไม่สำเร็จ: ${detailMsg}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -58,7 +58,7 @@ export default function AddCourseModal({ onClose, onSuccess, teacherId }: AddCou
         </div>
 
         {/* ฟอร์มกรอกข้อมูล */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-1">รหัสวิชา</label>
             <input 

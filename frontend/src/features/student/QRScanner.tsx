@@ -8,6 +8,8 @@ export interface VerifiedSessionInfo {
   sessionId: string;
   courseCode: string;
   courseName: string;
+  challengeId: string;
+  challengeExpiresAt: string;
 }
 
 export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info: VerifiedSessionInfo) => void }) {
@@ -34,11 +36,11 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
 
       // 2. 🌟 [แก้ใหม่] ตรวจสอบกับ backend แทนการ query ตาราง active_sessions ที่ไม่มีอยู่จริงในระบบ
       // backend จะเช็คให้เองว่าเซสชันนี้ยังเปิดอยู่ไหม และ token ที่สแกนมาตรงกับตัวล่าสุดหรือไม่
-      const res = await axios.get(`/api/v1/sessions/${qrData.session_id}/validate`, {
-        params: { token: qrData.token },
+      const res = await axios.post(`/api/v1/sessions/${qrData.session_id}/validate`, {
+        token: qrData.token,
       });
 
-      const { course_code, course_name } = res.data;
+      const { course_code, course_name, challenge_id, challenge_expires_at } = res.data;
       setCourseNamePreview(course_code || course_name || '');
 
       // ผ่านทุกด่าน!
@@ -48,6 +50,8 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
           sessionId: qrData.session_id,
           courseCode: course_code || '',
           courseName: course_name || '',
+          challengeId: challenge_id,
+          challengeExpiresAt: challenge_expires_at,
         });
       }, 1500); // ดีเลย์ให้เห็นเครื่องหมายถูก 1.5 วินาที แล้วค่อยเปลี่ยนหน้า
 
@@ -85,9 +89,9 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
       {status === 'success' && (
         <div className="flex flex-col items-center text-green-600">
           <CheckCircle size={64} className="mb-2" />
-          <p className="font-bold text-xl">ยืนยันตำแหน่งสำเร็จ!</p>
+          <p className="font-bold text-xl">Dynamic QR ถูกต้อง</p>
           {courseNamePreview && <p className="text-sm text-gray-500">{courseNamePreview}</p>}
-          <p className="text-sm">กำลังเตรียมเปิดกล้องถ่ายรูป...</p>
+          <p className="text-sm">QR นี้ออกสิทธิ์เช็คชื่อแบบใช้ครั้งเดียวแล้ว</p>
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import axios from 'axios';
 import { X, Settings, Save } from 'lucide-react';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 // 🌟 1. กำหนดรูปแบบโครงสร้างข้อมูล (Type Definition) สำหรับการตั้งค่า
 interface CourseConfig {
@@ -24,6 +25,7 @@ export default function CourseSettingsModal({
   onSaveSuccess, 
   onClose 
 }: CourseSettingsModalProps) { // 🌟 3. นำ Interface มาครอบชุดตัวแปรตรงนี้
+  const { notify } = useNotification();
 
   // กำหนดค่าเริ่มต้นให้กับ State โดยมี Fallback เผื่อกรณียังไม่เคยตั้งค่ามาก่อน
   const [totalSessions, setTotalSessions] = useState(currentConfig?.total_sessions || 15);
@@ -43,13 +45,13 @@ export default function CourseSettingsModal({
         max_absence_percent: Number(maxAbsentPct)
       });
       
-      alert("✅ บันทึกเกณฑ์การเข้าเรียนใหม่สำเร็จ!");
+      notify('บันทึกเกณฑ์การเข้าเรียนใหม่สำเร็จ', 'success');
       onSaveSuccess(); // รีเฟรชข้อมูลที่หน้าหลัก
       onClose();       // ปิดหน้าต่างลง
     } catch (error: any) {
       console.error(error);
       const detailMsg = error.response?.data?.detail || error.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลตั้งค่า';
-      alert(`${detailMsg}`);
+      notify(detailMsg, 'error');
     } finally {
       setIsSaving(false);
     }
@@ -71,7 +73,7 @@ export default function CourseSettingsModal({
         </div>
 
         {/* ส่วนฟอร์มกรอกข้อมูล */}
-        <form onSubmit={handleUpdateConfig} className="p-6 space-y-5">
+        <form onSubmit={handleUpdateConfig} noValidate className="p-6 space-y-5">
           
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-1">

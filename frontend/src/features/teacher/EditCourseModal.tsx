@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Save } from 'lucide-react';
 import axios from 'axios';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 interface Course {
   id: string;
@@ -18,6 +19,7 @@ interface EditCourseModalProps {
 }
 
 export default function EditCourseModal({ course, onClose, onSuccess }: EditCourseModalProps) {
+  const { notify } = useNotification();
   const [courseCode, setCourseCode] = useState(course.course_code);
   const [courseName, setCourseName] = useState(course.course_name);
   const [section, setSection] = useState(course.section);
@@ -36,11 +38,11 @@ export default function EditCourseModal({ course, onClose, onSuccess }: EditCour
         year: Number(year),
         semester: Number(semester),
       });
-      alert("✅ แก้ไขข้อมูลวิชาสำเร็จ!");
+      notify('แก้ไขข้อมูลวิชาสำเร็จ', 'success');
       onSuccess();
       onClose();
     } catch (error: any) {
-      alert(`❌ เกิดข้อผิดพลาด: ${error.response?.data?.detail || "ไม่สามารถอัปเดตได้"}`);
+      notify(`แก้ไขรายวิชาไม่สำเร็จ: ${error.response?.data?.detail || 'ไม่สามารถอัปเดตได้'}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -53,7 +55,7 @@ export default function EditCourseModal({ course, onClose, onSuccess }: EditCour
           <h3 className="text-lg font-bold text-gray-900">✏️ แก้ไขข้อมูลรายวิชา</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={20} /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
           <div><label className="block text-sm font-bold text-gray-700 mb-1">รหัสวิชา</label><input type="text" value={courseCode} onChange={(e) => setCourseCode(e.target.value)} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
           <div><label className="block text-sm font-bold text-gray-700 mb-1">ชื่อรายวิชา</label><input type="text" value={courseName} onChange={(e) => setCourseName(e.target.value)} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
           <div><label className="block text-sm font-bold text-gray-700 mb-1">หมู่เรียน (Section)</label><input type="number" min="1" value={section} onChange={(e) => setSection(Number(e.target.value))} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>

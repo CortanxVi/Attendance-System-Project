@@ -56,49 +56,27 @@ The backend REST API is located in `backend/routers/admin.py` and routes under t
 
 ## 🚀 How to Run the Project
 
-Follow these steps to run the Admin features locally from scratch:
+The complete, current setup guide is maintained in the project-root `README.md`.
+The supported development matrix is:
 
-### 1. Prerequisites
-- **Node.js** (v18+ recommended)
-- **Python** (v3.9+ recommended)
-- **Supabase Account** (You need a Supabase project with configured tables: `profiles`, `courses`, `audit_logs`, `attendance_records`)
+- Node.js 22.12+ or 24
+- Python 3.12 x64
+- Windows 10/11, Ubuntu, Linux Mint, or Fedora
+- Supabase schema applied from the project-root `supabase/migrations` directory
 
-### 2. Backend Setup (FastAPI)
-1. Open a terminal and navigate to the `backend` directory.
-2. Create a virtual environment and activate it:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use: venv\Scripts\activate
-   ```
-3. Install the required Python packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Create a `.env` file in the `backend` folder and add your Supabase credentials:
-   ```env
-   SUPABASE_URL="your-supabase-url"
-   SUPABASE_KEY="your-supabase-anon-key"
-   ```
-5. Start the FastAPI server:
-   ```bash
-   uvicorn main:app --reload --port 8000
-   ```
-   *The backend will be available at `http://localhost:8000`*
+Windows first-time setup and startup:
 
-### 3. Frontend Setup (React + Vite)
-1. Open a new terminal window and navigate to the `frontend` directory.
-2. Install the Node.js dependencies:
-   ```bash
-   npm install
-   ```
-3. Make sure your fonts are placed correctly in `frontend/public/fonts/` (specifically `THSarabunNew.ttf` for PDF exports).
-4. Start the Vite development server:
-   ```bash
-   npm run dev
-   ```
-   *The frontend will be available at `http://localhost:5173`*
+```bat
+setup_windows.bat
+start_all.bat
+```
 
-### 4. Accessing the Admin Panel
-1. Open your browser and navigate to `http://localhost:5173`.
-2. Log in using an account that has the `admin` role in the Supabase `profiles` table.
-3. You will now have access to the Admin features such as User Management, Course Management, and PDF Exports!
+Linux startup after preparing the three environment files:
+
+```bash
+./start_all.sh
+```
+
+Keep the Supabase service-role key only in `backend/.env`. The frontend receives
+only a publishable/anon key, and the isolated Light OCR environment must not
+contain any Supabase credential.

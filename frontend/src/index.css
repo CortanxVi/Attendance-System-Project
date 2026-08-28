@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+:root {
+  --z-dropdown: 200;
+  --z-popover: 300;
+  --z-backdrop: 500;
+  --z-dialog: 600;
+  --z-toast: 900;
+}
+
 /* :root {
   --text: #6b6375;
   --text-h: #08060d;

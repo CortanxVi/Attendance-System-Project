@@ -1,0 +1,23 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["frontend/src"],
+  "locale": "th-TH",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": {
+    "Select/Listbox": "native",
+    "Form": "screen-and-api",
+    "Scrollbar": "native",
+    "Toast": "shared",
+    "CRUD": "backend-authorized"
+  },
+  "requiredCommands": ["frontend-build", "backend-unit", "premium"],
+  "commands": {
+    "frontend-build": "cd frontend && npm run build",
+    "backend-unit": "cd backend && python3 -m unittest discover -s tests",
+    "premium": "python3 <frontend-design-premium>/scripts/audit_project.py . --mode strict --no-write"
+  },
+  "evidence": {
+    "failurePaths": "backend/tests/test_security.py"
+  }
+}

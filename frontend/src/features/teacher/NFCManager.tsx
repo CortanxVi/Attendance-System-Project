@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, CreditCard, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, CreditCard } from 'lucide-react';
 import axios from 'axios';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 interface NFCManagerProps {
   defaultCourseCode: string;
@@ -9,6 +10,7 @@ interface NFCManagerProps {
 }
 
 export default function NFCManager({ defaultCourseCode, activeSessionId, onClose }: NFCManagerProps) {
+  const { notify } = useNotification();
   const [scanUid, setScanUid] = useState('');
   const [statusMessage, setStatusMessage] = useState({ text: '🔴 กำลังรอการสแกนบัตร...', type: 'info' });
   const [latestCheckIns, setLatestCheckIns] = useState<any[]>([]); // เก็บประวัติคนสแกนล่าสุดแสดงบนจอ
@@ -55,6 +57,7 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
           text: `✅ เช็คชื่อสำเร็จ: รหัสนักศึกษา ${receiveInfo.student_id} (${response.data.status})`, 
           type: 'success' 
         });
+        notify(`${receiveInfo.full_name || receiveInfo.student_id} เช็คชื่อสำเร็จด้วยวิธีแตะบัตร NFC`, 'success');
         
         // เพิ่มรายชื่อนักศึกษาที่เพิ่งสแกนเข้าไปในรายการแสดงผลหน้าจอ
         setLatestCheckIns(prev => [receiveInfo, ...prev].slice(0, 5));
@@ -98,7 +101,7 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
           </div>
 
           {/* ซ่อนช่องรับค่า Input นี้ไว้เบื้องหลัง (แต่โฟกัสไว้) เพื่อรับค่าจากเครื่องสแกนคีย์บอร์ดจำลอง */}
-          <form onSubmit={handleCardScanned} className="opacity-0 absolute"> {/* opacity-0 absolute Hidden Auto-focus Input ซ่อนกล่องข้อความ */ }
+          <form onSubmit={handleCardScanned} noValidate className="opacity-0 absolute"> {/* opacity-0 absolute Hidden Auto-focus Input ซ่อนกล่องข้อความ */ }
             <input
               ref={rfidInputRef}
               type="text"

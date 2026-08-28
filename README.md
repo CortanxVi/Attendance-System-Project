@@ -12,30 +12,63 @@
 
 ## ⚙️ 1. การตั้งค่าระบบ Backend (FastAPI)
 
-**ความต้องการของระบบ:** Python 3.9 หรือใหม่กว่า
+**ความต้องการของระบบ:** Python 3.12 x64, Node.js 22.12+ หรือ 24 และ Windows 10/11 หรือ Linux x64/arm64
 
 ### การติดตั้ง Dependencies
-เปิด Terminal แล้วรันคำสั่งตามลำดับ:
+Linux:
 ```bash
 cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirement.txt
 ```
+
+Windows Command Prompt:
+
+```bat
+cd backend
+py -3.12 -m venv .venv-windows
+.venv-windows\Scripts\python.exe -m pip install --upgrade pip
+.venv-windows\Scripts\python.exe -m pip install -r requirement.txt
+```
+
+`requirement.txt` ใช้ ONNX Runtime แบบ CPU ซึ่งมี wheel สำหรับ Windows และ Linux
+และไม่บังคับติดตั้ง CUDA, NVIDIA packages, PyTorch หรือ Triton ที่ไม่ได้ถูกใช้โดยระบบ
 
 ### การตั้งค่า Environment Variables (.env)
 คัดลอกไฟล์ `.env.example` เป็น `.env` (หรือสร้างไฟล์ `.env` ใหม่) แล้วตั้งค่าตัวแปรดังนี้:
 ```ini
 SUPABASE_URL="https://[YOUR_PROJECT_ID].supabase.co"
-SUPABASE_KEY="[YOUR_SERVICE_ROLE_KEY_OR_ANON_KEY]"
-# (ตัวเลือก) ตั้งค่าที่เก็บโมเดล InsightFace หากจำเป็น
+SUPABASE_KEY="[YOUR_SERVICE_ROLE_KEY]"
+OCR_SERVICE_URL="http://127.0.0.1:3001"
+OCR_SERVICE_TOKEN="[RANDOM_INTERNAL_TOKEN]"
+MAX_IMAGE_BYTES=8388608
+MAX_IMAGE_WIDTH=4096
+MAX_IMAGE_HEIGHT=4096
+MAX_IMAGE_PIXELS=16000000
+QR_REFRESH_SECONDS=12
+QR_CHALLENGE_SECONDS=120
+CORS_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
+TEMP_ADMIN_PIN_PEPPER="[RANDOM_SECRET_AT_LEAST_32_CHARS]"
+TEMP_ADMIN_GRANT_SECONDS=600
+TEMP_ADMIN_ENROLLMENT_SECONDS=86400
+TEMP_ADMIN_MAX_PIN_ATTEMPTS=5
+TEMP_ADMIN_LOCK_SECONDS=900
 ```
 
 ### คำสั่งรันระบบ (รันบนพอร์ต 8000)
 ```bash
 cd backend
-venv\Scripts\activate
-python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+source .venv/bin/activate
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Windows:
+
+```bat
+cd backend
+.venv-windows\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 API Docs จะเปิดใช้งานที่: `http://localhost:8000/docs`
 
@@ -43,13 +76,16 @@ API Docs จะเปิดใช้งานที่: `http://localhost:8000/d
 
 ## 💻 2. การตั้งค่าระบบ Frontend (React + Vite)
 
-**ความต้องการของระบบ:** Node.js v18 หรือใหม่กว่า
+**ความต้องการของระบบ:** Node.js 22.12+ หรือ 24 (Vite 8 และ Supabase JS รุ่นปัจจุบันไม่รองรับ Node 18)
 
 ### การติดตั้ง Dependencies
 ```bash
 cd frontend
 npm install
 ```
+
+บน Linux ที่ใช้ `nvm` ให้รัน `nvm use 22` ก่อน ส่วน Windows ใช้ Node.js 22.12+/24
+จาก installer หรือ version manager ที่ทำให้ `node.exe` และ `npm.cmd` อยู่ใน `PATH`
 
 ### การตั้งค่า Environment Variables (.env.local)
 สร้างไฟล์ `.env.local` ในโฟลเดอร์ `frontend` แล้วตั้งค่าดังนี้:
@@ -70,29 +106,256 @@ npm run dev
 
 ## 🔍 3. การตั้งค่าระบบ OCR Service (Node.js)
 
-บริการนี้ทำหน้าที่สกัดข้อความจากภาพบัตรนักศึกษาแยกต่างหาก เพื่อไม่ให้เป็นภาระของ Backend Python
+บริการนี้ใช้ `@arcships/light-ocr` และรับคำขอจาก Backend แบบ server-to-server เพื่อไม่เปิด OCR/ข้อมูลบัตรตรงสู่ browser
 
-**ความต้องการของระบบ:** Node.js v18 หรือใหม่กว่า
+**ความต้องการของระบบ:** Node.js 22.12+ หรือ 24
 
 ### การติดตั้ง Dependencies
 ```bash
 cd ocr-service
-npm install
+npm ci
 ```
+
+ไม่ต้องติดตั้งแพ็กเกจ native แยกตามระบบปฏิบัติการ ตัว `@arcships/light-ocr`
+จะเลือก runtime ที่ตรงกับ Linux หรือ Windows แบบ x64/arm64 ให้โดยอัตโนมัติ
+
+ตรวจสอบ runtime ก่อนเปิดบริการ:
+
+```bash
+nvm install  # อ่านเวอร์ชัน 22 จาก ocr-service/.nvmrc (กรณีใช้ nvm)
+nvm use
+node --version
+npm run doctor
+```
+
+บน Ubuntu, Linux Mint และ Fedora ค่า `native.status` ต้องเป็น `ok` และ
+`system.platform` ต้องเป็น `linux` หากเครื่องไม่มี Vulkan/WebGPU ระบบจะใช้ CPU ได้
+
+บน Windows ค่า `native.status` ต้องเป็น `ok` และ `system.platform` ต้องเป็น `win32`
+โดยไม่ต้องติดตั้ง Python OCR หรือ EasyOCR
 
 ### คำสั่งรันระบบ (รันบนพอร์ต 3001)
+
+คัดลอก `ocr-service/.env.example` เป็น `ocr-service/.env` และตั้ง
+`OCR_SERVICE_TOKEN` ให้ตรงกับ `backend/.env` ไฟล์นี้ต้องไม่มี Supabase key
+หรือค่าของ frontend
+
 ```bash
 cd ocr-service
-npm start
+cp .env.example .env
+# แก้ OCR_SERVICE_TOKEN ใน .env ก่อน แล้วจึงรัน
+node --env-file=.env ocr-server.js
 ```
+
+Windows Command Prompt ใช้ `copy .env.example .env` แทน `cp` ส่วนคำสั่งเปิดบริการ
+ยังคงเป็น `node --env-file=.env ocr-server.js`
 API สำหรับ OCR จะรันอยู่ที่: `http://localhost:3001`
 
+ตรวจสอบว่าบริการพร้อมใช้งาน:
+
+```bash
+curl http://127.0.0.1:3001/health
+```
+
+ทดสอบอ่านบัตรด้วยไฟล์จริง (เปิดบริการไว้ในอีก Terminal หนึ่งก่อน):
+
+```bash
+OCR_SERVICE_TOKEN="[ค่าเดียวกับ service]" npm run test:ocr -- /absolute/path/to/student-card.jpg
+```
+
+Windows PowerShell:
+
+```powershell
+$env:OCR_SERVICE_TOKEN = "[ค่าเดียวกับ service]"
+npm run test:ocr -- "C:\absolute\path\student-card.jpg"
+Remove-Item Env:OCR_SERVICE_TOKEN
+```
+
+หากทราบรหัส 13 หลักที่คาดหวัง สามารถให้คำสั่งตรวจผลให้อัตโนมัติได้:
+
+```bash
+OCR_SERVICE_TOKEN="[ค่าเดียวกับ service]" npm run test:ocr -- /absolute/path/to/student-card.jpg 1234567890123
+```
+
+ตัวแปรสภาพแวดล้อมที่ใช้ได้:
+
+- `PORT` พอร์ตของบริการ ค่าเริ่มต้น `3001`
+- `HOST` interface ที่รับการเชื่อมต่อ ค่าเริ่มต้น `127.0.0.1`
+- `OCR_SERVICE_TOKEN` shared secret ภายในระหว่าง FastAPI กับ OCR; ต้องตั้งใน production
+- production บังคับให้ `OCR_SERVICE_TOKEN` ยาวอย่างน้อย 32 ตัวอักษร; แนะนำ `openssl rand -hex 32`
+- `OCR_MAX_FILE_SIZE_MB` ขนาดภาพสูงสุด ค่าเริ่มต้น `8`
+- `OCR_INCLUDE_RAW_TEXT=true` ส่งข้อความ OCR ดิบกลับมาเพื่อ debug เท่านั้น ไม่ควรเปิดใน production
+
 ---
 
-## ⚡ สรุปคำสั่งการเปิดระบบพร้อมกันทั้งหมด (Windows)
-หากคุณใช้ระบบปฏิบัติการ Windows สามารถดับเบิลคลิกไฟล์ `start_all.bat` ที่ Root ของโปรเจกต์ได้เลย ระบบจะทำการเปิด Terminal ย่อยขึ้นมา 3 หน้าต่าง เพื่อรัน Backend, Frontend และ OCR ให้พร้อมใช้งานทันที
+## ⚡ เปิดระบบพร้อมกันบน Windows 10/11
+
+### สิ่งที่ต้องติดตั้ง
+
+1. Python 3.12 x64 พร้อม Python Launcher (`py.exe`)
+2. Node.js 22.12+ LTS หรือ 24 LTS x64
+3. Microsoft Visual C++ Redistributable รุ่นปัจจุบันสำหรับ ONNX Runtime
+4. Git for Windows หากต้อง clone/pull โปรเจกต์
+
+ติดตั้งครั้งแรกโดยเปิด Command Prompt ที่โฟลเดอร์โปรเจกต์ แล้วรัน:
+
+```bat
+setup_windows.bat
+```
+
+สคริปต์จะทำสิ่งต่อไปนี้โดยไม่เขียนทับไฟล์ `.env` ที่มีอยู่:
+
+- ตรวจ Python 3.12 x64 และ Node.js 22.12+/24
+- สร้าง `backend\.venv-windows` แยกจาก `.venv` ของ Linux เพื่อป้องกัน native package ปะปนกัน
+- ติดตั้ง Backend, Light OCR และ Frontend จากไฟล์ lock/requirements ปัจจุบัน
+- รัน `light-ocr doctor`
+- คัดลอกไฟล์ตัวอย่าง environment เฉพาะไฟล์ที่ยังไม่มี
+
+จากนั้นแก้ค่าจริงใน:
+
+- `backend\.env` — Supabase URL, service-role key และ OCR token
+- `ocr-service\.env` — OCR token เท่านั้น ห้ามใส่ Supabase key
+- `frontend\.env.local` — Supabase publishable/anon key เท่านั้น
+
+สร้าง OCR token 32 bytes ด้วย PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+```
+
+คัดลอกผลลัพธ์เดียวกันไปยัง `OCR_SERVICE_TOKEN` ใน `backend\.env` และ
+`ocr-service\.env` แล้วเปิดระบบด้วย:
+
+```bat
+start_all.bat
+```
+
+ระบบจะเปิด Backend, OCR และ Frontend แยกเป็นสามหน้าต่าง ตัว OCR จะล้างตัวแปร
+Supabase/Frontend ที่อาจติดมากับเครื่องก่อนอ่าน `ocr-service\.env` เพื่อไม่ให้ service
+ซึ่งประมวลผลรูปบัตรได้รับกุญแจฐานข้อมูลโดยไม่จำเป็น
+
+ตรวจบริการจาก Command Prompt อีกหน้าต่าง:
+
+```bat
+curl.exe -fsS http://127.0.0.1:3001/health
+curl.exe -fsS http://127.0.0.1:8000/docs >nul && echo Backend OK
+curl.exe -fsS http://127.0.0.1:5173/ >nul && echo Frontend OK
+```
+
+ปิดหน้าต่างบริการทั้งสามเมื่อต้องการหยุดระบบ Windows
 
 ---
+
+## ⚡ เปิดระบบพร้อมกันบน Ubuntu / Linux Mint / Fedora
+
+ติดตั้ง Node 22.12+ (คำสั่ง `nvm install 22` จะเลือก 22.x รุ่นล่าสุด) หรือ Node 24 และเตรียมไฟล์ต่อไปนี้ก่อน:
+
+- `backend/.env` — Supabase service-role key และ token ที่ backend ใช้เรียก OCR
+- `ocr-service/.env` — เฉพาะค่าของ OCR โดยใช้ token เดียวกัน ห้ามใส่ Supabase key
+- `frontend/.env.local` — Supabase publishable/anon key เท่านั้น
+
+สร้าง shared token ด้วย `openssl rand -hex 32` แล้วคัดลอกค่าเดียวกันไปยัง
+`OCR_SERVICE_TOKEN` ใน `backend/.env` และ `ocr-service/.env` จากนั้นจำกัดสิทธิ์ไฟล์:
+
+```bash
+chmod 600 backend/.env ocr-service/.env frontend/.env.local
+chmod +x start_all.sh
+./start_all.sh
+```
+
+สคริปต์จะแยก environment ของ OCR และลบตัวแปร Supabase ออกจาก OCR process
+ก่อนเริ่มบริการโดยอัตโนมัติ
+
+### ติดตั้งแพ็กเกจระบบปฏิบัติการ
+
+Ubuntu / Linux Mint:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential python3 python3-venv python3-dev curl openssl
+```
+
+Fedora:
+
+```bash
+sudo dnf group install -y "Development Tools"
+sudo dnf install -y python3 python3-devel curl openssl
+```
+
+### เตรียมฐานข้อมูล Supabase สำหรับโปรเจกต์ใหม่
+
+migration ล่าสุดใน `supabase/migrations` เพิ่มชั้นปี/ห้องเรียนและระบบสิทธิ์ผู้ดูแลชั่วคราว
+ก่อนรันกับ Supabase project จริง ให้เชื่อม project และตรวจรายการเปลี่ยนแปลงจากโฟลเดอร์ราก:
+
+```bash
+npx supabase@latest login
+npx supabase@latest link --project-ref YOUR_PROJECT_REF
+npx supabase@latest db push --dry-run
+npx supabase@latest db push
+```
+
+หากยังไม่ได้เข้าสู่ระบบ CLI ให้ใช้ `npx supabase@latest login` ซึ่งจะเปิด browser เพื่อยืนยันบัญชี
+จากนั้นใช้ Project Reference ที่หน้า Supabase Dashboard → Project Settings → General.
+ห้ามนำ service-role key ไปใส่ frontend หรือ OCR service
+
+### ตรวจว่าบริการเริ่มครบ
+
+เปิดอีก Terminal แล้วรัน:
+
+```bash
+curl -fsS http://127.0.0.1:3001/health
+curl -fsS http://127.0.0.1:8000/docs >/dev/null && echo "Backend OK"
+curl -fsS http://127.0.0.1:5173/ >/dev/null && echo "Frontend OK"
+```
+
+จากนั้นเปิด `http://127.0.0.1:5173` และตรวจตามลำดับ:
+
+1. Admin สร้างคำเชิญบัญชีอาจารย์ก่อนล็อกอินครั้งแรก บัญชีอาจารย์ที่ไม่มี invite จะถูกปฏิเสธ
+2. อาจารย์สร้างรายวิชา นำเข้า roster CSV เปิดคาบ และเปิดหน้า Dynamic QR
+3. นักศึกษาสแกน QR ที่กำลังแสดงอยู่ แล้วถ่ายใบหน้าและบัตรนักศึกษา (รูปบัตร JPEG/PNG จะถูกหมุนตามข้อมูลภาพและย่ออัตโนมัติไม่เกิน 1920×1920 px โดยไม่ตัดภาพ ก่อนส่งให้ Light OCR)
+4. ตรวจว่าหน้าจออาจารย์แสดงชื่อและวิธี `Face + OCR` ทันที
+5. ทดสอบ NFC จากหน้าอาจารย์และตรวจว่าชื่อพร้อมวิธี `NFC` ปรากฏทันที
+
+ทดสอบ OCR ด้วยภาพบัตรจริงโดยไม่เปิดเผย raw text:
+
+```bash
+cd ocr-service
+node --env-file=.env scripts/test-ocr.mjs /absolute/path/to/student-card.jpg 1234567890123
+```
+
+## Dynamic QR และการแจ้งเตือน
+
+- QR token หมุนทุก 12 วินาทีโดยค่าเริ่มต้น และตั้งได้เฉพาะช่วง 10–15 วินาทีผ่าน `QR_REFRESH_SECONDS`
+- นักศึกษาต้องสแกน QR ล่าสุดก่อนเสมอ; server ออก challenge ผูกกับบัญชี ใช้ได้ครั้งเดียวและหมดอายุใน 120 วินาทีโดยค่าเริ่มต้น (`QR_CHALLENGE_SECONDS`)
+- การเช็คชื่อแบบใบหน้าต้องผ่านพร้อมกันทั้ง challenge, Light OCR จากภาพบัตร, ใบหน้าที่ลงทะเบียน และ liveness image
+- NFC ใช้ได้เฉพาะอาจารย์เจ้าของคาบหรือ admin และจะแจ้งชื่อ/วิธีผ่าน Supabase Realtime ทันที
+- รูป JPEG/PNG ถูกจำกัดทั้งขนาดไฟล์ มิติ และจำนวนพิกเซลก่อน decode เพื่อป้องกัน compressed-image resource exhaustion
+- นักศึกษาจากโดเมนนักศึกษาสมัครได้ตามรหัส 13 หลัก ส่วนอาจารย์และ admin ต้องมีคำเชิญที่ยังไม่ถูกใช้ก่อนล็อกอินครั้งแรก
+- CSV/Excel export จะแปลงค่าที่ขึ้นต้นแบบสูตรให้เป็นข้อความก่อนสร้างไฟล์
+
+## สิทธิ์ผู้ดูแลชั่วคราว Teacher → Admin
+
+1. อาจารย์เปิด `ตั้งค่าระบบ` ระบุเหตุผลและส่งคำขอ
+2. ผู้ดูแลระบบถาวรเปิด `อนุมัติสิทธิ์ชั่วคราว` เพื่อตรวจคำขอและอนุมัติ/ปฏิเสธ
+3. เมื่ออนุมัติ อาจารย์มีเวลา 24 ชั่วโมงตั้งและยืนยัน PIN ตัวเลข 6 หลัก
+4. ครั้งต่อไปอาจารย์ใช้ PIN เดิมเปิดสิทธิ์ครั้งละ 10 นาที; บทบาทใน `profiles.role` ยังคงเป็น `teacher`
+5. กรอก PIN ผิดครบ 5 ครั้งจะถูกล็อก 15 นาที การนับทำแบบ atomic ใน PostgreSQL
+6. grant token ผูกกับ Supabase auth session เก็บในหน่วยความจำ browser เท่านั้น และ backend เก็บเฉพาะ SHA-256 hash
+7. ผู้ดูแลชั่วคราวเปลี่ยน role, สร้าง admin, ลบบัญชีผู้ใช้/รายวิชาของผู้อื่น หรืออนุมัติสิทธิ์ให้ผู้อื่นไม่ได้
+8. ผู้ดูแลระบบถาวรเพิกถอน PIN และ grant ที่กำลังใช้งานได้จากหน้ารายการเดียวกัน
+
+ตั้ง `TEMP_ADMIN_PIN_PEPPER` เป็น secret แบบสุ่มอย่างน้อย 32 ตัวอักษรใน production เช่น
+`openssl rand -hex 32` และอย่าเปลี่ยนค่าระหว่างที่ยังมี PIN ใช้งานอยู่ เพราะ PIN เดิมจะตรวจสอบไม่ได้
+
+## ขอบเขตข้อมูลการเช็คชื่อ
+
+- ระบบนี้เป็น **check-in only** ไม่มีขั้นตอนหรือข้อมูล check-out
+- รูปบัตรและภาพ liveness ใช้ประมวลผลระหว่างคำขอเท่านั้น ไม่บันทึกเป็นรูปเช็คชื่อถาวร
+- ฐานข้อมูลเก็บผลการยืนยัน/เวลา/วิธีเช็คชื่อและ face embedding ที่จำเป็นต่อการจับคู่ ไม่เก็บไฟล์ภาพเช็คชื่อใน Storage
+- Light OCR ไม่ส่ง raw OCR text เว้นแต่เปิดโหมด debug โดยตั้งใจ และไม่ควรเปิดใน production
+
 ---
 
 # สรุปผลการดำเนินการ Phase 2
@@ -119,8 +382,7 @@ API สำหรับ OCR จะรันอยู่ที่: `http://localho
 - ผูกหน้าจอเข้ากับเมนูและ `App.tsx`
 
 ## 4. 📝 Import Students CSV
-- เพิ่ม Endpoint การอัปโหลดไฟล์ใน `backend/routers/teacher.py` เพื่ออ่านไฟล์ CSV และเพิ่มรายชื่อนักศึกษาใหม่ (สร้างโปรไฟล์นักศึกษาโดยอัตโนมัติ)
+- เพิ่ม Endpoint การอัปโหลดไฟล์ใน `backend/routers/teacher.py` เพื่ออ่านไฟล์ CSV ผูก roster กับรายวิชา และสร้างคำเชิญที่รอผูกกับ Supabase Auth เมื่อผู้ใช้ล็อกอินครั้งแรก
 - สร้างหน้าจอ `ImportStudents.tsx` ให้มี UI แบบ Upload Box รองรับการลากวางและเลือกไฟล์ 
 - เพิ่มปุ่มทางลัดไปยังหน้านำเข้าและหน้าส่งออกในหน้าหลักของอาจารย์ `TeacherDashboard.tsx` ทำให้เรียกใช้งานได้ง่าย
 - ผูกหน้าจอทั้งหมดเข้ากับ `App.tsx` เรียบร้อย
-

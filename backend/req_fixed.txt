@@ -8,7 +8,6 @@ charset-normalizer==3.4.7
 click==8.4.1
 cryptography==48.0.0
 deprecation==2.1.0
-easyocr==1.7.2
 fastapi==0.136.1
 filelock==3.29.0
 flatbuffers==25.12.19

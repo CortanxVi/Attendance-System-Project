@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { BookOpen, UserPlus, FileText, Users, Settings, LogOut, LayoutDashboard, Menu, X } from 'lucide-react';
+import { BookOpen, FileText, Users, Settings, LogOut, LayoutDashboard, Menu, X } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 
 export default function TeacherLayout() {
@@ -35,7 +35,7 @@ export default function TeacherLayout() {
     <div className="flex h-screen bg-gray-100">
       {/* แถบดำทับหน้าจอเมื่อเปิด Sidebar บนมือถือ */}
       {isSidebarOpen && (
-        <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+        <button type="button" aria-label="ปิดเมนูด้านข้าง" className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
       )}
 
       {/* แถบเมนูด้านซ้าย (Sidebar) */}

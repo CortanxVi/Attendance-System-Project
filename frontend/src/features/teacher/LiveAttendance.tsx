@@ -3,18 +3,19 @@ import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../../lib/supabaseClient';
 import { Clock, Users, XCircle, AlertTriangle, CreditCard, ToggleLeft, ToggleRight } from 'lucide-react';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 interface LiveAttendanceProps {
   courseCode?: string;
   courseName?: string;
   activeSessionId: string;
-  teacherId: string;
   onClose?: () => void;
 }
 
-export default function LiveAttendance({ courseCode = '', courseName = '', activeSessionId, teacherId, onClose }: LiveAttendanceProps) {
+export default function LiveAttendance({ courseCode = '', courseName = '', activeSessionId, onClose }: LiveAttendanceProps) {
+  const { notify } = useNotification();
   const [token, setToken] = useState<string>(''); 
-  const [countdown, setCountdown] = useState<number>(60);
+  const [countdown, setCountdown] = useState<number>(15);
   const [tokenError, setTokenError] = useState<string | null>(null);
   
   const [attendanceCount, setAttendanceCount] = useState<number>(0);
@@ -28,12 +29,9 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
   // --- QR Token Logic ---
   const rotateToken = async () => {
     try {
-      const res = await axios.post(
-        `/api/v1/sessions/${activeSessionId}/rotate-token`,
-        null,
-        { params: { teacher_id: teacherId } }
-      );
+      const res = await axios.post(`/api/v1/sessions/${activeSessionId}/rotate-token`);
       setToken(res.data.qr_token);
+      setCountdown(res.data.qr_refresh_rate_seconds || 15);
       setTokenError(null);
     } catch (err: any) {
       setTokenError(err.response?.data?.detail || 'ไม่สามารถหมุน QR Code ใหม่ได้ กรุณาลองใหม่');
@@ -70,14 +68,14 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
       setCountdown((prev) => {
         if (prev <= 1) {
           rotateToken(); 
-          return 60; 
+          return 15;
         }
         return prev - 1;
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [activeSessionId, teacherId]);
+  }, [activeSessionId]);
 
   // --- NFC Logic ---
   useEffect(() => {
@@ -111,6 +109,7 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
       if (response.data.status === 'success') {
         const info = response.data.student_info;
         setNfcStatus({ text: `✅ สำเร็จ: ${info.student_id}`, type: 'success' });
+        notify(`${info.full_name || info.student_id} เช็คชื่อสำเร็จด้วยวิธีแตะบัตร NFC`, 'success');
       }
     } catch (error: any) {
       setNfcStatus({ text: `❌ ${error.response?.data?.detail || 'ข้อผิดพลาด'}`, type: 'error' });
@@ -143,7 +142,7 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
           
           <div className="flex items-center gap-2 text-sm font-medium text-orange-600 bg-orange-50 px-4 py-2 rounded-full border border-orange-200">
             <Clock size={16} />
-            QR Code อัปเดตความปลอดภัยทุกๆ 60 วินาที
+            Dynamic QR เปลี่ยน token ทุก 15 วินาที
           </div>
 
           {tokenError && (
@@ -202,7 +201,7 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
                     </div>
                   )}
 
-                  <form onSubmit={handleCardScanned} className="opacity-0 absolute w-0 h-0 overflow-hidden">
+                  <form onSubmit={handleCardScanned} noValidate className="opacity-0 absolute w-0 h-0 overflow-hidden">
                     <input
                       ref={rfidInputRef}
                       type="text"

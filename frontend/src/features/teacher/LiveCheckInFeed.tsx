@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
+import axios from 'axios';
 import { Users, CheckCircle2, Clock3, XCircle, ScanFace, CreditCard, Edit } from 'lucide-react';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 // 🌟 ข้อมูล 1 แถวที่จะแสดงในรายการ (แบนราบแล้ว อ่านง่ายกว่าข้อมูลดิบที่ Join มาจาก Supabase)
 interface CheckInItem {
@@ -40,38 +42,50 @@ const METHOD_CONFIG: Record<string, { label: string; icon: any }> = {
 export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFeedProps) {
   const [checkIns, setCheckIns] = useState<CheckInItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { notify } = useNotification();
 
   // ดึงรายชื่อทั้งหมดที่เช็คชื่อแล้วในคาบนี้ (join ตาราง profiles เอาชื่อ-สกุลมาด้วย)
-  const fetchCheckInList = async () => {
-    const { data, error } = await supabase
-      .from('attendance_records')
-      .select('id, check_in_time, status, method, profiles(student_id, full_name)')
-      .eq('session_id', sessionId)
-      .order('check_in_time', { ascending: false });
-
-    if (!error && data) {
-      // ข้อมูลที่ Join มา profiles จะซ้อนเป็น object อยู่ข้างใน แปลงให้แบนราบใช้งานง่ายขึ้น
-      const formatted: CheckInItem[] = data.map((row: any) => ({
-        id: row.id,
-        check_in_time: row.check_in_time,
-        status: row.status,
-        method: row.method,
-        student_id: row.profiles?.student_id || '-',
-        full_name: row.profiles?.full_name || 'ไม่ทราบชื่อ',
-      }));
-      setCheckIns(formatted);
-    }
+  const fetchCheckInList = async (signal?: AbortSignal): Promise<CheckInItem[]> => {
+    const response = await axios.get(`/api/v1/sessions/${sessionId}/checkins`, { signal });
+    const nextItems = response.data.checkins as CheckInItem[];
+    setCheckIns(nextItems);
     setIsLoading(false);
+    return nextItems;
   };
 
   useEffect(() => {
-    fetchCheckInList();
+    const controller = new AbortController();
+    fetchCheckInList(controller.signal).catch(() => setIsLoading(false));
 
-    // Polling as fallback since Supabase Realtime might not be enabled for attendance_records
-    const interval = setInterval(fetchCheckInList, 3000);
+    const channel = supabase
+      .channel(`attendance-records:${sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'attendance_records', filter: `session_id=eq.${sessionId}` },
+        async (payload) => {
+          try {
+            const nextItems = await fetchCheckInList();
+            const inserted = nextItems.find((item) => item.id === payload.new.id);
+            if (!inserted) return;
+            const method = inserted.method === 'nfc' ? 'แตะบัตร NFC' : inserted.method === 'face_ocr' ? 'สแกนใบหน้าและบัตร' : 'แก้ไขโดยอาจารย์';
+            notify(`${inserted.full_name} เช็คชื่อสำเร็จด้วยวิธี${method}`, 'success');
+          } catch {
+            notify('มีรายการเช็คชื่อใหม่ แต่โหลดรายละเอียดไม่สำเร็จ', 'error');
+          }
+        },
+      )
+      .subscribe();
 
-    return () => clearInterval(interval);
-  }, [sessionId]);
+    const interval = window.setInterval(() => {
+      fetchCheckInList().catch(() => undefined);
+    }, 15000);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [sessionId, notify]);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 mb-6 animate-fade-in">

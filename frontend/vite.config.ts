@@ -40,6 +40,7 @@ export default defineConfig({
         // ⚠️ ตั้งใจไม่ทำ runtime caching ให้ path /api/** เด็ดขาด
         // เพราะข้อมูลเช็คชื่อ/สถานะห้องเรียนต้องเป็นข้อมูลล่าสุดเสมอ ห้ามใช้ค่าที่แคชไว้เก่า
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
     }),
   ],

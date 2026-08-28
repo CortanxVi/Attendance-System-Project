@@ -7,16 +7,30 @@ import uuid
 import asyncio
 import io
 from PIL import Image, ImageOps
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status, APIRouter
+from fastapi import Depends, FastAPI, File, UploadFile, Form, HTTPException, status, APIRouter
 from starlette.concurrency import run_in_threadpool
-from supabase import create_client, Client
-from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from core.authorization import (
+    require_course_delete_permission,
+    require_course_enrollment,
+    require_owned_course,
+    require_owned_session,
+)
+from core.config import (
+    CORS_ORIGINS,
+    QR_CHALLENGE_SECONDS,
+    QR_REFRESH_SECONDS,
+    TEMP_ADMIN_ENROLLMENT_SECONDS,
+    TEMP_ADMIN_GRANT_SECONDS,
+    supabase_db as supabase,
+)
+from core.security import AuthenticatedUser, get_current_user, require_roles
+from services.light_ocr_service import extract_student_id, read_validated_image
 from services.insightface_service import face_service
 
 # นำเข้า Router สำหรับ Admin
@@ -25,6 +39,7 @@ from routers.admin import admin_router
 from routers.student import student_router
 # นำเข้า Router สำหรับอาจารย์
 from routers.teacher import teacher_router
+from routers.temporary_admin import router as temporary_admin_router
 
 class NFCRegisterRequest(BaseModel):
     student_id: str
@@ -41,21 +56,18 @@ class SessionStatus(str, Enum):
 
 class SessionStartRequest(BaseModel):
     course_id: str
-    teacher_id: str
+
+
+class QRValidationRequest(BaseModel):
+    token: str
 
 # เพิ่ม Model สำหรับรับค่าเพิ่มรายวิชาเรียน
 class CourseCreateRequest(BaseModel):
     course_code: str
     course_name: str
     section: int
-    teacher_id: str
     year: int
     semester: int
-
-class CheckInPayload(BaseModel):
-    student_id: str
-    session_id: str
-    qr_token: str  # นักศึกษาส่ง Token ที่สแกนได้มาตรวจความถูกต้อง
 
 # Model สำหรับรับค่าอัปเดตเกณฑ์คะแนน
 class CourseSettingsRequest(BaseModel):
@@ -75,12 +87,6 @@ class CourseUpdateRequest(BaseModel):
 app = FastAPI(title="KMUTNB Face Recognition API")
 router = APIRouter()
 
-# Config สำหรับการเชื่อมต่อ Supabase (ให้ขอ key กับ team lead)
-load_dotenv()
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_rkey = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(supabase_url, supabase_rkey)
-
 # เกณฑ์คะแนนความเหมือนใบหน้า (0.45 - 0.50 ถือว่าแม่นยำและปลอดภัยสูงสำหรับ CPU)
 FACE_THRESHOLD = 0.45
 SUPABASE_ERROR_MESSAGES = {
@@ -94,16 +100,51 @@ SUPABASE_ERROR_MESSAGES = {
 # เปิด CORS เพื่อให้ Frontend (localhost) ยิงหาหลังบ้านได้
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # ใน production จริงควรระบุ url ของ frontend
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Admin-Grant"],
 )
 
-app.include_router(router)
 app.include_router(admin_router)
 app.include_router(student_router)
 app.include_router(teacher_router)
+app.include_router(temporary_admin_router)
+
+
+@app.get("/api/v1/auth/me")
+async def get_authenticated_profile(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    return {"status": "success", "user": current_user.model_dump()}
+
+
+@app.get("/api/v1/system/config")
+async def get_runtime_config(
+    _current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
+    return {
+        "status": "success",
+        "qr_refresh_seconds": QR_REFRESH_SECONDS,
+        "qr_challenge_seconds": QR_CHALLENGE_SECONDS,
+        "temporary_admin_grant_seconds": TEMP_ADMIN_GRANT_SECONDS,
+        "temporary_admin_enrollment_seconds": TEMP_ADMIN_ENROLLMENT_SECONDS,
+        "ocr_provider": "Light OCR Node.js",
+        "attendance_methods": ["face_ocr", "nfc", "manual"],
+        "email_policy": "KMUTNB Google accounts only",
+    }
+
+
+@app.post("/api/v1/ocr/student-card")
+async def read_student_card(
+    image: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(require_roles("student", "admin")),
+):
+    uploaded = await read_validated_image(image, "ภาพบัตรนักศึกษา")
+    student_id = await extract_student_id(uploaded)
+    if current_user.role == "student" and student_id != current_user.student_id:
+        raise HTTPException(status_code=403, detail="รหัสบนบัตรไม่ตรงกับบัญชีที่เข้าสู่ระบบ")
+    return {"success": True, "foundId": student_id}
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
     """
@@ -140,7 +181,7 @@ def resize_image_if_needed(img: np.ndarray, max_dimension: int = 1280) -> np.nda
     """
     🌟 [เพิ่มใหม่] ย่อขนาดภาพก่อนส่งเข้าโมเดล AI ถ้าด้านที่ยาวที่สุดเกิน max_dimension พิกเซล
     เหตุผล: รูปถ่ายจากกล้องมือถือมักมีความละเอียดสูงมาก (เช่น 3000x4000 พิกเซลขึ้นไป) ทั้งที่
-    EasyOCR และ InsightFace ไม่ได้ต้องการความละเอียดขนาดนั้นเพื่อความแม่นยำ ยิ่งภาพใหญ่ยิ่งใช้เวลา
+    Light OCR และ InsightFace ไม่ได้ต้องการความละเอียดขนาดนั้นเพื่อความแม่นยำ ยิ่งภาพใหญ่ยิ่งใช้เวลา
     ประมวลผลนานขึ้นโดยไม่จำเป็น ย่อขนาดลงมาก่อนจะช่วยลดเวลาประมวลผลได้ชัดเจน โดยความคมชัดยังพอ
     สำหรับอ่านตัวเลขบนบัตร/จดจำใบหน้าอยู่ (ถ้าพบว่า OCR อ่านผิดบ่อยขึ้น ให้ลองปรับค่านี้ให้สูงขึ้นได้)
     """
@@ -203,15 +244,59 @@ def parse_supabase_error(error_str_or_dict) -> str:
         # ถ้าเกิดแปลงร่างไม่สำเร็จ ก็ส่งกลับไปดิบๆ เพื่อป้องกันระบบพังซ้ำซ้อน
         return str(error_str_or_dict)
 
+
+def parse_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def ensure_qr_token_is_current(session_row: dict, token: str) -> None:
+    if session_row.get("status") != "open":
+        raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อไปแล้ว")
+    if session_row.get("qr_token") != token:
+        raise HTTPException(status_code=400, detail="QR Code หมดอายุแล้ว กรุณาสแกน QR ล่าสุด")
+
+    rotated_at = session_row.get("qr_token_rotated_at")
+    refresh_seconds = int(session_row.get("qr_refresh_rate_seconds") or QR_REFRESH_SECONDS)
+    if not rotated_at or datetime.now(timezone.utc) > parse_utc(rotated_at) + timedelta(seconds=refresh_seconds):
+        raise HTTPException(status_code=400, detail="QR Code หมดอายุแล้ว กรุณาสแกน QR ล่าสุด")
+
+
+def load_valid_challenge(challenge_id: str, current_user: AuthenticatedUser) -> dict:
+    response = (
+        supabase.table("attendance_checkin_challenges")
+        .select("id, session_id, student_id, expires_at, consumed_at")
+        .eq("id", challenge_id)
+        .eq("student_id", current_user.id)
+        .execute()
+    )
+    if not response.data:
+        raise HTTPException(status_code=403, detail="ไม่พบสิทธิ์เช็คชื่อจากการสแกน QR")
+    challenge = response.data[0]
+    if challenge.get("consumed_at"):
+        raise HTTPException(status_code=409, detail="สิทธิ์จาก QR นี้ถูกใช้เช็คชื่อแล้ว")
+    if datetime.now(timezone.utc) >= parse_utc(challenge["expires_at"]):
+        raise HTTPException(status_code=400, detail="สิทธิ์จาก QR หมดอายุ กรุณาสแกน QR ใหม่")
+    return challenge
+
 @app.post("/api/v1/enrollment/register-face")
 async def register_face(
-    student_id: str = Form(...),       # รับรหัสนักศึกษาแบบข้อความ (Text) จาก Form Data
-    face_image: UploadFile = File(...) # รับไฟล์รูปถ่ายเซลฟี่
+    student_id: str = Form(...),
+    face_image: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(require_roles("student", "admin")),
 ):
     try:
-        # 1. แปลงไฟล์ภาพที่อัปโหลดมาให้เป็น OpenCV (BGR)
-        face_bytes = await face_image.read()
-        img_selfie = bytes_to_cv2_image(face_bytes)
+        target_student_id = student_id.strip()
+        if current_user.role == "student":
+            if not current_user.student_id:
+                raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
+            if target_student_id != current_user.student_id:
+                raise HTTPException(status_code=403, detail="ลงทะเบียนใบหน้าได้เฉพาะบัญชีของตนเอง")
+
+        face_upload = await read_validated_image(face_image, "ภาพใบหน้า")
+        img_selfie = bytes_to_cv2_image(face_upload.content)
+        if img_selfie is None:
+            raise HTTPException(status_code=400, detail="ไฟล์ภาพใบหน้าเสียหรืออ่านไม่ได้")
 
         # 🌟 [แก้ไข] ย่อขนาดภาพก่อนส่งเข้าโมเดล เหมือนกับที่ endpoint verify ทำอยู่แล้ว
         # เหตุผล: เดิม endpoint นี้ไม่ได้ย่อขนาดภาพเลย ทำให้ภาพความละเอียดสูงมากจากกล้องมือถือ
@@ -232,19 +317,19 @@ async def register_face(
         response = supabase.table('profiles').update({
             'face_registered': True,
             'face_embedding': embedding_list
-        }).eq('student_id', student_id).execute()
+        }).eq('student_id', target_student_id).execute()
         
         # หากค้นหาเลข 13 หลักในตารางโปรไฟล์แล้วไม่เจอใครเลย
         if len(response.data) == 0:
              raise HTTPException(
                  status_code=status.HTTP_404_NOT_FOUND, 
-                 detail=f"ไม่พบข้อมูลรหัสนักศึกษา {student_id} ในระบบฐานข้อมูลโปรไฟล์ กรุณาเพิ่มชื่อในระบบก่อนลงทะเบียนใบหน้า"
+                 detail=f"ไม่พบข้อมูลรหัสนักศึกษา {target_student_id} ในระบบ กรุณาติดต่อผู้ดูแลระบบ"
              )
 
         return {
             "success": True,
-            "student_id": student_id,
-            "message": f"ลงทะเบียนใบหน้าของรหัสนักศึกษา {student_id} เข้าสู่ระบบสำเร็จเรียบร้อยแล้ว!"
+            "student_id": target_student_id,
+            "message": f"ลงทะเบียนใบหน้าของรหัสนักศึกษา {target_student_id} สำเร็จ"
         }
         
     except Exception as e:
@@ -252,46 +337,79 @@ async def register_face(
             raise e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในระบบหลังบ้าน: {str(e)}"
+            detail="เกิดข้อผิดพลาดภายในระบบ"
         )
 
 @app.post("/api/v1/attendance/verify")
 async def verify_FaceReg_OCR_attendance(
     face_image: UploadFile = File(...),
-    id_card_image: Optional[UploadFile] = File(None),
-    student_id: Optional[str] = Form(None),
-    # 🌟 [เพิ่มใหม่] รับ session_id แบบ "ไม่บังคับ" — ถ้า Frontend ยังไม่ได้ส่งมา (เช่น ตอนนี้ flow
-    # สแกน QR ก่อนหน้ายังมีบั๊กอยู่) endpoint นี้จะยังทำงานเหมือนเดิมทุกอย่าง ไม่มีอะไรพัง
-    # แต่ถ้าส่งมา จะนำไปบันทึกคู่กับประวัติ เพื่อให้หน้า "ประวัติของนักศึกษา" และรายงานของอาจารย์/แอดมิน
-    # รู้ว่าการเช็คชื่อครั้งนี้เป็นของวิชา/คาบเรียนไหน
-    session_id: Optional[str] = Form(None)
+    id_card_image: UploadFile = File(...),
+    challenge_id: str = Form(...),
+    current_user: AuthenticatedUser = Depends(require_roles("student")),
 ):
     try:
-        # ─── STEP 1: แปลงไฟล์เป็นรูปภาพ + ย่อขนาดถ้าใหญ่เกินไป (ช่วยให้ประมวลผลเร็วขึ้น) ───
-        img_live = resize_image_if_needed(bytes_to_cv2_image(await face_image.read()))
-        
-        extracted_student_id = student_id
-        
-        # ─── STEP 2: สกัดใบหน้าจากภาพสด ───
-        # ถ้ารู้รหัสนักศึกษาอยู่แล้ว (ส่งมาจาก Frontend) ก็ทำแค่สกัดใบหน้า ไม่ต้องใช้ OCR
-        emb_live = await run_in_threadpool(face_service.extract_face_embedding, img_live)
+        if not current_user.student_id:
+            raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
 
-        if not extracted_student_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="ไม่พบรหัสนักศึกษา กรุณาส่งรหัสนักศึกษา"
-            )
+        challenge = await run_in_threadpool(load_valid_challenge, challenge_id, current_user)
+        session_id = challenge["session_id"]
+        session_res = await run_in_threadpool(
+            lambda: supabase.table("attendance_sessions")
+            .select("id, course_id, status, created_at, courses(late_threshold_minutes, absent_threshold_minutes)")
+            .eq("id", session_id)
+            .execute()
+        )
+        if not session_res.data or session_res.data[0].get("status") != "open":
+            raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อแล้ว")
+        await run_in_threadpool(
+            require_course_enrollment,
+            session_res.data[0]["course_id"],
+            current_user.id,
+        )
+
+        consumed_at = datetime.now(timezone.utc).isoformat()
+        consumed = await run_in_threadpool(
+            lambda: supabase.table("attendance_checkin_challenges")
+            .update({"consumed_at": consumed_at})
+            .eq("id", challenge_id)
+            .eq("student_id", current_user.id)
+            .is_("consumed_at", "null")
+            .execute()
+        )
+        if not consumed.data:
+            raise HTTPException(status_code=409, detail="สิทธิ์จาก QR นี้ถูกใช้แล้ว กรุณาสแกน QR ใหม่")
+
+        face_upload, card_upload = await asyncio.gather(
+            read_validated_image(face_image, "ภาพใบหน้าสด"),
+            read_validated_image(id_card_image, "ภาพบัตรนักศึกษา"),
+        )
+        img_live = bytes_to_cv2_image(face_upload.content)
+        if img_live is None:
+            raise HTTPException(status_code=400, detail="ไฟล์ภาพใบหน้าสดเสียหรืออ่านไม่ได้")
+        img_live = resize_image_if_needed(img_live)
+
+        emb_live, extracted_student_id = await asyncio.gather(
+            run_in_threadpool(face_service.extract_face_embedding, img_live),
+            extract_student_id(card_upload),
+        )
+
         if emb_live is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail="ตรวจไม่พบใบหน้าในภาพสแกนสด กรุณาหันหน้าเข้าหากล้องตรงๆ"
             )
 
-        # ─── STEP 3: ดึงข้อมูล Face Embedding และ UUID จาก Supabase ───
-        # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool ด้วย เพราะ supabase-python เป็น sync client
-        # (เรียก Supabase ตรงๆ ก็ยังบล็อก event loop ได้เหมือนกัน แม้จะเป็นแค่ network call ก็ตาม)
+        if extracted_student_id != current_user.student_id:
+            raise HTTPException(
+                status_code=403,
+                detail="รหัสบนบัตรไม่ตรงกับบัญชีที่เข้าสู่ระบบ",
+            )
+
         db_response = await run_in_threadpool(
-            lambda: supabase.table('profiles').select('id, face_embedding, full_name').eq('student_id', extracted_student_id).execute()
+            lambda: supabase.table('profiles')
+            .select('id, student_id, face_embedding, full_name')
+            .eq('id', current_user.id)
+            .execute()
         )
         
         if len(db_response.data) == 0:
@@ -300,9 +418,7 @@ async def verify_FaceReg_OCR_attendance(
                 detail=f"ไม่พบรหัสนักศึกษา {extracted_student_id} ในระบบฐานข้อมูลโปรไฟล์"
             )
             
-        # 🌟 เก็บค่า UUID เอาไว้ใช้ตอนบันทึกลง attendance_records 🌟
-        profile_uuid = db_response.data[0].get('id')
-        full_name = db_response.data[0].get('full_name') or extracted_student_id 
+        profile_uuid = current_user.id
         full_name = db_response.data[0].get('full_name') or extracted_student_id
 
         
@@ -332,55 +448,36 @@ async def verify_FaceReg_OCR_attendance(
                 detail=f"การยืนยันตัวตนล้มเหลว ใบหน้าไม่ตรงกับข้อมูลที่ลงทะเบียนไว้ (Score: {round(similarity_score, 4)})"
             )
 
-        # ─── STEP 6: ผ่านเกณฑ์ -> คำนวณสถานะ (มา/สาย/ขาด) แล้วบันทึกประวัติลงตาราง attendance ───
-        # ค่าเริ่มต้น: ถือว่า "มาเรียน" (กรณีนี้ใช้เมื่อไม่มี session_id ส่งมา เช่น flow เก่าที่ยังไม่ผูก QR)
-        calculated_status = "present"
-        minutes_diff = None
-
-        if session_id:
-            # ดึงเวลาเปิดคาบ + เกณฑ์สาย/ขาดของวิชานั้น มาคำนวณสถานะจริง (ใช้ฟังก์ชันกลางร่วมกับ /checkin)
-            # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool เหมือนจุดอื่น (เหตุผลเดียวกัน: ไม่บล็อก event loop)
-            session_res = await run_in_threadpool(
-                lambda: supabase.table('attendance_sessions')
-                    .select('created_at, courses(late_threshold_minutes, absent_threshold_minutes)')
-                    .eq('id', session_id)
-                    .execute()
-            )
-
-            if session_res.data:
-                session_row = session_res.data[0]
-                course_cfg = session_row.get('courses') or {}
-                # ถ้าวิชายังไม่ได้ตั้งค่าเกณฑ์ไว้ ใช้ค่า default ที่สมเหตุสมผล (สาย 15 นาที / ขาด 45 นาที)
-                late_limit = course_cfg.get('late_threshold_minutes') or 15
-                absent_limit = course_cfg.get('absent_threshold_minutes') or 45
-                calculated_status, minutes_diff = calculate_attendance_status(
-                    session_row['created_at'], late_limit, absent_limit
-                )
-            # ถ้าไม่เจอ session (เช่น session_id ผิด/ถูกลบไปแล้ว) ปล่อยให้เป็น 'present' ตามค่าเริ่มต้น
-            # ไม่ทำให้การเช็คชื่อทั้งหมด fail เพราะใบหน้า+บัตรผ่านการยืนยันตัวตนแล้วจริงๆ
+        session_row = session_res.data[0]
+        course_cfg = session_row.get('courses') or {}
+        calculated_status, _minutes_diff = calculate_attendance_status(
+            session_row['created_at'],
+            course_cfg.get('late_threshold_minutes') or 15,
+            course_cfg.get('absent_threshold_minutes') or 45,
+        )
 
         attendance_data = {
             'student_id': profile_uuid,
             'status': calculated_status,
             'method': 'face_ocr', # face_ocr, nfc, manual 
-            'similarity_score': round(similarity_score, 4)
+            'similarity_score': round(similarity_score, 4),
+            'check_in_time': datetime.now(timezone.utc).isoformat(),
         }
-        # ใส่ session_id เข้าไปด้วยเฉพาะตอนที่มีการส่งมาจริง (กัน error ถ้า Frontend ยังไม่ได้อัปเดตให้ส่งมา)
-        if session_id:
-            attendance_data['session_id'] = session_id
+        attendance_data['session_id'] = session_id
 
         # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool เช่นกัน (จุดสุดท้ายที่เหลือของ endpoint นี้)
         await run_in_threadpool(
             lambda: supabase.table('attendance_records').insert(attendance_data).execute()
         )
-
         # คืนค่าความสำเร็จกลับไปให้หน้าบ้าน (Frontend)
         return {
             "success": True,
             "student_id": extracted_student_id, # ตรงนี้ส่งรหัส 13 หลักกลับไปให้ Frontend โชว์ได้ปกติ
             "student_name": full_name,
+            "method": "face_ocr",
             "score": round(similarity_score, 4),
             "calculated_status": calculated_status,  # 🌟 [เพิ่มใหม่] present / late / absent ให้ Frontend โชว์ได้ตรงจริง
+            "check_in_time": attendance_data["check_in_time"],
             "message": f"เช็คชื่อคุณ {full_name} สำเร็จเรียบร้อยแล้ว!"
         }
 
@@ -391,20 +488,22 @@ async def verify_FaceReg_OCR_attendance(
         # หากเกิด Error อื่นๆ ที่คาดไม่ถึง ให้แจ้งข้อผิดพลาดระบบหลังบ้าน
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"เกิดข้อผิดพลาดในระบบหลังบ้าน: {str(e)}"
+            detail="เกิดข้อผิดพลาดภายในระบบ"
         )
 
 @app.post("/api/v1/nfc/register")
-async def register_nfc_card(payload: NFCRegisterRequest):
+async def register_nfc_card(
+    payload: NFCRegisterRequest,
+    _current_user: AuthenticatedUser = Depends(require_roles("admin")),
+):
     try:
         # ทำความสะอาดข้อมูล ตัดช่องว่างหัว-ท้ายออกก่อนนับ
-        uid_clean = payload.nfc_uid.strip()
+        uid_clean = payload.nfc_uid.strip().upper()
         
-        # 🌟 เพิ่มการตรวจสอบความยาว 10 ตัวอักษร
-        if len(uid_clean) != 10:
+        if not re.fullmatch(r"[0-9A-F]{10}", uid_clean):
             raise HTTPException(
                 status_code=400, 
-                detail=f"ไม่สามารถลงทะเบียนได้: รหัส UID ต้องมีความยาว 10 หลักเท่านั้น (ค่าที่ส่งมามี {len(uid_clean)} หลัก)"
+                detail="ไม่สามารถลงทะเบียนได้: UID ต้องเป็นเลขฐานสิบหก 10 ตัว"
             )
         
         # where student_id = student_id ที่อ่านค่าได้
@@ -412,6 +511,8 @@ async def register_nfc_card(payload: NFCRegisterRequest):
             .select("student_id, nfc_uid, full_name") \
             .eq('student_id', payload.student_id) \
             .execute()
+        if not resCheck.data:
+            raise HTTPException(status_code=404, detail="ไม่พบรหัสนักศึกษาในระบบ กรุณาเพิ่มรายชื่อก่อนผูกบัตร")
         student_data = resCheck.data[0]
 
         # where nfc_uid = nfc_uid ที่อ่านค่าได้
@@ -420,16 +521,6 @@ async def register_nfc_card(payload: NFCRegisterRequest):
             .eq('nfc_uid', uid_clean) \
             .execute()
 
-        # ค้นหานักศึกษาและอัปเดตเลข nfc_uid ลงในตาราง profiles
-        # where student_id = student_id ที่อ่านค่าได้
-        response = supabase.table('profiles') \
-            .update({'nfc_uid': uid_clean}) \
-            .eq('student_id', payload.student_id) \
-            .execute()
-
-        if not resCheck.data:
-            raise HTTPException(status_code=404, detail="ไม่พบรหัสนักศึกษาในระบบ กรุณาเพิ่มรายชื่อก่อนผูกบัตร")
-        
         # รหัสนักศึกษาเลขนี้มีหมายเลข nfc_uid อยู่ในฐานข้อมูลหรือไม่ ถ้ามีคืน error ถ้าไม่มี ปล่อยผ่าน
         if student_data.get('nfc_uid'):
             raise HTTPException(
@@ -443,6 +534,11 @@ async def register_nfc_card(payload: NFCRegisterRequest):
                 status_code=409,
                 detail="บัตร NFC ใบนี้ถูกใช้งานและผูกกับนักศึกษาคนอื่นไปแล้ว กรุณาใช้บัตรใบใหม่"
             )
+
+        response = supabase.table('profiles') \
+            .update({'nfc_uid': uid_clean}) \
+            .eq('student_id', payload.student_id) \
+            .execute()
         
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบรหัสนักศึกษาในระบบ")
@@ -452,15 +548,25 @@ async def register_nfc_card(payload: NFCRegisterRequest):
     except HTTPException as ea:
         raise ea
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 @app.post("/api/v1/nfc/checkin")
-async def nfc_checkin(payload: NFCCheckInRequest):
+async def nfc_checkin(
+    payload: NFCCheckInRequest,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
+        uid_clean = payload.nfc_uid.strip().upper()
+        if not re.fullmatch(r"[0-9A-F]{10}", uid_clean):
+            raise HTTPException(status_code=400, detail="UID ของบัตรต้องเป็นเลขฐานสิบหก 10 ตัว")
+        session = await run_in_threadpool(require_owned_session, payload.session_id, current_user)
+        if session.get("status") != "open":
+            raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อแล้ว")
+
         # 1. ตรวจสอบว่าหมายเลขบัตรนี้ตรงกับโปรไฟล์ของใคร
         user_response = supabase.table('profiles') \
             .select('id', 'student_id', 'full_name') \
-            .eq('nfc_uid', payload.nfc_uid) \
+            .eq('nfc_uid', uid_clean) \
             .execute()
             
         if not user_response.data:
@@ -471,14 +577,43 @@ async def nfc_checkin(payload: NFCCheckInRequest):
             
         student = user_response.data[0]
         student_uuid = student['id'] # UUID จาก auth.users
+        await run_in_threadpool(
+            require_course_enrollment,
+            session["course_id"],
+            student_uuid,
+        )
 
-        # 2. ทำการบันทึกข้อมูลการเช็คชื่อเข้าตาราง attendance_records
+        existing_record = await run_in_threadpool(
+            lambda: supabase.table("attendance_records")
+            .select("id")
+            .eq("session_id", payload.session_id)
+            .eq("student_id", student_uuid)
+            .limit(1)
+            .execute()
+        )
+        if existing_record.data:
+            raise HTTPException(status_code=409, detail="นักศึกษาคนนี้เช็คชื่อในคาบนี้แล้ว")
+
+        course_res = await run_in_threadpool(
+            lambda: supabase.table("courses")
+            .select("late_threshold_minutes, absent_threshold_minutes")
+            .eq("id", session["course_id"])
+            .execute()
+        )
+        course_cfg = course_res.data[0] if course_res.data else {}
+        calculated_status, _minutes = calculate_attendance_status(
+            session["created_at"],
+            course_cfg.get("late_threshold_minutes") or 15,
+            course_cfg.get("absent_threshold_minutes") or 45,
+        )
+
         attendance_data = {
             "session_id": payload.session_id,
             "student_id": student_uuid,
-            "status": "present",
+            "status": calculated_status,
             "method": "nfc", # face_ocr, nfc, manual 
-            "similarity_score": None # ไม่จำเป็นต้องระบุเพราะไม่ได้ใช้ AI หน้าสแกน
+            "similarity_score": None, # ไม่จำเป็นต้องระบุเพราะไม่ได้ใช้ AI หน้าสแกน
+            "check_in_time": datetime.now(timezone.utc).isoformat(),
         }
         
         record_response = supabase.table('attendance_records') \
@@ -497,33 +632,34 @@ async def nfc_checkin(payload: NFCCheckInRequest):
             "student_info": {
                 "student_id": student['student_id'],
                 "full_name": student['full_name'],
-                "method": "nfc" # face_ocr, nfc, manual 
+                "method": "nfc",
+                "status": calculated_status,
+                "check_in_time": attendance_data["check_in_time"],
             }
         }
     except HTTPException:
         raise
     except Exception as e:
-        # 🌟 นำฟังก์ชันมาครอบตรงนี้ 🌟
-        error_message = parse_supabase_error(str(e))
-        
-        raise HTTPException(
-            status_code=500, 
-            detail=f"เกิดข้อผิดพลาด: {error_message}"
-        )
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # API สำหรับอาจารย์กดสร้างห้องเรียน (เปิด Session)
 @app.post("/api/v1/sessions/start")
-async def start_attendance_session(payload: SessionStartRequest):
+async def start_attendance_session(
+    payload: SessionStartRequest,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
+        await run_in_threadpool(require_owned_course, payload.course_id, current_user)
         # 🌟 2. เจนเนอเรต Token ก้อนแรกขึ้นมาสำหรับเซสชันนี้
         initial_token = str(uuid.uuid4())
 
         session_data = {
             "course_id": payload.course_id,
-            "opened_by": payload.teacher_id,
+            "opened_by": current_user.id,
             "status": SessionStatus.OPEN.value,
             "qr_token": initial_token,
-            "qr_refresh_rate_seconds": 60,
+            "qr_refresh_rate_seconds": QR_REFRESH_SECONDS,
+            "qr_token_rotated_at": datetime.now(timezone.utc).isoformat(),
             "grace_period_minutes": 15
         }
         
@@ -538,18 +674,25 @@ async def start_attendance_session(payload: SessionStartRequest):
             "status": "success",
             "message": "เปิดระบบเช็คชื่อสำเร็จ",
             "session_id": new_session_id,
-            "qr_token": initial_token  # ส่งกลับไปเผื่อหน้าบ้านต้องใช้สร้าง QR Code ตัวแรกทันที
+            "qr_token": initial_token,
+            "qr_refresh_rate_seconds": QR_REFRESH_SECONDS,
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ [Error] Start Session Failed: {str(e)}")
         # สามารถส่ง str(e) ไปก่อนในช่วงพัฒนานี้ เพื่อให้หน้าบ้านเห็น Error ชัดๆ
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # API สำหรับกดปิดเซสชันแบบ Manual
 @app.post("/api/v1/sessions/{session_id}/close")
-async def close_attendance_session(session_id: str):
+async def close_attendance_session(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
+        await run_in_threadpool(require_owned_session, session_id, current_user)
         # ดึงเวลาปัจจุบัน (UTC) เพื่อบันทึกเป็นเวลาปิด
         close_time = datetime.now(timezone.utc).isoformat()
         
@@ -567,53 +710,57 @@ async def close_attendance_session(session_id: str):
             "message": "ปิดระบบเช็คชื่อและบันทึกเวลาสำเร็จ",
             "closed_at": close_time
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ [Error] Close Session Failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # 🌟 [เพิ่มใหม่] API สำหรับ "หมุน" QR Token จริงๆ (แก้บั๊กเดิมที่ฝั่ง React เขียนลงคอลัมน์
 # current_token/expires_at ที่ไม่มีอยู่จริงในตาราง — ที่ถูกต้องคือต้องอัปเดตคอลัมน์ qr_token
 # เพราะ endpoint /api/v1/attendance/checkin เช็คกับคอลัมน์นี้เท่านั้น)
 # ฝั่งอาจารย์ (LiveAttendance.tsx) ควรเรียก endpoint นี้ทุกๆ qr_refresh_rate_seconds แทนการยิง Supabase ตรงๆ
 @app.post("/api/v1/sessions/{session_id}/rotate-token")
-async def rotate_session_qr_token(session_id: str, teacher_id: str):
-    # 💡 บังคับให้ส่ง teacher_id มาด้วย และเช็คว่าเป็นเจ้าของคาบนี้จริง กันคนอื่นมาหมุน token แทนอาจารย์เจ้าของวิชา
+async def rotate_session_qr_token(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
-        session_res = supabase.table('attendance_sessions') \
-            .select('id, opened_by, status') \
-            .eq('id', session_id) \
-            .execute()
-
-        if not session_res.data:
-            raise HTTPException(status_code=404, detail="ไม่พบคาบเรียนนี้ในระบบ")
-
-        session_row = session_res.data[0]
+        session_row = await run_in_threadpool(require_owned_session, session_id, current_user)
         if session_row['status'] != 'open':
             raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดไปแล้ว ไม่สามารถหมุน QR ต่อได้")
-        if session_row['opened_by'] != teacher_id:
-            raise HTTPException(status_code=403, detail="คุณไม่ใช่เจ้าของคาบเรียนนี้ ไม่มีสิทธิ์หมุน QR")
-
         new_token = str(uuid.uuid4())
+        rotated_at = datetime.now(timezone.utc).isoformat()
         supabase.table('attendance_sessions').update({
-            "qr_token": new_token
+            "qr_token": new_token,
+            "qr_token_rotated_at": rotated_at,
         }).eq('id', session_id).execute()
 
         return {
             "status": "success",
             "qr_token": new_token,
+            "qr_refresh_rate_seconds": QR_REFRESH_SECONDS,
+            "rotated_at": rotated_at,
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # 🌟 [เพิ่มใหม่] API ให้นักศึกษาตรวจสอบว่า QR ที่สแกนมายังใช้ได้อยู่ไหม ก่อนจะไปขั้นตอนสแกนหน้า
 # (แก้บั๊กเดิมที่ QRScanner.tsx ไป query ตาราง active_sessions ที่ไม่มีอยู่จริงในระบบ)
-@app.get("/api/v1/sessions/{session_id}/validate")
-async def validate_session_qr_token(session_id: str, token: str):
+@app.post("/api/v1/sessions/{session_id}/validate")
+async def validate_session_qr_token(
+    session_id: str,
+    payload: QRValidationRequest,
+    current_user: AuthenticatedUser = Depends(require_roles("student")),
+):
     try:
+        if not current_user.student_id:
+            raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
+
         session_res = supabase.table('attendance_sessions') \
-            .select('status, qr_token, courses(course_code, course_name)') \
+            .select('course_id, status, qr_token, qr_token_rotated_at, qr_refresh_rate_seconds, courses(course_code, course_name)') \
             .eq('id', session_id) \
             .execute()
 
@@ -621,10 +768,38 @@ async def validate_session_qr_token(session_id: str, token: str):
             raise HTTPException(status_code=404, detail="ไม่พบคาบเรียนนี้ในระบบ (QR อาจไม่ถูกต้อง)")
 
         session_row = session_res.data[0]
-        if session_row['status'] != 'open':
-            raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อไปแล้ว")
-        if session_row['qr_token'] != token:
-            raise HTTPException(status_code=400, detail="QR Code หมดอายุแล้ว กรุณาสแกน QR อันล่าสุดใหม่อีกครั้ง")
+        ensure_qr_token_is_current(session_row, payload.token)
+        await run_in_threadpool(require_course_enrollment, session_row["course_id"], current_user.id)
+
+        existing_record = (
+            supabase.table("attendance_records")
+            .select("id")
+            .eq("session_id", session_id)
+            .eq("student_id", current_user.id)
+            .execute()
+        )
+        if existing_record.data:
+            raise HTTPException(status_code=409, detail="คุณเช็คชื่อในคาบนี้แล้ว")
+
+        recent_challenge = (
+            supabase.table("attendance_checkin_challenges")
+            .select("id")
+            .eq("student_id", current_user.id)
+            .gte("created_at", (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat())
+            .limit(1)
+            .execute()
+        )
+        if recent_challenge.data:
+            raise HTTPException(status_code=429, detail="สแกน QR ถี่เกินไป กรุณารอสักครู่")
+
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=QR_CHALLENGE_SECONDS)
+        challenge_response = supabase.table("attendance_checkin_challenges").insert({
+            "session_id": session_id,
+            "student_id": current_user.id,
+            "expires_at": expires_at.isoformat(),
+        }).execute()
+        if not challenge_response.data:
+            raise HTTPException(status_code=500, detail="ไม่สามารถสร้างสิทธิ์เช็คชื่อจาก QR ได้")
 
         course_info = session_row.get('courses') or {}
         return {
@@ -632,20 +807,53 @@ async def validate_session_qr_token(session_id: str, token: str):
             "session_id": session_id,
             "course_code": course_info.get('course_code'),
             "course_name": course_info.get('course_name'),
+            "challenge_id": challenge_response.data[0]["id"],
+            "challenge_expires_at": expires_at.isoformat(),
+            "challenge_ttl_seconds": QR_CHALLENGE_SECONDS,
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
+
+
+@app.get("/api/v1/sessions/{session_id}/checkins")
+async def get_live_session_checkins(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
+    await run_in_threadpool(require_owned_session, session_id, current_user)
+    response = await run_in_threadpool(
+        lambda: supabase.table("attendance_records")
+        .select("id, check_in_time, status, method, profiles(student_id, full_name)")
+        .eq("session_id", session_id)
+        .order("check_in_time", desc=True)
+        .execute()
+    )
+    checkins = []
+    for row in response.data or []:
+        profile = row.get("profiles") or {}
+        checkins.append({
+            "id": row["id"],
+            "check_in_time": row["check_in_time"],
+            "status": row.get("status"),
+            "method": row.get("method"),
+            "student_id": profile.get("student_id") or "-",
+            "full_name": profile.get("full_name") or "ไม่ทราบชื่อ",
+        })
+    return {"status": "success", "checkins": checkins, "count": len(checkins)}
 
 # 1. API สำหรับกดบันทึกเพิ่มรายวิชาใหม่ลงตาราง courses
 @app.post("/api/v1/courses")
-async def create_course(payload: CourseCreateRequest):
+async def create_course(
+    payload: CourseCreateRequest,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
         course_data = {
             "course_code": payload.course_code.strip(),
             "course_name": payload.course_name.strip(),
-            "teacher_id": payload.teacher_id,
+            "teacher_id": current_user.id,
             "section": payload.section,
             "year": payload.year,
             "semester": payload.semester
@@ -655,21 +863,29 @@ async def create_course(payload: CourseCreateRequest):
                 "course": response.data[0]}
     except Exception as e:
         # 📝 จับและส่ง detail ของ Error ออกไปฟ้องที่หน้าจอ
-        raise HTTPException(status_code=500, detail=f"Supabase POST Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="ไม่สามารถสร้างรายวิชาได้") from e
 
-@app.get("/api/v1/courses")
+@app.get(
+    "/api/v1/courses",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def get_all_courses():
     try:
         response = supabase.table('courses').select('*').execute()
         return {"status": "success", "courses": response.data}
     except Exception as e:
         print(f"DEBUG ERROR: {str(e)}") 
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # 2. API สำหรับดึงรายวิชาทั้งหมดของอาจารย์ท่านนั้นมาแสดงผลบน Dashboard
 @app.get("/api/v1/courses/{teacher_id}")
-async def get_courses_by_teacher(teacher_id: str):
+async def get_courses_by_teacher(
+    teacher_id: str,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
+        if current_user.role != "admin" and teacher_id != current_user.id:
+            raise HTTPException(status_code=403, detail="ดูรายวิชาได้เฉพาะบัญชีของตนเอง")
         # ลองดึงข้อมูลแบบตรงไปตรงมา
         response = supabase.table('courses') \
             .select('*') \
@@ -677,17 +893,28 @@ async def get_courses_by_teacher(teacher_id: str):
             .execute()
             
         return {"status": "success", "courses": response.data}
+    except HTTPException:
+        raise
     except Exception as e:
         # 🌟 ตรงนี้สำคัญ: พิมพ์ Error ลงใน Terminal ของหลังบ้านให้เราเห็นด้วย
         print(f"DEBUG ERROR: {str(e)}") 
         # ส่ง Error กลับไปที่หน้าเว็บให้ชัดเจน
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # 3. API บันทึกการตั้งค่าเกณฑ์วิชา
-@app.put("/api/v1/courses/{course_id}/settings")
-async def update_course_settings(course_id: str, payload: CourseSettingsRequest, admin_id: str = None):
-    # 💡 รับ admin_id เพิ่มมาเป็น Query Parameter (?admin_id=...)
+@app.put(
+    "/api/v1/courses/{course_id}/settings",
+)
+async def update_course_settings(
+    course_id: str,
+    payload: CourseSettingsRequest,
+    current_user: Annotated[
+        AuthenticatedUser,
+        Depends(require_roles("teacher", "admin")),
+    ],
+):
     try:
+        await run_in_threadpool(require_owned_course, course_id, current_user)
         response = supabase.table('courses').update({
             "total_sessions": payload.total_sessions,
             "late_threshold_minutes": payload.late_threshold_minutes,
@@ -698,25 +925,36 @@ async def update_course_settings(course_id: str, payload: CourseSettingsRequest,
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
             
-        # 🌟 บันทึก Audit Log 
-        if admin_id:
+        # Only the authenticated admin identity can be recorded as an admin actor.
+        if current_user.role == "admin":
             supabase.table("audit_logs").insert({
-                "admin_id": admin_id,
+                "admin_id": current_user.id,
                 "action": "UPDATE_COURSE_SETTINGS",
                 "target_type": "courses",
                 "target_id": course_id,
-                "details": payload.dict() # บันทึกเกณฑ์ใหม่ลงไปใน details เลย
+                "details": payload.model_dump(),
             }).execute()
 
         return {"status": "success", "message": "อัปเดตเกณฑ์สำเร็จ"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # 4. API แก้ไขข้อมูลรายวิชา (Edit)
-@app.put("/api/v1/courses/{course_id}")
-async def update_course_details(course_id: str, payload: CourseUpdateRequest, admin_id: str = None):
-     # 💡 รับ admin_id เพิ่มมาเป็น Query Parameter (?admin_id=...)
+@app.put(
+    "/api/v1/courses/{course_id}",
+)
+async def update_course_details(
+    course_id: str,
+    payload: CourseUpdateRequest,
+    current_user: Annotated[
+        AuthenticatedUser,
+        Depends(require_roles("teacher", "admin")),
+    ],
+):
     try:
+        await run_in_threadpool(require_owned_course, course_id, current_user)
         response = supabase.table('courses').update({
             "course_code": payload.course_code.strip(),
             "course_name": payload.course_name.strip(),
@@ -728,86 +966,47 @@ async def update_course_details(course_id: str, payload: CourseUpdateRequest, ad
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
             
-        # 🌟 บันทึก Audit Log 
-        if admin_id:
-             supabase.table("audit_logs").insert({
-                "admin_id": admin_id,
+        if current_user.role == "admin":
+            supabase.table("audit_logs").insert({
+                "admin_id": current_user.id,
                 "action": "UPDATE_COURSE_DETAILS",
                 "target_type": "courses",
                 "target_id": course_id,
-                "details": payload.dict() # บันทึกข้อมูลที่ถูกแก้ลงไปใน details
+                "details": payload.model_dump(),
             }).execute()
 
         return {"status": "success"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-# 5. API ลบรายวิชา (Delete)
-@app.delete("/api/v1/courses/{course_id}")
-async def delete_course(course_id: str):
-    try:
-        response = supabase.table('courses').delete().eq('id', course_id).execute()
-        # หมายเหตุ: หากฐานข้อมูลมีข้อมูลตารางอื่นผูกอยู่ ต้องแน่ใจว่าตั้งค่า ON DELETE CASCADE ไว้ที่ Supabase
-        return {"status": "success", "message": "ลบรายวิชาเรียบร้อยแล้ว"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="ไม่สามารถลบวิชาได้ เนื่องจากอาจมีประวัติการเช็คชื่อผูกอยู่")
-
-@router.post("/api/v1/attendance/checkin")
-async def student_check_in(payload: CheckInPayload):
-    # ⚠️ [คำเตือนสำคัญ] endpoint นี้ยืนยันแค่ "QR Token ตรงกันไหม" เท่านั้น
-    # ไม่มีการตรวจสอบตัวตนของนักศึกษาเลย (ไม่เช็คใบหน้า/บัตร) รับ student_id ตรงๆ จาก Frontend
-    # ตอนนี้ยังไม่มีหน้าจอไหนในระบบเรียกใช้ endpoint นี้จริง (ฝั่งนักศึกษาใช้ /api/v1/attendance/verify
-    # ที่มีการสแกนหน้า+บัตรแทน) ถ้าจะนำมาใช้งานจริงในอนาคต ควรเพิ่มการยืนยันตัวตนก่อนเสมอ
-    # ไม่เช่นนั้นใครก็ตามที่รู้ QR token ปัจจุบันจะเช็คชื่อแทนคนอื่นได้
-    try:
-        # 5.1. ตรวจสอบว่า เซสชันนี้มีอยู่จริง, เปิดอยู่ และ QR Token ตรงกันปัจจุบันหรือไม่
-        session_res = supabase.table('attendance_sessions') \
-            .select('*, courses(*)') \
-            .eq('id', payload.session_id) \
-            .eq('status', 'open') \
-            .execute()
-            
-        if not session_res.data:
-            raise HTTPException(status_code=400, detail="QR Code หมดอายุ หรือห้องเรียนปิดระบบแล้ว")
-            
-        session_info = session_res.data[0]
-        course_config = session_info['courses']  # ดึงข้อมูลเกณฑ์ที่อาจารย์ตั้งค่าไว้จากตารางผูก
-        
-        # ตรวจสอบ Token ว่าตรงกับที่หมุนอยู่ปัจจุบันไหม
-        if session_info['qr_token'] != payload.qr_token:
-            raise HTTPException(status_code=400, detail="Dynamic QR Code ไม่ถูกต้องหรือหมดอายุแล้ว")
-            
-        # 5.2 - 5.3. คำนวณสถานะ (มา/สาย/ขาด) ด้วยฟังก์ชันกลาง (ใช้ร่วมกับ /api/v1/attendance/verify)
-        late_limit = course_config['late_threshold_minutes']       # ค่าปกติคือ 15
-        absent_limit = course_config['absent_threshold_minutes']   # ค่าปกติคือ 45
-        calculated_status, minutes_diff = calculate_attendance_status(
-            session_info['created_at'], late_limit, absent_limit
-        )
-            
-        # 5.4. บันทึกประวัติการเช็คชื่อลงตารางประวัตินักศึกษา (attendance_records)
-        attendance_data = {
-            "session_id": payload.session_id,
-            "student_id": payload.student_id,
-            "check_in_time": datetime.now(timezone.utc).isoformat(),
-            "status": calculated_status  # เก็บเป็น 'present', 'late', หรือ 'absent'
-        }
-        
-        record_res = supabase.table('attendance_records').insert(attendance_data).execute()
-        
-        return {
-            "status": "success",
-            "calculated_status": calculated_status,
-            "minutes_diff": minutes_diff
-        }
-        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/api/v1/courses/{course_id}/attendance-summary")
-async def get_course_attendance_summary(course_id: str):
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
+    
+# 5. API ลบรายวิชา (Delete)
+@app.delete("/api/v1/courses/{course_id}")
+async def delete_course(
+    course_id: str,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
     try:
+        course = await run_in_threadpool(require_owned_course, course_id, current_user)
+        require_course_delete_permission(course, current_user)
+        response = supabase.table('courses').delete().eq('id', course_id).execute()
+        # หมายเหตุ: หากฐานข้อมูลมีข้อมูลตารางอื่นผูกอยู่ ต้องแน่ใจว่าตั้งค่า ON DELETE CASCADE ไว้ที่ Supabase
+        return {"status": "success", "message": "ลบรายวิชาเรียบร้อยแล้ว"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="ไม่สามารถลบวิชาได้ เนื่องจากอาจมีประวัติการเช็คชื่อผูกอยู่")
+
+@router.get(
+    "/api/v1/courses/{course_id}/attendance-summary",
+)
+async def get_course_attendance_summary(
+    course_id: str,
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
+    try:
+        await run_in_threadpool(require_owned_course, course_id, current_user)
         # 1. ดึงข้อมูลเกณฑ์ของวิชานี้ออกมาดู
         course_res = supabase.table('courses').select('*').eq('id', course_id).execute()
         if not course_res.data:
@@ -863,8 +1062,15 @@ async def get_course_attendance_summary(course_id: str):
             },
             "report": final_report
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
+
+# Include this router only after all @router operations have been registered.
+# FastAPI copies a router's route table at include time.
+app.include_router(router)
+
 
 if __name__ == "__main__":
     import uvicorn

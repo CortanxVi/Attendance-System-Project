@@ -1,11 +1,4 @@
-import os
-from supabase import create_client, Client
-from dotenv import load_dotenv
-
-load_dotenv()
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(supabase_url, supabase_key)
+from core.config import supabase_db as supabase
 
 class AttendanceExportService:
     def get_export_data(self, course_id: str):
@@ -40,10 +33,24 @@ class AttendanceExportService:
             .order("created_at", desc=False) \
             .execute()
 
+        enrollments_res = supabase.table("enrollments") \
+            .select("profiles(student_id, full_name)") \
+            .eq("course_id", course_id) \
+            .execute()
+        students = [
+            {
+                "student_id": row["profiles"]["student_id"],
+                "full_name": row["profiles"]["full_name"],
+            }
+            for row in (enrollments_res.data or [])
+            if row.get("profiles") and row["profiles"].get("student_id")
+        ]
+
         return {
             "course": course,
             "records": export_data,
-            "sessions": sessions_res.data
+            "sessions": sessions_res.data,
+            "students": students,
         }, None
 
 export_service = AttendanceExportService()

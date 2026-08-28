@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
-import { compressImage, base64ToFile } from '../../utils/imageUtils';
+import { compressImage, base64ToFile, prepareStudentCardImage } from '../../utils/imageUtils';
 import { faceService } from '../../services/api';
+import axios from 'axios';
+import { useNotification } from '../../components/notifications/NotificationProvider';
 
 export default function StudentRegister() {
+  const { notify } = useNotification();
   const [step, setStep] = useState<1 | 2>(1);
   const [studentId, setStudentId] = useState<string>('');
   
@@ -26,44 +29,29 @@ export default function StudentRegister() {
     setOcrLoading(true);
     
     try {
-      // สามารถบีบอัดภาพบัตรก่อนส่งไปทำ OCR ได้ (ป้องกันภาพใหญ่เกิน)
-      const compressedFile = await compressImage(file, 1000, 0.8);
+      // ใช้กติกาเดียวกับขั้นตอนเช็คชื่อ: หมุนตาม EXIF, คงสัดส่วน,
+      // ไม่ตัดภาพ และเข้ารหัส JPEG คุณภาพสูงก่อนส่งให้ Light OCR
+      const preparedCard = await prepareStudentCardImage(file);
       
       const formData = new FormData();
-      formData.append('image', compressedFile);
+      formData.append('image', preparedCard.file);
       
-      const response = await fetch('http://localhost:3001/ocr', {
-        method: 'POST',
-        body: formData,
+      const response = await axios.post('/api/v1/ocr/student-card', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
-      
-      if (!response.ok) {
-        throw new Error('ระบบอ่านบัตรมีปัญหา กรุณาลองใหม่');
-      }
-      
-      const result = await response.json();
+      const result = response.data;
       
       if (result.foundId) {
         setStudentId(result.foundId);
         setStep(2);
         startCamera();
       } else {
-        // ให้ผู้ใช้กรอกรหัสด้วยตัวเอง
-        const manualId = window.prompt(
-          `AI อ่านรูปบัตรไม่สำเร็จ (ไม่พบเลข 13 หลัก)\n\nกรุณากรอกรหัสนักศึกษา 13 หลักของคุณด้วยตนเอง:`
-        );
-        const cleanId = manualId?.replace(/[\s-]/g, '');
-        if (cleanId && cleanId.length === 13) {
-          setStudentId(cleanId);
-          setStep(2);
-          startCamera();
-        } else if (cleanId) {
-          setErrorMsg('รหัสนักศึกษาไม่ถูกต้อง (ต้องมี 13 หลัก)');
-        }
+        setErrorMsg('Light OCR อ่านรหัส 13 หลักไม่ได้ กรุณาถ่ายบัตรใหม่ให้ชัด');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('OCR Error:', err);
-      setErrorMsg(err.message || 'เกิดข้อผิดพลาดในการวิเคราะห์บัตร');
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      setErrorMsg(typeof detail === 'string' ? detail : err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการวิเคราะห์บัตร');
     } finally {
       setOcrLoading(false);
       e.target.value = '';
@@ -120,23 +108,15 @@ export default function StudentRegister() {
       // ปิดกล้องหลังถ่ายเสร็จ
       stopCamera();
       
-      // ส่งรูปภาพพร้อมรหัสนักศึกษาไปที่ Backend
-      const formData = new FormData();
-      formData.append('student_id', studentId);
-      formData.append('face_image', compressedFace);
-      
-      // สมมติว่า api/v1/enrollment/register-face ใช้ axios ใน backend
-      // แต่หน้า studentHome ใช้ faceService เดี๋ยวเราลองปรับนิดหน่อย 
-      // ใน Demo0.2 มีฟังก์ชัน faceService.registerFace(studentId, file)
       const res = await faceService.registerFace(studentId, compressedFace);
       
       if (res.success || res.message) {
-        alert('ลงทะเบียนใบหน้าสำเร็จเรียบร้อย!');
+        notify('ลงทะเบียนใบหน้าสำเร็จเรียบร้อย', 'success');
         navigate('/student'); // กลับไปหน้าโฮมนักศึกษา
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Register Error:', err);
-      setErrorMsg(err.message || 'ไม่สามารถลงทะเบียนใบหน้าได้');
+      setErrorMsg(err instanceof Error ? err.message : 'ไม่สามารถลงทะเบียนใบหน้าได้');
       // หากพัง ให้เปิดกล้องใหม่
       startCamera();
     } finally {
@@ -152,7 +132,7 @@ export default function StudentRegister() {
       </div>
 
       {errorMsg && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3">
+        <div id="registration-card-error" role="alert" className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3">
           <AlertCircle className="shrink-0 mt-0.5" size={20} />
           <span>{errorMsg}</span>
         </div>
@@ -166,9 +146,10 @@ export default function StudentRegister() {
           <div className="text-center">
             <h2 className="text-xl font-bold text-gray-800">ขั้นตอนที่ 1: อัปโหลดบัตรนักศึกษา</h2>
             <p className="text-gray-500 mt-1">ระบบ AI จะดึงรหัสนักศึกษา 13 หลักให้อัตโนมัติ</p>
+            <p id="registration-card-help" className="mt-1 text-xs text-gray-500">รองรับ JPEG/PNG และปรับรูปให้เหมาะกับ Light OCR อัตโนมัติ</p>
           </div>
           
-          <label className="relative cursor-pointer w-full">
+          <label className={`relative w-full rounded-xl focus-within:ring-2 focus-within:ring-orange-600 ${ocrLoading ? 'cursor-wait' : 'cursor-pointer'}`}>
             <div className={`w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-3 transition-colors ${ocrLoading ? 'bg-gray-50 border-gray-300' : 'border-orange-300 bg-orange-50 hover:bg-orange-100'}`}>
               {ocrLoading ? (
                 <>
@@ -184,10 +165,12 @@ export default function StudentRegister() {
             </div>
             <input 
               type="file" 
-              accept="image/*" 
-              className="hidden" 
+              accept="image/jpeg,image/png"
+              className="sr-only"
               onChange={handleIdCardUpload}
               disabled={ocrLoading}
+              aria-describedby={errorMsg ? 'registration-card-help registration-card-error' : 'registration-card-help'}
+              aria-invalid={Boolean(errorMsg)}
             />
           </label>
         </div>

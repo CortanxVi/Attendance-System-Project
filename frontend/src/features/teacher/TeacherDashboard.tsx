@@ -1,8 +1,7 @@
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect } from 'react';
 import * as Lucide from 'lucide-react';
 import axios from 'axios';
 import { supabase } from '../../lib/supabaseClient';
-import { RoleContext } from '../../App';
 import LiveAttendance from './LiveAttendance'; 
 import NFCManager from './NFCManager';
 import LiveCheckInFeed from './LiveCheckInFeed';
@@ -10,6 +9,8 @@ import AddCourseModal from './AddCourseModal';
 import EditCourseModal from './EditCourseModal';
 import CourseSettingsModal from './CourseSettings';
 import CourseAttendanceView from './CourseAttendanceView';
+import { useNotification } from '../../components/notifications/NotificationProvider';
+import ConfirmDialog from '../../components/overlays/ConfirmDialog';
 
 // 🌟 Interface มารองรับฟิลด์เกณฑ์การตั้งค่าที่จะดึงมาจากฐานข้อมูล
 interface Course {
@@ -26,7 +27,7 @@ interface Course {
 }
 
 export default function TeacherDashboard() {
-  const roleContext = useContext(RoleContext);
+  const { notify } = useNotification();
   // 🌟 State ของระบบเช็คชื่อ
   const [isLive, setIsLive] = useState(false); 
   const [isNfcOpen, setIsNfcOpen] = useState(false); 
@@ -41,7 +42,6 @@ export default function TeacherDashboard() {
   // 🌟 State ทักทายชื่ออาจารย์ และสลับมุมมอง
   const [teacherName, setTeacherName] = useState<string>('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [isAdminMode, setIsAdminMode] = useState(false);
 
   // 🌟 State สำหรับการแก้ไข
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -55,9 +55,13 @@ export default function TeacherDashboard() {
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
   const [selectedCourseForView, setSelectedCourseForView] = useState<Course | null>(null);
 
-  // 💡 UUID จำลองของอาจารย์ (ใส่ของจริงของคุณตรงนี้)
-  const mockTeacherId = "de9c3f99-5867-4340-a813-1b8dc447f9cc"; 
-  const [teacherId, setTeacherId] = useState<string>(mockTeacherId);
+  const [teacherId, setTeacherId] = useState<string>('');
+  const [pendingAction, setPendingAction] = useState<
+    | { type: 'close-session' }
+    | { type: 'delete-course'; courseId: string; courseCode: string }
+    | null
+  >(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   useEffect(() => {
     const resolveTeacherId = async () => {
@@ -70,21 +74,18 @@ export default function TeacherDashboard() {
           // 🌟 ดึงชื่ออาจารย์มาแสดงผล
           const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', session.user.id).single();
           if (profile?.full_name) setTeacherName(profile.full_name);
-        } else {
-          fetchCourses(mockTeacherId, isAdminMode);
         }
       } catch (error) {
-        fetchCourses(mockTeacherId, isAdminMode);
+        console.error('Unable to resolve teacher profile', error);
       }
     };
     resolveTeacherId();
-  }, [isAdminMode]);
+  }, []);
 
-  const fetchCourses = async (tId: string, adminMode = isAdminMode) => {
+  const fetchCourses = async (tId: string) => {
     try {
       setIsLoading(true);
-      const url = adminMode ? `/api/v1/courses` : `/api/v1/courses/${tId}`;
-      const response = await axios.get(url);
+      const response = await axios.get(`/api/v1/courses/${tId}`);
       if (response.data.status === 'success') {
         setCourses(response.data.courses);
       }
@@ -101,55 +102,79 @@ export default function TeacherDashboard() {
       setCurrentSelectedCourseCode(courseCode);
       setCurrentSelectedCourseName(courseName);
       const response = await axios.post('/api/v1/sessions/start', {
-        course_id: courseId,
-        teacher_id: teacherId
+        course_id: courseId
       });
 
       if (response.data.status === 'success') {
         setActiveSessionId(response.data.session_id);
       }
     } catch (error: any) {
-      alert(`ไม่สามารถเปิดห้องเรียนได้: ${error.response?.data?.detail || "Error"}`);
+      notify(`ไม่สามารถเปิดห้องเรียนได้: ${error.response?.data?.detail || 'เกิดข้อผิดพลาด'}`, 'error');
     } finally {
       setIsCreatingSession(false);
     }
   };
 
-  const handleEndSession = async () => {
+  const handleEndSession = () => {
     if (!activeSessionId) return;
-    if (window.confirm("คุณต้องการปิดคลาสและบันทึกเวลาสิ้นสุดการเช็คชื่อใช่หรือไม่?")) {
+    setPendingAction({ type: 'close-session' });
+  };
+
+  const confirmAction = async () => {
+    if (!pendingAction) return;
+    setActionBusy(true);
+    if (pendingAction.type === 'close-session') {
+      if (!activeSessionId) {
+        setPendingAction(null);
+        setActionBusy(false);
+        return;
+      }
       try {
         await axios.post(`/api/v1/sessions/${activeSessionId}/close`);
         setActiveSessionId(null);
         setIsLive(false);
         setIsNfcOpen(false);
-        alert("ปิดระบบและบันทึกเวลาลงฐานข้อมูลเรียบร้อยแล้ว");
+        notify('ปิดระบบและบันทึกเวลาลงฐานข้อมูลเรียบร้อยแล้ว', 'success');
       } catch (error) {
-        alert("เกิดข้อผิดพลาดในการเชื่อมต่อเพื่อปิดเซสชัน");
+        notify('เกิดข้อผิดพลาดในการเชื่อมต่อเพื่อปิดเซสชัน', 'error');
+      }
+    } else {
+      try {
+        await axios.delete(`/api/v1/courses/${pendingAction.courseId}`);
+        notify('ลบรายวิชาสำเร็จ', 'success');
+        await fetchCourses(teacherId);
+      } catch (error: any) {
+        notify(`ลบไม่สำเร็จ: ${error.response?.data?.detail || 'ติดข้อจำกัดด้านฐานข้อมูล'}`, 'error');
       }
     }
+    setPendingAction(null);
+    setActionBusy(false);
   };
 
   // 🌟 ฟังก์ชันลบรายวิชา
-  const handleDeleteCourse = async (courseId: string, courseCode: string) => {
-    if (window.confirm(`⚠️ คุณแน่ใจหรือไม่ว่าต้องการลบรายวิชา ${courseCode}?\n\nการลบวิชานี้อาจส่งผลต่อข้อมูลประวัติการเช็คชื่อทั้งหมดที่เกี่ยวข้อง หากลบแล้วจะไม่สามารถกู้คืนได้!`)) {
-      try {
-        await axios.delete(`/api/v1/courses/${courseId}`);
-        alert("✅ ลบรายวิชาสำเร็จ");
-        fetchCourses(teacherId);
-      } catch (error: any) {
-        alert(`❌ ลบไม่สำเร็จ: ${error.response?.data?.detail || "ติดข้อจำกัดด้านฐานข้อมูล"}`);
-      }
-    }
+  const handleDeleteCourse = (courseId: string, courseCode: string) => {
+    setPendingAction({ type: 'delete-course', courseId, courseCode });
   };
 
   return (
     <div className="flex flex-col h-full bg-transparent">
+      <ConfirmDialog
+        open={Boolean(pendingAction)}
+        title={pendingAction?.type === 'close-session' ? 'ปิดการเช็คชื่อ' : 'ลบรายวิชา'}
+        description={pendingAction?.type === 'close-session'
+          ? 'ต้องการปิดคลาสและบันทึกเวลาสิ้นสุดการเช็คชื่อหรือไม่?'
+          : `ต้องการลบรายวิชา ${pendingAction?.type === 'delete-course' ? pendingAction.courseCode : ''} หรือไม่?\nข้อมูลที่เกี่ยวข้องอาจไม่สามารถกู้คืนได้`}
+        confirmLabel={pendingAction?.type === 'close-session' ? 'ปิดการเช็คชื่อ' : 'ลบรายวิชา'}
+        danger
+        busy={actionBusy}
+        onConfirm={confirmAction}
+        onCancel={() => setPendingAction(null)}
+      />
       
       {/* โซน Modals ต่างๆ (โค้ดเดิม) */}
-      {isLive && activeSessionId && <LiveAttendance courseCode={currentSelectedCourseCode} courseName={currentSelectedCourseName} activeSessionId={activeSessionId} teacherId={teacherId} onClose={() => setIsLive(false)} />}
+      {isLive && activeSessionId && <LiveAttendance courseCode={currentSelectedCourseCode} courseName={currentSelectedCourseName} activeSessionId={activeSessionId} onClose={() => setIsLive(false)} />}
       {isNfcOpen && activeSessionId && <NFCManager defaultCourseCode={currentSelectedCourseCode} activeSessionId={activeSessionId} onClose={() => setIsNfcOpen(false)} />}
-      {isAddModalOpen && <AddCourseModal teacherId={teacherId} onClose={() => setIsAddModalOpen(false)} onSuccess={() => fetchCourses(teacherId)} />}
+      {isAddModalOpen && <AddCourseModal onClose={() => setIsAddModalOpen(false)} onSuccess={() => fetchCourses(teacherId)} />}
       
       {/* 🌟 Modal แก้ไขรายวิชา */}
       {isEditModalOpen && selectedCourseForEdit && (
@@ -181,20 +206,6 @@ export default function TeacherDashboard() {
             <p className="text-gray-500 mt-1">จัดการรายวิชาและเปิดระบบเช็คชื่อนักศึกษา</p>
           </div>
           <div className="flex items-center gap-3 w-full md:w-auto">
-            <button 
-              onClick={() => setIsAdminMode(!isAdminMode)}
-              className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-medium transition-all shadow-sm ${isAdminMode ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200'}`}
-            >
-              <Lucide.ShieldCheck size={18} />
-              {isAdminMode ? 'โหมดแอดมิน (รายวิชาทั้งหมด)' : 'สลับเป็นโหมดแอดมิน'}
-            </button>
-            <button 
-              onClick={() => roleContext?.setImpersonatedRole('student')}
-              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-100 hover:bg-orange-200 text-orange-700 px-5 py-2.5 rounded-xl font-medium transition-all shadow-sm"
-            >
-              <Lucide.GraduationCap size={18} />
-              จำลองสิทธิ์นักศึกษา
-            </button>
             {/* 🌟 ปุ่มสลับมุมมอง Grid/List */}
             <div className="flex bg-white border border-gray-200 p-1 rounded-xl shadow-sm">
               <button onClick={() => setViewMode('grid')} className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-orange-100 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`} title="Grid View"><Lucide.Grid size={20} /></button>

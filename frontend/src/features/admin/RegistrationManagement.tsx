@@ -120,7 +120,7 @@ export default function RegistrationManagement() {
         <div className="p-8">
           {/* 📸 TAB 1: FACE REGISTRATION */}
           {activeTab === 'face' && (
-            <form onSubmit={handleFaceSubmit} className="space-y-6 animate-fade-in">
+            <form onSubmit={handleFaceSubmit} noValidate className="space-y-6 animate-fade-in">
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">1. รหัสนักศึกษา / พนักงาน</label>
                 <input 
@@ -165,7 +165,7 @@ export default function RegistrationManagement() {
 
           {/* 💳 TAB 2: NFC REGISTRATION */}
           {activeTab === 'nfc' && (
-            <form onSubmit={handleNfcSubmit} className="space-y-6 animate-fade-in">
+            <form onSubmit={handleNfcSubmit} noValidate className="space-y-6 animate-fade-in">
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">1. รหัสนักศึกษา / พนักงาน</label>
                 <input 

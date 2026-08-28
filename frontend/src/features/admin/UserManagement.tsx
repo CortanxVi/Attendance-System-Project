@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { supabase } from "../../lib/supabaseClient";
 import {
   ShieldAlert,
   User,
-  ShieldCheck,
   Edit,
   Trash2,
   X,
 } from "lucide-react";
+import { useNotification } from '../../components/notifications/NotificationProvider';
+import ConfirmDialog from '../../components/overlays/ConfirmDialog';
+import { useTemporaryAdmin } from '../../contexts/TemporaryAdminContext';
 
 // 🌟 1. Interface สำหรับข้อมูลผู้ใช้ที่ดึงมาจาก API
 interface UserProfile {
@@ -18,6 +19,8 @@ interface UserProfile {
   role: string;
   face_registered: boolean;
   nfc_uid: string | null;
+  academic_year?: number | null;
+  class_level?: string | null;
 }
 
 // 🌟 2. Interface สำหรับ Form Data (ข้อมูลในช่องกรอก)
@@ -25,17 +28,24 @@ interface UserFormData {
   student_id: string;
   full_name: string;
   role: string;
+  academic_year: string;
+  class_level: string;
 }
 
-// 🌟 3. Interface สำหรับ Payload ที่จะส่งไป API หลังบ้าน (ใช้ Partial เพื่อให้ฟิลด์บางตัวเป็น Optional ได้)
-interface UpdateUserPayload extends Partial<UserFormData> {
-  admin_id: string; // บังคับว่าต้องมี admin_id เสมอเพื่อเอาไปบันทึก Log
-}
+// Backend derives the admin actor from the verified JWT, never from this payload.
+type UpdateUserPayload = {
+  student_id?: string;
+  full_name?: string;
+  role?: string;
+  academic_year?: number | null;
+  class_level?: string | null;
+};
 
 export default function UserManagement() {
+  const { notify } = useNotification();
+  const temporaryAdmin = useTemporaryAdmin();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [adminId, setAdminId] = useState("");
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -45,22 +55,23 @@ export default function UserManagement() {
     student_id: "",
     full_name: "",
     role: "student",
+    academic_year: "",
+    class_level: "",
   });
   
   const [originalData, setOriginalData] = useState<UserFormData>({
     student_id: "",
     full_name: "",
     role: "student",
+    academic_year: "",
+    class_level: "",
   });
   
   const [formSubmitLoading, setFormSubmitLoading] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user?.id) {
-        setAdminId(session.user.id);
-      }
-    });
     fetchUsers();
   }, []);
 
@@ -83,6 +94,8 @@ export default function UserManagement() {
       student_id: user.student_id || "",
       full_name: user.full_name || "",
       role: user.role,
+      academic_year: user.academic_year?.toString() || "",
+      class_level: user.class_level || "",
     };
     
     setFormData(initialData);
@@ -95,19 +108,16 @@ export default function UserManagement() {
     
     // 🌟 ดักจับ Error กรณีไม่มี ID
     if (!selectedUserId) {
-      alert("เกิดข้อผิดพลาด: ไม่พบ ID ของผู้ใช้งาน");
+      notify('เกิดข้อผิดพลาด: ไม่พบ ID ของผู้ใช้งาน', 'error');
       return;
     }
 
     if (!formData.full_name.trim()) {
-      alert("กรุณากรอกชื่อ-นามสกุล");
+      notify('กรุณากรอกชื่อ-นามสกุล', 'error');
       return;
     }
 
-    // 🌟 จัดเตรียม Payload โดยบังคับใส่ admin_id เสมอ
-    const payload: UpdateUserPayload = {
-      admin_id: adminId,
-    };
+    const payload: UpdateUserPayload = {};
 
     let hasChanges = false;
 
@@ -124,6 +134,14 @@ export default function UserManagement() {
       payload.role = formData.role;
       hasChanges = true;
     }
+    if (formData.academic_year !== originalData.academic_year) {
+      payload.academic_year = formData.academic_year ? Number(formData.academic_year) : null;
+      hasChanges = true;
+    }
+    if (formData.class_level !== originalData.class_level) {
+      payload.class_level = formData.class_level.trim() || null;
+      hasChanges = true;
+    }
 
     // ถ้าไม่มีการเปลี่ยนแปลง ให้ปิด Modal ไปเลย ไม่ต้องส่ง API
     if (!hasChanges) {
@@ -134,10 +152,10 @@ export default function UserManagement() {
     try {
       setFormSubmitLoading(true);
       
-      // ส่ง payload ที่มีเฉพาะข้อมูลที่ถูกแก้ + admin_id ไปที่ API
+      // ส่งเฉพาะข้อมูลที่เปลี่ยน; backend อ่าน admin id จาก access token
       await axios.put(`/api/v1/admin/users/${selectedUserId}/info`, payload);
       
-      alert("แก้ไขข้อมูลผู้ใช้งานสำเร็จ");
+      notify('แก้ไขข้อมูลผู้ใช้งานสำเร็จ', 'success');
       setIsModalOpen(false);
       fetchUsers(); 
     } catch (err: any) {
@@ -148,27 +166,43 @@ export default function UserManagement() {
       } else if (Array.isArray(detail)) {
         errMsg = detail.map((d: any) => `${d.loc?.join('.')} : ${d.msg}`).join('\\n');
       }
-      alert(errMsg);
+      notify(errMsg, 'error');
     } finally {
       setFormSubmitLoading(false);
     }
   };
 
-  const handleDeleteUser = async (userId: string, userName: string) => {
-    if (!window.confirm(`⚠️ คุณแน่ใจหรือไม่ว่าต้องการลบผู้ใช้ "${userName}" ออกจากระบบ?\n\nการดำเนินการนี้ไม่สามารถย้อนกลับได้`)) return;
+  const handleDeleteUser = (userId: string, userName: string) => {
+    setPendingDelete({ id: userId, name: userName });
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!pendingDelete) return;
     try {
-      await axios.delete(`/api/v1/admin/users/${userId}`, {
-        params: { admin_id: adminId },
-      });
-      alert("ลบผู้ใช้งานสำเร็จ");
+      setDeleteLoading(true);
+      await axios.delete(`/api/v1/admin/users/${pendingDelete.id}`);
+      notify('ลบผู้ใช้งานสำเร็จ', 'success');
+      setPendingDelete(null);
       fetchUsers();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "เกิดข้อผิดพลาดในการลบผู้ใช้งาน");
+      notify(err.response?.data?.detail || 'เกิดข้อผิดพลาดในการลบผู้ใช้งาน', 'error');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6 animate-fade-in">
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="ลบผู้ใช้งาน"
+        description={`ต้องการลบ “${pendingDelete?.name || ''}” ออกจากระบบหรือไม่?\nการดำเนินการนี้ไม่สามารถย้อนกลับได้`}
+        confirmLabel="ลบผู้ใช้งาน"
+        danger
+        busy={deleteLoading}
+        onConfirm={confirmDeleteUser}
+        onCancel={() => setPendingDelete(null)}
+      />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-100 pb-4">
         <div className="flex items-center gap-3">
           <div className="bg-red-50 p-2 rounded-xl text-red-500">
@@ -197,6 +231,7 @@ export default function UserManagement() {
                 <th className="py-3 px-4">ผู้ใช้งาน</th>
                 <th className="py-3 px-4">รหัสนักศึกษา/พนักงาน</th>
                 <th className="py-3 px-4 text-center">สถานะการลงทะเบียน</th>
+                <th className="py-3 px-4">ชั้นปี / ห้อง</th>
                 <th className="py-3 px-4">สิทธิ์ปัจจุบัน</th>
                 <th className="py-3 px-4 text-right">การจัดการ</th>
               </tr>
@@ -232,6 +267,7 @@ export default function UserManagement() {
                       </span>
                     </div>
                   </td>
+                  <td className="py-3 px-4 text-gray-600">{user.academic_year ? `ปี ${user.academic_year}` : '-'}{user.class_level ? ` / ${user.class_level}` : ''}</td>
                   <td className="py-3 px-4">
                     <span
                       className={`px-2 py-0.5 rounded-md text-xs font-bold uppercase ${
@@ -255,20 +291,22 @@ export default function UserManagement() {
                         <Edit size={16} />
                       </button>
 
-                      <button
-                        onClick={() => handleDeleteUser(user.id, user.full_name)}
-                        className="text-red-500 hover:text-red-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm cursor-pointer"
-                        title="ลบผู้ใช้งาน"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      {!temporaryAdmin.active && (
+                        <button
+                          onClick={() => handleDeleteUser(user.id, user.full_name)}
+                          className="text-red-500 hover:text-red-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm cursor-pointer"
+                          title="ลบผู้ใช้งาน"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="text-center py-8 text-gray-500">
+                  <td colSpan={6} className="text-center py-8 text-gray-500">
                     ไม่มีข้อมูลผู้ใช้งานในระบบ
                   </td>
                 </tr>
@@ -294,7 +332,7 @@ export default function UserManagement() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveUser} className="p-6 space-y-4">
+            <form onSubmit={handleSaveUser} noValidate className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">
                   ชื่อ-นามสกุล <span className="text-red-500">*</span>
@@ -308,6 +346,11 @@ export default function UserManagement() {
                   onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
                 />
               </div>
+
+              {formData.role === 'student' && <div className="grid grid-cols-2 gap-3">
+                <div><label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">ชั้นปี</label><select value={formData.academic_year} onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })} className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm"><option value="">ไม่ระบุ</option>{[1,2,3,4,5,6,7,8].map((year) => <option key={year} value={year}>{year}</option>)}</select></div>
+                <div><label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">ห้อง / กลุ่ม</label><input value={formData.class_level} maxLength={50} onChange={(e) => setFormData({ ...formData, class_level: e.target.value })} className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" /></div>
+              </div>}
 
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">
@@ -327,6 +370,7 @@ export default function UserManagement() {
                   สิทธิ์การใช้งาน (Role)
                 </label>
                 <select
+                  disabled={temporaryAdmin.active}
                   className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={formData.role}
                   onChange={(e) => setFormData({ ...formData, role: e.target.value })}
@@ -335,6 +379,9 @@ export default function UserManagement() {
                   <option value="teacher">Teacher (อาจารย์)</option>
                   <option value="admin">Admin (ผู้ดูแลระบบ)</option>
                 </select>
+                {temporaryAdmin.active && (
+                  <p className="mt-1.5 text-xs text-amber-700">สิทธิ์ชั่วคราวแก้ไขระดับสิทธิ์ของบัญชีไม่ได้</p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-100 mt-6">

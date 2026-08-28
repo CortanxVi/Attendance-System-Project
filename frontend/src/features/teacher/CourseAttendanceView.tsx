@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
-import { X, Download, Clock, UserX, Search, AlertCircle, Edit2, CheckCircle2, List, Grid, CalendarDays, CheckSquare, XSquare, MessageSquare } from 'lucide-react';
+import { X, Download, Clock, Search, AlertCircle, Edit2, CheckCircle2, List, Grid, CalendarDays, CheckSquare, XSquare, MessageSquare } from 'lucide-react';
+import { useNotification } from '../../components/notifications/NotificationProvider';
+import ConfirmDialog from '../../components/overlays/ConfirmDialog';
+import { sanitizeSpreadsheetMatrix } from '../../services/spreadsheet';
 
 interface CourseAttendanceViewProps {
   courseId: string;
@@ -11,8 +14,10 @@ interface CourseAttendanceViewProps {
 }
 
 export default function CourseAttendanceView({ courseId, courseCode, courseName, onClose }: CourseAttendanceViewProps) {
+  const { notify } = useNotification();
   const [records, setRecords] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
+  const [students, setStudents] = useState<Array<{ student_id: string; full_name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'session' | 'list' | 'matrix'>('matrix');
@@ -24,6 +29,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
   // State for Session View
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
   const [updating, setUpdating] = useState(false);
+  const [pendingBulkStatus, setPendingBulkStatus] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -35,6 +41,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
       const res = await axios.get(`/api/v1/teacher/export/attendance/${courseId}`);
       if (res.data.status === 'success') {
         setRecords(res.data.records);
+        setStudents(res.data.students || []);
         const s = res.data.sessions || [];
         setSessions(s);
         if (!preserveSession && s.length > 0 && !selectedSessionId) {
@@ -58,7 +65,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
       await fetchData(true);
       setEditingRecordId(null);
     } catch (err: any) {
-      alert(`ไม่สามารถแก้ไขสถานะได้: ${err.response?.data?.detail || err.message}`);
+      notify(`ไม่สามารถแก้ไขสถานะได้: ${err.response?.data?.detail || err.message}`, 'error');
     } finally {
       setUpdating(false);
     }
@@ -78,17 +85,20 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
       }
       await fetchData(true);
     } catch (err: any) {
-      alert(`ไม่สามารถอัปเดตข้อมูลได้: ${err.response?.data?.detail || err.message}`);
+      notify(`ไม่สามารถอัปเดตข้อมูลได้: ${err.response?.data?.detail || err.message}`, 'error');
     } finally {
       setUpdating(false);
     }
   };
 
-  const handleBulkAction = async (status: string) => {
+  const handleBulkAction = (status: string) => {
     if (!selectedSessionId || filteredStudents.length === 0) return;
-    const confirmMessage = status === 'present' ? 'มาเรียน' : status === 'absent' ? 'ขาดเรียน' : status === 'late' ? 'มาสาย' : 'ลา';
-    if (!window.confirm(`ยืนยันการตั้งค่าเป็น "${confirmMessage}" ทั้งหมดสำหรับคาบเรียนนี้?`)) return;
+    setPendingBulkStatus(status);
+  };
 
+  const confirmBulkAction = async () => {
+    if (!pendingBulkStatus || !selectedSessionId) return;
+    const status = pendingBulkStatus;
     setUpdating(true);
     try {
       // Process updates sequentially to avoid overwhelming the server/DB
@@ -108,9 +118,10 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         }
       }
       await fetchData(true);
-      alert('อัปเดตสถานะสำเร็จ');
+      notify('อัปเดตสถานะสำเร็จ', 'success');
+      setPendingBulkStatus(null);
     } catch (err: any) {
-      alert(`เกิดข้อผิดพลาดในการอัปเดตแบบกลุ่ม: ${err.response?.data?.detail || err.message}`);
+      notify(`เกิดข้อผิดพลาดในการอัปเดตแบบกลุ่ม: ${err.response?.data?.detail || err.message}`, 'error');
     } finally {
       setUpdating(false);
     }
@@ -122,7 +133,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
   );
 
   // Generate Matrix/Session Data
-  const uniqueStudentsMap = new Map();
+  const uniqueStudentsMap = new Map(students.map((student) => [student.student_id, student]));
   records.forEach(r => {
     if (!uniqueStudentsMap.has(r.student_id)) {
       uniqueStudentsMap.set(r.student_id, { student_id: r.student_id, full_name: r.full_name });
@@ -150,7 +161,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
       
       // Header row
       const header = ["รหัสนักศึกษา", "ชื่อ-นามสกุล"];
-      sessions.forEach((s, i) => header.push(`ครั้งที่ ${i + 1}`));
+      sessions.forEach((_session, i) => header.push(`ครั้งที่ ${i + 1}`));
       header.push("มา/สาย", "ลา", "ขาด");
       wsData.push(header);
       
@@ -181,18 +192,27 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         wsData.push(row);
       });
       
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      const ws = XLSX.utils.aoa_to_sheet(sanitizeSpreadsheetMatrix(wsData));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Attendance");
       
       XLSX.writeFile(wb, `Attendance_${courseCode}.xlsx`);
     } catch (err) {
       console.error(err);
-      alert("เกิดข้อผิดพลาดในการสร้างไฟล์ Excel");
+      notify('เกิดข้อผิดพลาดในการสร้างไฟล์ Excel', 'error');
     }
   };
   return (
     <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <ConfirmDialog
+        open={Boolean(pendingBulkStatus)}
+        title="ยืนยันการแก้ไขแบบกลุ่ม"
+        description={`ตั้งค่านักศึกษาที่แสดงทั้งหมดเป็น “${pendingBulkStatus === 'present' ? 'มาเรียน' : pendingBulkStatus === 'absent' ? 'ขาดเรียน' : pendingBulkStatus === 'late' ? 'มาสาย' : 'ลา'}” สำหรับคาบนี้หรือไม่?`}
+        confirmLabel="อัปเดตทั้งหมด"
+        busy={updating}
+        onConfirm={confirmBulkAction}
+        onCancel={() => setPendingBulkStatus(null)}
+      />
       <div className="bg-white rounded-2xl w-full max-w-6xl h-[85vh] overflow-hidden shadow-2xl flex flex-col animate-fade-in">
         
         {/* Header */}

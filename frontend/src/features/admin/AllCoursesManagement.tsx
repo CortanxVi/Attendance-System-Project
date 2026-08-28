@@ -3,8 +3,13 @@ import axios from 'axios';
 import { BookOpen, Settings, Edit, Trash2 } from 'lucide-react';
 import EditCourseModal from '../teacher/EditCourseModal';
 import CourseSettingsModal from '../teacher/CourseSettings';
+import { useNotification } from '../../components/notifications/NotificationProvider';
+import ConfirmDialog from '../../components/overlays/ConfirmDialog';
+import { useTemporaryAdmin } from '../../contexts/TemporaryAdminContext';
 
 export default function AllCoursesManagement() {
+  const { notify } = useNotification();
+  const temporaryAdmin = useTemporaryAdmin();
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -14,6 +19,8 @@ export default function AllCoursesManagement() {
   
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [selectedCourseForConfig, setSelectedCourseForConfig] = useState<any | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; code: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     fetchCourses();
@@ -31,20 +38,33 @@ export default function AllCoursesManagement() {
     }
   };
 
-  const handleDeleteCourse = async (courseId: string, courseCode: string) => {
-    if (window.confirm(`⚠️ คุณแน่ใจหรือไม่ว่าต้องการลบรายวิชา ${courseCode} ในฐานะ Admin?\n\nการลบวิชานี้อาจส่งผลต่อข้อมูลประวัติการเช็คชื่อทั้งหมดที่เกี่ยวข้อง หากลบแล้วจะไม่สามารถกู้คืนได้!`)) {
-      try {
-        await axios.delete(`/api/v1/courses/${courseId}`);
-        alert("✅ ลบรายวิชาสำเร็จ");
-        fetchCourses();
-      } catch (error: any) {
-        alert(`❌ ลบไม่สำเร็จ: ${error.response?.data?.detail || "ติดข้อจำกัดด้านฐานข้อมูล"}`);
-      }
+  const confirmDeleteCourse = async () => {
+    if (!pendingDelete) return;
+    try {
+      setDeleteBusy(true);
+      await axios.delete(`/api/v1/courses/${pendingDelete.id}`);
+      notify('ลบรายวิชาสำเร็จ', 'success');
+      setPendingDelete(null);
+      await fetchCourses();
+    } catch (error: any) {
+      notify(`ลบไม่สำเร็จ: ${error.response?.data?.detail || 'ติดข้อจำกัดด้านฐานข้อมูล'}`, 'error');
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 animate-fade-in">
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="ลบรายวิชา"
+        description={`ต้องการลบรายวิชา ${pendingDelete?.code || ''} หรือไม่?\nข้อมูลที่เกี่ยวข้องอาจไม่สามารถกู้คืนได้`}
+        confirmLabel="ลบรายวิชา"
+        danger
+        busy={deleteBusy}
+        onConfirm={confirmDeleteCourse}
+        onCancel={() => setPendingDelete(null)}
+      />
       {/* 🌟 Modal แก้ไขรายวิชา (ใช้ร่วมกับ Teacher) */}
       {isEditModalOpen && selectedCourseForEdit && (
         <EditCourseModal course={selectedCourseForEdit} onClose={() => setIsEditModalOpen(false)} onSuccess={fetchCourses} />
@@ -86,7 +106,9 @@ export default function AllCoursesManagement() {
                     <div className="flex items-center justify-end gap-2">
                       <button onClick={() => { setSelectedCourseForConfig(course); setIsSettingsModalOpen(true); }} className="text-gray-500 hover:text-slate-800 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm" title="ตั้งค่าเกณฑ์เข้าเรียน"><Settings size={18} /></button>
                       <button onClick={() => { setSelectedCourseForEdit(course); setIsEditModalOpen(true); }} className="text-blue-500 hover:text-blue-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm" title="แก้ไขข้อมูล"><Edit size={18} /></button>
-                      <button onClick={() => handleDeleteCourse(course.id, course.course_code)} className="text-red-500 hover:text-red-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm" title="ลบรายวิชา"><Trash2 size={18} /></button>
+                      {!temporaryAdmin.active && (
+                        <button onClick={() => setPendingDelete({ id: course.id, code: course.course_code })} className="text-red-500 hover:text-red-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm" title="ลบรายวิชา"><Trash2 size={18} /></button>
+                      )}
                     </div>
                   </td>
                 </tr>

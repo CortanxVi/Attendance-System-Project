@@ -1,6 +1,6 @@
-import React from 'react';
 // src/App.tsx
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './lib/supabaseClient';
 import Login from './features/auth/Login';
@@ -10,9 +10,12 @@ import StudentLayout from './components/layout/StudentLayout';
 import StudentHome from './features/student/StudentHome';
 import AttendanceHistory from './features/student/AttendanceHistory';
 import StudentRegister from './features/student/StudentRegister';
+import StudentProfile from './features/student/StudentProfile';
 import TeacherLayout from './components/layout/TeacherLayout';
 import TeacherDashboard from './features/teacher/TeacherDashboard';
 import TeacherExportReports from './features/teacher/ExportReports';
+import ImportStudents from './features/teacher/ImportStudents';
+import TeacherSettings from './features/teacher/TeacherSettings';
 
 import AdminLayout from './components/layout/AdminLayout';
 import SystemOverview from './features/admin/SystemOverview';
@@ -21,42 +24,43 @@ import AllCoursesManagement from './features/admin/AllCoursesManagement';
 import SystemLogs from './features/admin/SystemLogs';
 import ExportReports from './features/admin/ExportReports';
 import RegistrationManagement from './features/admin/RegistrationManagement';
+import TemporaryAdminRequests from './features/admin/TemporaryAdminRequests';
+import { useTemporaryAdmin } from './contexts/TemporaryAdminContext';
 
 interface UserProfile {
   id: string;
   email: string;
   full_name: string;
   role: string;
+  base_role?: string;
+  academic_year?: number | null;
+  class_level?: string | null;
 }
-
-export const RoleContext = React.createContext<{
-  originalRole: string;
-  currentRole: string;
-  setImpersonatedRole: (role: string | null) => void;
-} | null>(null);
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [impersonatedRole, setImpersonatedRole] = useState<string | null>(null);
+  const temporaryAdmin = useTemporaryAdmin();
 
   useEffect(() => {
+    document.title = 'ระบบบันทึกเวลาเข้าเรียน | KMUTNB';
     // ดูเรื่องการเชืื่อมต่อเซสชัน ตรวจสอบ session ที่มีอยู่แล้ว และคอยฟังการเปลี่ยนแปลงสถานะ login ตลอดเวลา
     // คาดว่าเป็นโค้ดจัดการหลังบ้านของ supabase ในการตรวจสอบ session ต่างๆ
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) {
-        fetchProfile(session.user.id)
+        fetchProfile()
       }
       else setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) fetchProfile(session.user.id);
+      if (session) fetchProfile();
       else {
         setProfile(null);
+        temporaryAdmin.clear();
         setLoading(false);
       }
     });
@@ -64,18 +68,14 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []); // ทำงานครั้งเดียวเมื่อเรนเดอร์ครั้งแรก
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async () => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-
-      if (error) throw error;
-      setProfile(data);
+      const response = await axios.get('/api/v1/auth/me');
+      setProfile(response.data.user);
     } catch (err) {
       console.error('Error fetching profile:', err);
+      setProfile(null);
+      await supabase.auth.signOut({ scope: 'local' });
     } finally {
       setLoading(false);
     }
@@ -95,28 +95,13 @@ export default function App() {
     return <Login />;
   }
 
-  const activeRole = impersonatedRole || profile.role;
+  const baseRole = profile.base_role ?? profile.role;
+  const activeRole = baseRole === 'teacher' && temporaryAdmin.active ? 'admin' : baseRole;
 
   // Component สำหรับแยกทาง (Routing Gatekeeper)
   // ถ้านักศึกษาไปเข้า URL ของอาจารย์ จะถูกดีดกลับมาหน้าแรกของตัวเอง
   return (
-    <RoleContext.Provider value={{
-      originalRole: profile.role,
-      currentRole: activeRole,
-      setImpersonatedRole
-    }}>
       <BrowserRouter>
-        {impersonatedRole && (
-          <div className="bg-orange-600 text-white text-center py-2 px-4 sticky top-0 z-[100] flex justify-center items-center gap-4 shadow-md font-medium text-sm">
-            <span>⚠️ คุณกำลังจำลองสิทธิ์การเข้าใช้งานเป็นมุมมองของ: <b className="uppercase">{impersonatedRole}</b></span>
-            <button 
-              onClick={() => setImpersonatedRole(null)}
-              className="bg-white text-orange-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-orange-50 transition-colors shadow-sm"
-            >
-              คืนสิทธิ์เดิม
-            </button>
-          </div>
-        )}
         <Routes>
           {/* เส้นทางสำหรับนักศึกษา */}
           {activeRole === 'student' && (
@@ -124,20 +109,20 @@ export default function App() {
             <Route index element={<StudentHome />} />
             <Route path="history" element={<AttendanceHistory />} />
             <Route path="register" element={<StudentRegister />} />
-            {/* หน้าโปรไฟล์ยังไม่ได้อยู่ใน scope ของงานตอนนี้ คง Placeholder ไว้เหมือนเดิม */}
-            <Route path="profile" element={<div className="p-6 text-center mt-10">หน้าโปรไฟล์ (รอดำเนินการ)</div>} />
+            <Route path="profile" element={<StudentProfile />} />
           </Route>
         )}
 
         {/* เส้นทางสำหรับแอดมิน */}
         {activeRole === 'admin' && (
-          <Route path="/admin" element={<AdminLayout />}>
+          <Route path="/admin" element={<AdminLayout temporary={baseRole === 'teacher'} />}>
             <Route index element={<SystemOverview />} />
             <Route path="users" element={<UserManagement />} />
             <Route path="courses" element={<AllCoursesManagement />} />
             <Route path="registration" element={<RegistrationManagement />} />
             <Route path="logs" element={<SystemLogs />} />
             <Route path="reports" element={<ExportReports />} />
+            {baseRole === 'admin' && <Route path="temporary-access" element={<TemporaryAdminRequests />} />}
           </Route>
         )}
 
@@ -146,8 +131,8 @@ export default function App() {
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
             <Route path="reports" element={<TeacherExportReports />} />
-            <Route path="students" element={<div className="p-8">หน้าจัดการนักศึกษา (รอดำเนินการ)</div>} />
-            <Route path="settings" element={<div className="p-8">หน้าตั้งค่าระบบ (รอดำเนินการ)</div>} />
+            <Route path="students" element={<ImportStudents />} />
+            <Route path="settings" element={<TeacherSettings />} />
           </Route>
         )}
 
@@ -158,6 +143,5 @@ export default function App() {
         />
       </Routes>
     </BrowserRouter>
-    </RoleContext.Provider>
   );
 }

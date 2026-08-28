@@ -113,7 +113,7 @@ export default function AttendanceHistory() {
       <section className="space-y-3">
         {courseSummary.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-xl p-6 text-center text-gray-400 text-sm">
-            ยังไม่มีข้อมูลสรุปรายวิชา (จะแสดงหลังเช็คชื่ออย่างน้อย 1 ครั้งในวิชานั้น)
+            ยังไม่มีรายวิชาที่ลงทะเบียนในระบบ
           </div>
         ) : (
           courseSummary.map((c) => (
