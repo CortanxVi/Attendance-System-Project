@@ -1,32 +1,43 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { BookOpen, Settings, Edit, Trash2 } from 'lucide-react';
 import EditCourseModal from '../teacher/EditCourseModal';
 import CourseSettingsModal from '../teacher/CourseSettings';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
-import { useTemporaryAdmin } from '../../contexts/TemporaryAdminContext';
+import { useTemporaryAdmin } from '../../contexts/temporaryAdminState';
+import { apiErrorMessage } from '../../services/apiError';
+
+interface Course {
+  id: string;
+  course_code: string;
+  course_name: string;
+  section: number;
+  semester: number;
+  year: number;
+  total_sessions?: number;
+  late_threshold_minutes?: number;
+  absent_threshold_minutes?: number;
+  max_absence_percent?: number;
+  profiles?: { full_name?: string | null } | null;
+}
 
 export default function AllCoursesManagement() {
   const { notify } = useNotification();
   const temporaryAdmin = useTemporaryAdmin();
-  const [courses, setCourses] = useState<any[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
 
   // States for Modals
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [selectedCourseForEdit, setSelectedCourseForEdit] = useState<any | null>(null);
+  const [selectedCourseForEdit, setSelectedCourseForEdit] = useState<Course | null>(null);
   
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [selectedCourseForConfig, setSelectedCourseForConfig] = useState<any | null>(null);
+  const [selectedCourseForConfig, setSelectedCourseForConfig] = useState<Course | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; code: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  useEffect(() => {
-    fetchCourses();
-  }, []);
-
-  const fetchCourses = async () => {
+  const fetchCourses = useCallback(async () => {
     try {
       setLoading(true);
       const res = await axios.get('/api/v1/admin/courses');
@@ -36,7 +47,12 @@ export default function AllCoursesManagement() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchCourses(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchCourses]);
 
   const confirmDeleteCourse = async () => {
     if (!pendingDelete) return;
@@ -46,15 +62,15 @@ export default function AllCoursesManagement() {
       notify('ลบรายวิชาสำเร็จ', 'success');
       setPendingDelete(null);
       await fetchCourses();
-    } catch (error: any) {
-      notify(`ลบไม่สำเร็จ: ${error.response?.data?.detail || 'ติดข้อจำกัดด้านฐานข้อมูล'}`, 'error');
+    } catch (error: unknown) {
+      notify(`ลบไม่สำเร็จ: ${apiErrorMessage(error, 'ติดข้อจำกัดด้านฐานข้อมูล')}`, 'error');
     } finally {
       setDeleteBusy(false);
     }
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 animate-fade-in">
+    <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
       <ConfirmDialog
         open={Boolean(pendingDelete)}
         title="ลบรายวิชา"
@@ -75,15 +91,15 @@ export default function AllCoursesManagement() {
         <CourseSettingsModal courseId={selectedCourseForConfig.id} currentConfig={{ total_sessions: selectedCourseForConfig.total_sessions, late_threshold_minutes: selectedCourseForConfig.late_threshold_minutes, absent_threshold_minutes: selectedCourseForConfig.absent_threshold_minutes, max_absence_percent: selectedCourseForConfig.max_absence_percent }} onSaveSuccess={fetchCourses} onClose={() => setIsSettingsModalOpen(false)} />
       )}
 
-      <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-        <BookOpen className="text-red-500" /> จัดการข้อมูลรายวิชา (All Courses)
+      <h2 className="mb-6 flex items-start gap-2 text-xl font-bold text-gray-800 sm:items-center sm:text-2xl">
+        <BookOpen className="shrink-0 text-red-500" /> จัดการข้อมูลรายวิชา (All Courses)
       </h2>
 
       {loading ? (
         <div className="text-center py-10 text-gray-500">กำลังโหลดข้อมูล...</div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full min-w-max border-collapse text-left">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 text-sm">
                 <th className="py-3 px-4 rounded-tl-xl font-semibold">รหัสวิชา</th>

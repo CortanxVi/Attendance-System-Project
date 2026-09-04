@@ -2,6 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { faceService } from '../services/api';
 import { base64ToFile } from '../utils/imageUtils';
+import { apiErrorMessage } from '../services/apiError';
 
 const Enrollment: React.FC = () => {
   const webcamRef = useRef<Webcam>(null);
@@ -35,8 +36,8 @@ const Enrollment: React.FC = () => {
       setMessage(`✅ ${result.message}`);
       setStudentId(''); // ล้างช่องกรอกข้อมูลเมื่อสำเร็จ
       
-    } catch (error: any) {
-      setMessage(`❌ ${error.message}`);
+    } catch (error: unknown) {
+      setMessage(`❌ ${apiErrorMessage(error, 'ลงทะเบียนใบหน้าไม่สำเร็จ')}`);
     } finally {
       setLoading(false);
     }

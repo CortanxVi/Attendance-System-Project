@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import axios from 'axios';
-import { Users, CheckCircle2, Clock3, XCircle, ScanFace, CreditCard, Edit } from 'lucide-react';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { Users, CheckCircle2, Clock3, XCircle, ScanFace, CreditCard, Edit, type LucideIcon } from 'lucide-react';
+import { useNotification } from '../../components/notifications/notificationContext';
 
 // 🌟 ข้อมูล 1 แถวที่จะแสดงในรายการ (แบนราบแล้ว อ่านง่ายกว่าข้อมูลดิบที่ Join มาจาก Supabase)
 interface CheckInItem {
@@ -20,7 +20,7 @@ interface LiveCheckInFeedProps {
 }
 
 // 🌟 ตั้งค่าสี/ข้อความ/ไอคอนของแต่ละสถานะไว้ที่เดียว เรียกใช้ซ้ำได้ง่าย แก้ทีเดียวเปลี่ยนทั้งหมด
-const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: LucideIcon }> = {
   present: { label: 'มาเรียน', color: 'bg-green-100 text-green-700', icon: CheckCircle2 },
   late: { label: 'มาสาย', color: 'bg-orange-100 text-orange-700', icon: Clock3 },
   absent: { label: 'ขาดเรียน', color: 'bg-red-100 text-red-700', icon: XCircle },
@@ -28,7 +28,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
 };
 
 // 🌟 ตั้งค่าข้อความ/ไอคอนของแต่ละวิธีเช็คชื่อ
-const METHOD_CONFIG: Record<string, { label: string; icon: any }> = {
+const METHOD_CONFIG: Record<string, { label: string; icon: LucideIcon }> = {
   face_ocr: { label: 'สแกนใบหน้า', icon: ScanFace },
   nfc: { label: 'บัตร NFC', icon: CreditCard },
   manual: { label: 'อาจารย์แก้ไข', icon: Edit },
@@ -45,17 +45,21 @@ export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFe
   const { notify } = useNotification();
 
   // ดึงรายชื่อทั้งหมดที่เช็คชื่อแล้วในคาบนี้ (join ตาราง profiles เอาชื่อ-สกุลมาด้วย)
-  const fetchCheckInList = async (signal?: AbortSignal): Promise<CheckInItem[]> => {
+  const fetchCheckInList = useCallback(async (signal?: AbortSignal): Promise<CheckInItem[]> => {
     const response = await axios.get(`/api/v1/sessions/${sessionId}/checkins`, { signal });
     const nextItems = response.data.checkins as CheckInItem[];
     setCheckIns(nextItems);
     setIsLoading(false);
     return nextItems;
-  };
+  }, [sessionId]);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchCheckInList(controller.signal).catch(() => setIsLoading(false));
+    const initialTimer = window.setTimeout(() => {
+      fetchCheckInList(controller.signal).catch((error: unknown) => {
+        if (!axios.isCancel(error)) setIsLoading(false);
+      });
+    }, 0);
 
     const channel = supabase
       .channel(`attendance-records:${sessionId}`)
@@ -82,15 +86,16 @@ export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFe
 
     return () => {
       controller.abort();
+      window.clearTimeout(initialTimer);
       window.clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, [sessionId, notify]);
+  }, [sessionId, notify, fetchCheckInList]);
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 mb-6 animate-fade-in">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+    <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm animate-fade-in sm:p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex min-w-0 items-center gap-2 font-bold text-gray-800">
           <Users size={18} className="text-emerald-600" />
           รายชื่อผู้เช็คชื่อแล้ว {courseCode && `· ${courseCode}`}
         </h3>
@@ -114,7 +119,7 @@ export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFe
             return (
               <div
                 key={item.id}
-                className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-2.5 border border-gray-100"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5 sm:px-4"
               >
                 <div>
                   <p className="font-semibold text-gray-800 text-sm">{item.full_name}</p>

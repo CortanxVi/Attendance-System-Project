@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from collections import defaultdict, deque
 import io
+from threading import Lock
+from time import monotonic
 import warnings
 
 import httpx
@@ -18,6 +21,49 @@ from core.config import (
 
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}
+
+
+class OcrRateLimiter:
+    """Process-local fair-use limit for the optional card-reading endpoint."""
+
+    def __init__(self, limit: int = 4, window_seconds: int = 60, max_keys: int = 4096):
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self.max_keys = max_keys
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = Lock()
+
+    def check(self, user_id: str) -> None:
+        now = monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            if user_id not in self._events and len(self._events) >= self.max_keys:
+                stale_keys = [
+                    key for key, values in self._events.items()
+                    if not values or values[-1] <= cutoff
+                ]
+                for key in stale_keys:
+                    self._events.pop(key, None)
+                if len(self._events) >= self.max_keys:
+                    oldest_key = min(
+                        self._events,
+                        key=lambda key: self._events[key][-1] if self._events[key] else float("-inf"),
+                    )
+                    self._events.pop(oldest_key, None)
+            events = self._events[user_id]
+            while events and events[0] <= cutoff:
+                events.popleft()
+            if len(events) >= self.limit:
+                retry_after = max(1, int(events[0] + self.window_seconds - now) + 1)
+                raise HTTPException(
+                    status_code=429,
+                    detail="อ่านบัตรถี่เกินไป กรุณารอสักครู่แล้วลองใหม่",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            events.append(now)
+
+
+student_card_ocr_limiter = OcrRateLimiter()
 
 
 @dataclass(frozen=True)
@@ -86,7 +132,13 @@ async def extract_student_id(image: UploadedImage) -> str:
     """Read a 13-digit student ID using the Node.js Light OCR service only."""
 
     try:
-        async with httpx.AsyncClient(timeout=OCR_TIMEOUT_SECONDS) as client:
+        timeout = httpx.Timeout(
+            connect=2.0,
+            read=OCR_TIMEOUT_SECONDS,
+            write=10.0,
+            pool=2.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{OCR_SERVICE_URL}/ocr",
                 headers={"X-OCR-Service-Token": OCR_SERVICE_TOKEN} if OCR_SERVICE_TOKEN else None,
@@ -98,23 +150,52 @@ async def extract_student_id(image: UploadedImage) -> str:
                     )
                 },
             )
+    except httpx.ConnectError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ยังไม่ได้เปิดบริการ Light OCR กรุณาให้ผู้ดูแลตรวจสอบหน้าต่าง OCR แล้วลองใหม่",
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=(
+                f"Light OCR ใช้เวลาเกิน {int(OCR_TIMEOUT_SECONDS)} วินาที "
+                "กรุณาลองใหม่โดยไม่ต้องสแกน QR ซ้ำ"
+            ),
+        ) from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ระบบ Light OCR ยังไม่พร้อมใช้งาน กรุณาแจ้งผู้ดูแลระบบ",
+            detail="การเชื่อมต่อ Light OCR ถูกตัด กรุณาลองใหม่โดยไม่ต้องสแกน QR ซ้ำ",
         ) from exc
 
     if response.status_code == 413:
         raise HTTPException(status_code=413, detail="ภาพบัตรมีขนาดเกินขีดจำกัดของ Light OCR")
     if response.status_code == 415:
         raise HTTPException(status_code=415, detail="Light OCR ไม่รองรับชนิดไฟล์ภาพนี้")
+    if response.status_code == 504:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Light OCR ใช้เวลาเกินกำหนด กรุณาลองใหม่โดยไม่ต้องสแกน QR ซ้ำ",
+        )
+    if response.status_code == 503:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Light OCR กำลังรองรับผู้ใช้จำนวนมาก กรุณารอสักครู่แล้วลองใหม่โดยไม่ต้องสแกน QR ซ้ำ",
+        )
     if not response.is_success:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Light OCR ประมวลผลภาพบัตรไม่สำเร็จ กรุณาถ่ายภาพใหม่",
         )
 
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Light OCR ส่งผลลัพธ์ไม่สมบูรณ์ กรุณาลองใหม่",
+        ) from exc
     student_id = payload.get("foundId")
     if not student_id:
         raise HTTPException(

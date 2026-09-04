@@ -6,6 +6,7 @@
   "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
   "ownership": {
     "Select/Listbox": "native",
+    "Date": "native",
     "Form": "screen-and-api",
     "Scrollbar": "native",
     "Toast": "shared",

@@ -58,3 +58,17 @@ def require_course_delete_permission(
             status_code=403,
             detail="สิทธิ์ชั่วคราวไม่สามารถลบรายวิชาของอาจารย์คนอื่น",
         )
+
+
+def require_course_management_permission(
+    course_id: str,
+    current_user: AuthenticatedUser,
+) -> dict:
+    """Allow owners and permanent admins, but never broaden temporary elevation."""
+    course = require_owned_course(course_id, current_user)
+    if current_user.temporary_admin and course.get("teacher_id") != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="สิทธิ์ชั่วคราวจัดการได้เฉพาะรายวิชาของอาจารย์เอง",
+        )
+    return course

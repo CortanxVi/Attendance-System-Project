@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 import {
   ShieldAlert,
@@ -7,9 +7,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
-import { useTemporaryAdmin } from '../../contexts/TemporaryAdminContext';
+import { useTemporaryAdmin } from '../../contexts/temporaryAdminState';
+import { apiErrorMessage } from '../../services/apiError';
 
 // 🌟 1. Interface สำหรับข้อมูลผู้ใช้ที่ดึงมาจาก API
 interface UserProfile {
@@ -71,11 +72,7 @@ export default function UserManagement() {
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
       const res = await axios.get("/api/v1/admin/users");
@@ -85,7 +82,12 @@ export default function UserManagement() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchUsers(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchUsers]);
 
   const openEditModal = (user: UserProfile) => {
     setSelectedUserId(user.id);
@@ -158,15 +160,8 @@ export default function UserManagement() {
       notify('แก้ไขข้อมูลผู้ใช้งานสำเร็จ', 'success');
       setIsModalOpen(false);
       fetchUsers(); 
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
-      let errMsg = "เกิดข้อผิดพลาดในการบันทึกข้อมูล";
-      if (typeof detail === 'string') {
-        errMsg = detail;
-      } else if (Array.isArray(detail)) {
-        errMsg = detail.map((d: any) => `${d.loc?.join('.')} : ${d.msg}`).join('\\n');
-      }
-      notify(errMsg, 'error');
+    } catch (err: unknown) {
+      notify(apiErrorMessage(err, "เกิดข้อผิดพลาดในการบันทึกข้อมูล"), 'error');
     } finally {
       setFormSubmitLoading(false);
     }
@@ -184,15 +179,15 @@ export default function UserManagement() {
       notify('ลบผู้ใช้งานสำเร็จ', 'success');
       setPendingDelete(null);
       fetchUsers();
-    } catch (err: any) {
-      notify(err.response?.data?.detail || 'เกิดข้อผิดพลาดในการลบผู้ใช้งาน', 'error');
+    } catch (err: unknown) {
+      notify(apiErrorMessage(err, 'เกิดข้อผิดพลาดในการลบผู้ใช้งาน'), 'error');
     } finally {
       setDeleteLoading(false);
     }
   };
 
   return (
-    <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6 animate-fade-in">
+    <div className="min-w-0 space-y-6 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
       <ConfirmDialog
         open={Boolean(pendingDelete)}
         title="ลบผู้ใช้งาน"
@@ -225,7 +220,7 @@ export default function UserManagement() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-100">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full min-w-max border-collapse text-left">
             <thead>
               <tr className="bg-slate-50 border-b border-gray-100 text-xs font-bold text-gray-500 uppercase tracking-wider">
                 <th className="py-3 px-4">ผู้ใช้งาน</th>
@@ -317,22 +312,23 @@ export default function UserManagement() {
       )}
 
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-xl border border-gray-100 overflow-hidden transform transition-all">
-            <div className="bg-slate-50 px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm animate-fade-in sm:p-4">
+          <div className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-xl transition-all sm:max-h-[calc(100dvh-2rem)]">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-slate-50 px-4 py-4 sm:px-6">
               <h3 className="font-bold text-gray-800 flex items-center gap-2">
                 <Edit size={18} className="text-blue-500" />{" "}
                 แก้ไขข้อมูลผู้ใช้งาน
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition-colors"
+                aria-label="ปิดหน้าต่างแก้ไขผู้ใช้งาน"
+                className="flex size-10 cursor-pointer items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleSaveUser} noValidate className="p-6 space-y-4">
+            <form onSubmit={handleSaveUser} noValidate className="space-y-4 p-4 sm:p-6">
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">
                   ชื่อ-นามสกุล <span className="text-red-500">*</span>
@@ -347,7 +343,7 @@ export default function UserManagement() {
                 />
               </div>
 
-              {formData.role === 'student' && <div className="grid grid-cols-2 gap-3">
+              {formData.role === 'student' && <div className="grid grid-cols-1 gap-3 min-[380px]:grid-cols-2">
                 <div><label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">ชั้นปี</label><select value={formData.academic_year} onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })} className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm"><option value="">ไม่ระบุ</option>{[1,2,3,4,5,6,7,8].map((year) => <option key={year} value={year}>{year}</option>)}</select></div>
                 <div><label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">ห้อง / กลุ่ม</label><input value={formData.class_level} maxLength={50} onChange={(e) => setFormData({ ...formData, class_level: e.target.value })} className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" /></div>
               </div>}

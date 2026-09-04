@@ -1,217 +1,62 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Download, FileSpreadsheet } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import pdfMake from 'pdfmake/build/pdfmake';
 import { supabase } from '../../lib/supabaseClient';
 import CourseAttendanceView from './CourseAttendanceView';
-import { useNotification } from '../../components/notifications/NotificationProvider';
-import { sanitizeSpreadsheetRows } from '../../services/spreadsheet';
-
-const pdfMakeAny = pdfMake as any;
-pdfMakeAny.fonts = {
-  THSarabunNew: {
-    normal: `${window.location.origin}/fonts/THSarabunNew.ttf`,
-    bold: `${window.location.origin}/fonts/THSarabunNew Bold.ttf`,
-    italics: `${window.location.origin}/fonts/THSarabunNew Italic.ttf`,
-    bolditalics: `${window.location.origin}/fonts/THSarabunNew BoldItalic.ttf`
-  }
-};
+import { useNotification } from '../../components/notifications/notificationContext';
+import { apiErrorMessage } from '../../services/apiError';
+import { exportAttendanceReport, type AttendanceExportRecord, type ReportCourse, type ReportFormat } from '../../services/reportExport';
 
 export default function ExportReports() {
   const { notify } = useNotification();
-  const [courses, setCourses] = useState<any[]>([]);
+  const [courses, setCourses] = useState<ReportCourse[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // States for viewing data in table
-  const [isViewOpen, setIsViewOpen] = useState(false);
-  const [selectedCourseForView, setSelectedCourseForView] = useState<any>(null);
+  const [selectedCourse, setSelectedCourse] = useState<ReportCourse | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchTeacherCourses();
-  }, []);
-
-  const fetchTeacherCourses = async () => {
+  const fetchTeacherCourses = useCallback(async () => {
     try {
       setLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      
-      const res = await axios.get(`/api/v1/courses/${session.user.id}`);
-      setCourses(res.data.courses || []);
-    } catch (err) {
-      console.error("Error fetching courses", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+      if (!session) { setCourses([]); return; }
+      const response = await axios.get<{ courses?: ReportCourse[] }>(`/api/v1/courses/${session.user.id}`);
+      setCourses(response.data.courses ?? []);
+    } catch (error: unknown) { notify(apiErrorMessage(error, 'ไม่สามารถโหลดรายวิชาได้'), 'error'); }
+    finally { setLoading(false); }
+  }, [notify]);
 
-  const handleExport = async (courseId: string, courseCode: string, format: 'excel' | 'csv' | 'pdf') => {
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchTeacherCourses(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchTeacherCourses]);
+
+  const handleExport = async (course: ReportCourse, format: ReportFormat) => {
+    if (exporting) return;
+    const operation = `${course.id}:${format}`; setExporting(operation);
     try {
-      const res = await axios.get(`/api/v1/teacher/export/attendance/${courseId}`);
-      const data = res.data.records || [];
-
-      if (data.length === 0) {
-        notify('ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้', 'info');
-        return;
-      }
-
-      const formattedData = data.map((row: any, index: number) => ({
-        "ลำดับ": index + 1,
-        "รหัสนักศึกษา": row.student_id,
-        "ชื่อ-นามสกุล": row.full_name,
-        "สถานะ": row.status === 'present' ? 'มาเรียน' : row.status === 'late' ? 'มาสาย' : 'ขาดเรียน',
-        "วิธีการ": row.method === 'nfc' ? 'NFC' : row.method === 'face_ocr' ? 'Face Scan' : 'Manual',
-        "เวลา": new Date(row.check_in_time).toLocaleString('th-TH')
-      }));
-      const spreadsheetData = sanitizeSpreadsheetRows(formattedData);
-
-      const filename = `Attendance_${courseCode}_${new Date().getTime()}`;
-
-      if (format === 'excel') {
-        const worksheet = XLSX.utils.json_to_sheet(spreadsheetData);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
-        XLSX.writeFile(workbook, `${filename}.xlsx`);
-      } 
-      else if (format === 'csv') {
-        const worksheet = XLSX.utils.json_to_sheet(spreadsheetData);
-        const csv = XLSX.utils.sheet_to_csv(worksheet);
-        const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        link.setAttribute("href", url);
-        link.setAttribute("download", `${filename}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
-      else if (format === 'pdf') {
-        const docDefinition: any = {
-          pageSize: 'A4',
-          pageOrientation: 'landscape',
-          defaultStyle: {
-            font: 'THSarabunNew',
-            fontSize: 14
-          },
-          content: [
-            { 
-              text: `รายงานประวัติการเข้าเรียน - รหัสวิชา: ${courseCode}`, 
-              style: 'header',
-              margin: [0, 0, 0, 15]
-            },
-            {
-              table: {
-                headerRows: 1,
-                widths: ['auto', 'auto', '*', 'auto', 'auto', 'auto'],
-                body: [
-                  [
-                    { text: 'ลำดับ', style: 'tableHeader' },
-                    { text: 'รหัสนักศึกษา', style: 'tableHeader' },
-                    { text: 'ชื่อ-นามสกุล', style: 'tableHeader' },
-                    { text: 'สถานะ', style: 'tableHeader' },
-                    { text: 'วิธีการเช็คชื่อ', style: 'tableHeader' },
-                    { text: 'เวลา', style: 'tableHeader' }
-                  ],
-                  ...data.map((row: any, index: number) => [
-                    (index + 1).toString(),
-                    row.student_id,
-                    row.full_name,
-                    row.status === 'present' ? 'มาเรียน' : row.status === 'late' ? 'มาสาย' : 'ขาดเรียน',
-                    row.method === 'nfc' ? 'NFC' : row.method === 'face_ocr' ? 'Face Scan' : 'Manual',
-                    new Date(row.check_in_time).toLocaleString('th-TH')
-                  ])
-                ]
-              },
-              layout: 'lightHorizontalLines'
-            }
-          ],
-          styles: {
-            header: {
-              fontSize: 18,
-              bold: true
-            },
-            tableHeader: {
-              bold: true,
-              fontSize: 14,
-              color: 'white',
-              fillColor: '#ea580c', // Orange-600
-              alignment: 'center'
-            }
-          }
-        };
-
-        pdfMake.createPdf(docDefinition).download(`${filename}.pdf`);
-      }
-
-    } catch (err: any) {
-      notify(`Export ล้มเหลว: ${err.response?.data?.detail || err.message}`, 'error');
-    }
+      const response = await axios.get<{ records?: AttendanceExportRecord[] }>(`/api/v1/teacher/export/attendance/${course.id}`);
+      const records = response.data.records ?? [];
+      if (!records.length) { notify('ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้', 'info'); return; }
+      await exportAttendanceReport(records, course.course_code, format, '#ea580c');
+      notify(`สร้างไฟล์ ${format.toUpperCase()} สำเร็จ`, 'success');
+    } catch (error: unknown) { notify(`Export ล้มเหลว: ${apiErrorMessage(error, 'ไม่สามารถสร้างรายงานได้')}`, 'error'); }
+    finally { setExporting(null); }
   };
 
-  return (
-    <div className="p-6 max-w-6xl mx-auto animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-        <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-          <FileSpreadsheet className="text-orange-500" /> ส่งออกรายงานการเช็คชื่อ
-        </h2>
-
-        {loading ? (
-          <div className="text-center py-10 text-gray-500 flex flex-col items-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mb-4"></div>
-            กำลังโหลดรายวิชาของคุณ...
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {courses.map(course => (
-              <div key={course.id} className="border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <span className="inline-block px-3 py-1 bg-orange-50 text-orange-700 text-xs font-bold rounded-full mb-2">
-                      {course.course_code}
-                    </span>
-                    <button 
-                      onClick={() => { setSelectedCourseForView(course); setIsViewOpen(true); }}
-                      className="block text-left hover:text-orange-600 transition-colors"
-                    >
-                      <h3 className="font-bold text-lg text-gray-900 underline decoration-gray-300 decoration-1 underline-offset-4 hover:decoration-orange-400">{course.course_name}</h3>
-                    </button>
-                    <p className="text-sm text-gray-500 mt-1">เทอม {course.semester}/{course.year} | Sec {course.section}</p>
-                  </div>
-                </div>
-                
-                <div className="mt-4 pt-4 border-t border-gray-100 space-y-2">
-                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">เลือกรูปแบบไฟล์</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button onClick={() => handleExport(course.id, course.course_code, 'excel')} className="bg-green-50 hover:bg-green-100 text-green-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors">
-                      <Download size={14} /> Excel
-                    </button>
-                    <button onClick={() => handleExport(course.id, course.course_code, 'csv')} className="bg-blue-50 hover:bg-blue-100 text-blue-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors">
-                      <Download size={14} /> CSV
-                    </button>
-                    <button onClick={() => handleExport(course.id, course.course_code, 'pdf')} className="bg-orange-50 hover:bg-orange-100 text-orange-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors">
-                      <Download size={14} /> PDF
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {courses.length === 0 && (
-              <div className="col-span-full text-center py-8 text-gray-500">คุณยังไม่ได้เปิดรายวิชาใดๆ ในระบบ</div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {isViewOpen && selectedCourseForView && (
-        <CourseAttendanceView 
-          courseId={selectedCourseForView.id} 
-          courseCode={selectedCourseForView.course_code}
-          courseName={selectedCourseForView.course_name}
-          onClose={() => setIsViewOpen(false)} 
-        />
-      )}
-    </div>
-  );
+  return <div className="mx-auto w-full max-w-6xl"><div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:p-6">
+    <h2 className="mb-6 flex items-center gap-2 text-xl font-bold text-gray-800 sm:text-2xl"><FileSpreadsheet className="shrink-0 text-orange-500" />ส่งออกรายงานการเช็คชื่อ</h2>
+    {loading ? <div className="flex flex-col items-center py-10 text-center text-gray-500"><div className="mb-4 size-8 animate-spin rounded-full border-b-2 border-orange-500" />กำลังโหลดรายวิชาของคุณ...</div> : <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      {courses.map((course) => <article key={course.id} className="rounded-xl border border-gray-200 p-5 transition-shadow hover:shadow-md">
+        <span className="mb-2 inline-block rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">{course.course_code}</span>
+        <button type="button" onClick={() => setSelectedCourse(course)} className="block cursor-pointer text-left transition-colors hover:text-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-300"><span className="text-lg font-bold text-gray-900 underline decoration-gray-300 underline-offset-4">{course.course_name}</span></button>
+        <p className="mt-1 text-sm text-gray-500">เทอม {course.semester}/{course.year} | Sec {course.section}</p>
+        <div className="mt-4 border-t border-gray-100 pt-4"><p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">เลือกรูปแบบไฟล์</p><div className="grid grid-cols-3 gap-2">
+          {(['excel', 'csv', 'pdf'] as const).map((format) => { const busy = exporting === `${course.id}:${format}`; const tone = format === 'excel' ? 'bg-green-50 text-green-700 hover:bg-green-100' : format === 'csv' ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'bg-orange-50 text-orange-700 hover:bg-orange-100'; return <button key={format} type="button" disabled={Boolean(exporting)} onClick={() => void handleExport(course, format)} className={`flex min-h-10 cursor-pointer items-center justify-center gap-1 rounded-lg text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${tone}`}><Download size={14} />{busy ? 'กำลังสร้าง…' : format === 'excel' ? 'Excel' : format.toUpperCase()}</button>; })}
+        </div></div>
+      </article>)}
+      {!courses.length && <div className="col-span-full py-8 text-center text-gray-500">คุณยังไม่ได้เปิดรายวิชาใดๆ ในระบบ</div>}
+    </div>}
+  </div>
+  {selectedCourse && <CourseAttendanceView courseId={selectedCourse.id} courseCode={selectedCourse.course_code} courseName={selectedCourse.course_name} onClose={() => setSelectedCourse(null)} />}
+  </div>;
 }

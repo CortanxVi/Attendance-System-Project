@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Check, Clock3, ShieldCheck, X } from 'lucide-react';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
 
 interface TemporaryRequest {
   id: string;
@@ -51,7 +51,10 @@ export default function TemporaryAdminRequests() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const submitDecision = async () => {
     if (!decision) return;

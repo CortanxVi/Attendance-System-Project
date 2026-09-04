@@ -40,12 +40,21 @@ export default defineConfig({
         // ⚠️ ตั้งใจไม่ทำ runtime caching ให้ path /api/** เด็ดขาด
         // เพราะข้อมูลเช็คชื่อ/สถานะห้องเรียนต้องเป็นข้อมูลล่าสุดเสมอ ห้ามใช้ค่าที่แคชไว้เก่า
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        // Excel/PDF engines are large and only needed after an explicit export action.
+        // Keeping them out of the install-time precache makes first launch faster;
+        // the browser still caches them normally after their first on-demand load.
+        globIgnores: ['**/xlsx-*.js', '**/pdfmake-*.js'],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
     }),
   ],
   optimizeDeps: {
-    exclude: ['@mediapipe/face_mesh', '@mediapipe/camera_utils']
+    exclude: ['@mediapipe/face_mesh']
+  },
+  build: {
+    // pdfmake is an intentionally lazy, user-triggered export engine. Its size does
+    // not affect the initial route and is kept visible in the build size report.
+    chunkSizeWarningLimit: 1000,
   },
   server: {
     proxy: {

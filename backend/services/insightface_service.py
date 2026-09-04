@@ -1,7 +1,20 @@
-# Work perfectly fine added ระบบคัดกรองลงทะเบียนให้เข้มงวดขึ้น
+from dataclasses import dataclass
+import os
+import threading
+
 import numpy as np
 import cv2
 from insightface.app import FaceAnalysis
+
+
+@dataclass(frozen=True)
+class FaceObservation:
+    embedding: np.ndarray
+    yaw_proxy: float
+    pitch_proxy: float
+    roll_proxy: float
+    detection_score: float
+    eye_aperture_proxy: float
 
 class FaceService:
     # 🌟 [เพิ่มใหม่] ค่าคงที่สำหรับกรอง "หน้าปลอม" ออกก่อนนับจำนวนคนในภาพตอนลงทะเบียน
@@ -16,7 +29,15 @@ class FaceService:
         print("Loading InsightFace Model...")
         self.app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
         self.app.prepare(ctx_id=0, det_size=(640, 640))
+        inference_concurrency = max(1, min(int(os.getenv("FACE_INFERENCE_CONCURRENCY", "2")), 4))
+        self._inference_slots = threading.BoundedSemaphore(inference_concurrency)
         print("InsightFace Model Loaded Successfully!")
+
+    def _detect_faces(self, image_bgr: np.ndarray) -> list:
+        """Bound concurrent ONNX inference so bursts do not exhaust CPU/RAM."""
+
+        with self._inference_slots:
+            return self.app.get(image_bgr)
 
     def _add_padding(self, img: np.ndarray, pad_percent: float = 0.25) -> np.ndarray:
         h, w = img.shape[:2]
@@ -58,10 +79,10 @@ class FaceService:
     def extract_face_embedding(self, image_bgr: np.ndarray) -> np.ndarray | None:
         """(ใช้งานจริง) สกัดเวกเตอร์ ยอมรับสภาพแสงและแว่นตาได้"""
         try:
-            faces = self.app.get(image_bgr)
+            faces = self._detect_faces(image_bgr)
             if not faces:
                 padded_img = self._add_padding(image_bgr)
-                faces = self.app.get(padded_img)
+                faces = self._detect_faces(padded_img)
                 if not faces:
                     return None
             
@@ -73,15 +94,66 @@ class FaceService:
             print(f"FaceExtraction Error: {str(e)}")
             return None
 
+    @staticmethod
+    def _observation_from_face(face) -> FaceObservation | None:
+        keypoints = np.asarray(getattr(face, "kps", None), dtype=np.float32)
+        if keypoints.shape != (5, 2):
+            return None
+        left_eye, right_eye, nose, left_mouth, right_mouth = keypoints
+        eye_mid = (left_eye + right_eye) / 2.0
+        mouth_mid = (left_mouth + right_mouth) / 2.0
+        eye_distance = float(np.linalg.norm(right_eye - left_eye))
+        vertical_distance = float(mouth_mid[1] - eye_mid[1])
+        if eye_distance < 1.0 or abs(vertical_distance) < 1.0:
+            return None
+        face_axis_mid = (eye_mid + mouth_mid) / 2.0
+        dense_landmarks = np.asarray(getattr(face, "landmark_3d_68", None), dtype=np.float32)
+        if dense_landmarks.shape != (68, 3):
+            return None
+
+        def eye_aspect_ratio(indices: tuple[int, int, int, int, int, int]) -> float:
+            p1, p2, p3, p4, p5, p6 = (dense_landmarks[index, :2] for index in indices)
+            horizontal = float(np.linalg.norm(p1 - p4))
+            if horizontal < 1.0:
+                return 0.0
+            return float((np.linalg.norm(p2 - p6) + np.linalg.norm(p3 - p5)) / (2 * horizontal))
+
+        eye_aperture = (
+            eye_aspect_ratio((36, 37, 38, 39, 40, 41))
+            + eye_aspect_ratio((42, 43, 44, 45, 46, 47))
+        ) / 2.0
+        if eye_aperture <= 0:
+            return None
+        return FaceObservation(
+            embedding=np.asarray(face.normed_embedding, dtype=np.float32),
+            yaw_proxy=float((nose[0] - face_axis_mid[0]) / eye_distance),
+            pitch_proxy=float((nose[1] - eye_mid[1]) / vertical_distance),
+            roll_proxy=float((right_eye[1] - left_eye[1]) / eye_distance),
+            detection_score=float(face.det_score),
+            eye_aperture_proxy=eye_aperture,
+        )
+
+    def extract_strict_face_observation(self, image_bgr: np.ndarray) -> FaceObservation | None:
+        """Return one high-confidence face with geometry for server liveness checks."""
+
+        try:
+            faces = self._filter_significant_faces(self._detect_faces(image_bgr))
+            if len(faces) != 1 or float(faces[0].det_score) < 0.60:
+                return None
+            return self._observation_from_face(faces[0])
+        except Exception as exc:
+            print(f"FaceObservation Error: {type(exc).__name__}")
+            return None
+
     def extract_face_for_registration(self, image_bgr: np.ndarray):
         """
         🎯 (ลงทะเบียน) เข้มงวดพิเศษ: ต้องเป็นหน้าตรง ชัดเจน และไม่มีสิ่งบดบังมากเกินไป
         """
         try:
-            faces = self.app.get(image_bgr)
+            faces = self._detect_faces(image_bgr)
             if len(faces) == 0:
                 padded_img = self._add_padding(image_bgr)
-                faces = self.app.get(padded_img)
+                faces = self._detect_faces(padded_img)
             
             if len(faces) == 0:
                 return None, "ไม่พบใบหน้า กรุณาถ่ายในที่สว่าง ถอดแว่นตาและหน้ากากอนามัย"

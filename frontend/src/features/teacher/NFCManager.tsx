@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { X, CreditCard } from 'lucide-react';
 import axios from 'axios';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
+import { apiErrorMessage } from '../../services/apiError';
 
 interface NFCManagerProps {
   defaultCourseCode: string;
@@ -9,26 +10,25 @@ interface NFCManagerProps {
   onClose: () => void;
 }
 
+interface NfcCheckIn { student_id: string; full_name?: string; status?: string }
+
 export default function NFCManager({ defaultCourseCode, activeSessionId, onClose }: NFCManagerProps) {
   const { notify } = useNotification();
   const [scanUid, setScanUid] = useState('');
   const [statusMessage, setStatusMessage] = useState({ text: '🔴 กำลังรอการสแกนบัตร...', type: 'info' });
-  const [latestCheckIns, setLatestCheckIns] = useState<any[]>([]); // เก็บประวัติคนสแกนล่าสุดแสดงบนจอ
+  const [latestCheckIns, setLatestCheckIns] = useState<NfcCheckIn[]>([]);
   const rfidInputRef = useRef<HTMLInputElement>(null); // เก็บการเรียกใช้ DOM Element
+
+  const focusInput = useCallback(() => {
+    rfidInputRef.current?.focus();
+  }, []);
 
   // บังคับให้ Cursor โฟกัสที่ช่อง Input ตลอดเวลาเพื่อรอรับค่าจากเครื่องสแกน
   useEffect(() => {
     focusInput();
     const interval = setInterval(focusInput, 1000);
     return () => clearInterval(interval);
-  }, []);
-
-  // จับ focus อัตโนมัติ
-  const focusInput = () => {
-    if (rfidInputRef.current) {
-      rfidInputRef.current.focus(); // เรียกให้ input นี้ focus อยู่เสมอถ้าไม่ focus input จะไม่รับ keyboard input ได้
-    }
-  };
+  }, [focusInput]);
 
   // ฟังก์ชันจังหวะที่เครื่องสแกนยิงรหัส UID เข้ามา (กด Enter อัตโนมัติ)
   const handleCardScanned = async (e: React.FormEvent) => {
@@ -52,7 +52,7 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
       });
 
       if (response.data.status === 'success') {
-        let receiveInfo = response.data.student_info;
+        const receiveInfo = response.data.student_info as NfcCheckIn;
         setStatusMessage({ 
           text: `✅ เช็คชื่อสำเร็จ: รหัสนักศึกษา ${receiveInfo.student_id} (${response.data.status})`, 
           type: 'success' 
@@ -62,9 +62,9 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
         // เพิ่มรายชื่อนักศึกษาที่เพิ่งสแกนเข้าไปในรายการแสดงผลหน้าจอ
         setLatestCheckIns(prev => [receiveInfo, ...prev].slice(0, 5));
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setStatusMessage({ 
-        text: `❌ ${error.response?.data?.detail || 'เกิดข้อผิดพลาดในการเช็คชื่อ'}`, 
+        text: `❌ ${apiErrorMessage(error, 'เกิดข้อผิดพลาดในการเช็คชื่อ')}`,
         type: 'error' 
       });
     } finally {
@@ -73,22 +73,22 @@ export default function NFCManager({ defaultCourseCode, activeSessionId, onClose
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl border border-gray-100 flex flex-col max-h-[85vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-2 backdrop-blur-sm sm:p-4">
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-xl flex-col overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
         
         {/* ส่วนหัว */}
-        <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50">
-          <div>
-            <h3 className="text-xl font-bold text-gray-900">🎛️ โหมดเครื่องสแกนบัตร NFC</h3>
+        <div className="flex items-start justify-between gap-3 border-b border-gray-100 bg-gray-50 p-4 sm:items-center sm:p-6">
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold text-gray-900 sm:text-xl">🎛️ โหมดเครื่องสแกนบัตร NFC</h3>
             <p className="text-sm text-gray-500 mt-0.5">วิชา: <span className="font-semibold text-blue-600">{defaultCourseCode}</span></p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-200 rounded-xl transition-colors">
+          <button type="button" aria-label="ปิดโหมดเครื่องสแกนบัตร NFC" onClick={onClose} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
             <X size={24} />
           </button>
         </div>
 
         {/* ส่วนเนื้อหาหลัก */}
-        <div className="p-8 flex flex-col items-center flex-1 overflow-y-auto space-y-6">
+        <div className="flex min-h-0 flex-1 flex-col items-center space-y-5 overflow-y-auto p-4 sm:space-y-6 sm:p-8">
           
           {/* แอนิเมชันไอคอนรอสแกน */}
           <div className={`p-6 rounded-full bg-blue-50 text-blue-600 animate-pulse`}>

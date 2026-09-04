@@ -9,10 +9,10 @@
     "lint": "eslint .",
     "test:card-image": "node --experimental-strip-types scripts/test-card-image.mjs",
     "test:security": "node --experimental-strip-types scripts/test-spreadsheet-security.mjs",
+    "test:liveness": "node --experimental-strip-types scripts/test-liveness.mts",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/face_mesh": "^0.4.1633559619",
     "@supabase/supabase-js": "^2.106.1",
     "@tailwindcss/vite": "^4.3.0",

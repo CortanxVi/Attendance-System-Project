@@ -1,16 +1,22 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 import { ClipboardList, Clock } from "lucide-react";
 
+interface AuditLog {
+  id: string;
+  created_at: string;
+  action: string;
+  target_type?: string | null;
+  target_id?: string | null;
+  details?: unknown;
+  profiles?: { full_name?: string | null } | null;
+}
+
 export default function SystemLogs() {
-  const [logs, setLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchLogs();
-  }, []);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
       const res = await axios.get("/api/v1/admin/logs");
@@ -20,7 +26,12 @@ export default function SystemLogs() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchLogs(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchLogs]);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -34,7 +45,7 @@ export default function SystemLogs() {
     });
   };
 
-  const formatDetails = (details: any) => {
+  const formatDetails = (details: unknown) => {
     if (!details) return "-";
 
     // ถ้าเป็นข้อความธรรมดา ให้แสดงผลปกติ
@@ -44,7 +55,7 @@ export default function SystemLogs() {
     // ถ้าเป็น Object (JSON) ให้แกะออกมาทำเป็น Badge
     return (
       <div className="flex flex-wrap gap-1.5 justify-end">
-        {Object.entries(details).map(([key, value]) => (
+        {Object.entries(details as Record<string, unknown>).map(([key, value]) => (
           <span
             key={key}
             className="inline-flex items-center bg-white border border-gray-200 shadow-sm rounded-md px-2 py-1 text-[11px] text-gray-600"
@@ -60,15 +71,15 @@ export default function SystemLogs() {
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 animate-fade-in">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-          <ClipboardList className="text-red-500" /> Audit Logs
+    <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
+      <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+        <h2 className="flex items-start gap-2 text-xl font-bold text-gray-800 sm:items-center sm:text-2xl">
+          <ClipboardList className="shrink-0 text-red-500" /> Audit Logs
           (ประวัติการใช้งานระบบ)
         </h2>
         <button
           onClick={fetchLogs}
-          className="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-4 rounded-lg font-medium transition-colors"
+          className="min-h-11 cursor-pointer rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
         >
           รีเฟรชข้อมูล
         </button>
@@ -80,7 +91,7 @@ export default function SystemLogs() {
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full min-w-max border-collapse text-left">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 text-sm">
                 <th className="py-3 px-4 rounded-tl-xl font-semibold w-1/4">

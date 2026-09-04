@@ -1,15 +1,13 @@
 import { useState, useEffect } from 'react';
 import * as Lucide from 'lucide-react';
 import axios from 'axios';
+import { Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabaseClient';
 import LiveAttendance from './LiveAttendance'; 
 import NFCManager from './NFCManager';
 import LiveCheckInFeed from './LiveCheckInFeed';
 import AddCourseModal from './AddCourseModal';
-import EditCourseModal from './EditCourseModal';
-import CourseSettingsModal from './CourseSettings';
-import CourseAttendanceView from './CourseAttendanceView';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
 
 // 🌟 Interface มารองรับฟิลด์เกณฑ์การตั้งค่าที่จะดึงมาจากฐานข้อมูล
@@ -24,6 +22,12 @@ interface Course {
   late_threshold_minutes?: number;
   absent_threshold_minutes?: number;
   max_absence_percent?: number;
+}
+
+function apiDetail(error: unknown, fallback: string) {
+  return axios.isAxiosError(error) && typeof error.response?.data?.detail === 'string'
+    ? error.response.data.detail
+    : fallback;
 }
 
 export default function TeacherDashboard() {
@@ -43,24 +47,8 @@ export default function TeacherDashboard() {
   const [teacherName, setTeacherName] = useState<string>('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
-  // 🌟 State สำหรับการแก้ไข
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [selectedCourseForEdit, setSelectedCourseForEdit] = useState<Course | null>(null);
-
-  // 🌟 State สำหรับควบคุมการเปิด-ปิดหน้าต่างตั้งค่าเกณฑ์รายวิชา
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [selectedCourseForConfig, setSelectedCourseForConfig] = useState<Course | null>(null);
-
-  // 🌟 State สำหรับตารางประวัติเข้าเรียน (Manual Edit)
-  const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
-  const [selectedCourseForView, setSelectedCourseForView] = useState<Course | null>(null);
-
   const [teacherId, setTeacherId] = useState<string>('');
-  const [pendingAction, setPendingAction] = useState<
-    | { type: 'close-session' }
-    | { type: 'delete-course'; courseId: string; courseCode: string }
-    | null
-  >(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'close-session' } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
 
   useEffect(() => {
@@ -82,7 +70,7 @@ export default function TeacherDashboard() {
     resolveTeacherId();
   }, []);
 
-  const fetchCourses = async (tId: string) => {
+  async function fetchCourses(tId: string) {
     try {
       setIsLoading(true);
       const response = await axios.get(`/api/v1/courses/${tId}`);
@@ -94,7 +82,7 @@ export default function TeacherDashboard() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }
 
   const handleStartSession = async (courseId: string, courseCode: string, courseName: string) => {
     try {
@@ -108,8 +96,8 @@ export default function TeacherDashboard() {
       if (response.data.status === 'success') {
         setActiveSessionId(response.data.session_id);
       }
-    } catch (error: any) {
-      notify(`ไม่สามารถเปิดห้องเรียนได้: ${error.response?.data?.detail || 'เกิดข้อผิดพลาด'}`, 'error');
+    } catch (error: unknown) {
+      notify(`ไม่สามารถเปิดห้องเรียนได้: ${apiDetail(error, 'เกิดข้อผิดพลาด')}`, 'error');
     } finally {
       setIsCreatingSession(false);
     }
@@ -135,37 +123,21 @@ export default function TeacherDashboard() {
         setIsLive(false);
         setIsNfcOpen(false);
         notify('ปิดระบบและบันทึกเวลาลงฐานข้อมูลเรียบร้อยแล้ว', 'success');
-      } catch (error) {
+      } catch {
         notify('เกิดข้อผิดพลาดในการเชื่อมต่อเพื่อปิดเซสชัน', 'error');
-      }
-    } else {
-      try {
-        await axios.delete(`/api/v1/courses/${pendingAction.courseId}`);
-        notify('ลบรายวิชาสำเร็จ', 'success');
-        await fetchCourses(teacherId);
-      } catch (error: any) {
-        notify(`ลบไม่สำเร็จ: ${error.response?.data?.detail || 'ติดข้อจำกัดด้านฐานข้อมูล'}`, 'error');
       }
     }
     setPendingAction(null);
     setActionBusy(false);
   };
 
-  // 🌟 ฟังก์ชันลบรายวิชา
-  const handleDeleteCourse = (courseId: string, courseCode: string) => {
-    setPendingAction({ type: 'delete-course', courseId, courseCode });
-  };
-
   return (
-    <div className="flex flex-col h-full bg-transparent">
+    <div className="flex min-w-0 flex-col bg-transparent">
       <ConfirmDialog
         open={Boolean(pendingAction)}
-        title={pendingAction?.type === 'close-session' ? 'ปิดการเช็คชื่อ' : 'ลบรายวิชา'}
-        description={pendingAction?.type === 'close-session'
-          ? 'ต้องการปิดคลาสและบันทึกเวลาสิ้นสุดการเช็คชื่อหรือไม่?'
-          : `ต้องการลบรายวิชา ${pendingAction?.type === 'delete-course' ? pendingAction.courseCode : ''} หรือไม่?\nข้อมูลที่เกี่ยวข้องอาจไม่สามารถกู้คืนได้`}
-        confirmLabel={pendingAction?.type === 'close-session' ? 'ปิดการเช็คชื่อ' : 'ลบรายวิชา'}
-        danger
+        title="ปิดการเช็คชื่อ"
+        description="ต้องการปิดคลาสและบันทึกเวลาสิ้นสุดการเช็คชื่อหรือไม่?"
+        confirmLabel="ปิดการเช็คชื่อ"
         busy={actionBusy}
         onConfirm={confirmAction}
         onCancel={() => setPendingAction(null)}
@@ -176,36 +148,17 @@ export default function TeacherDashboard() {
       {isNfcOpen && activeSessionId && <NFCManager defaultCourseCode={currentSelectedCourseCode} activeSessionId={activeSessionId} onClose={() => setIsNfcOpen(false)} />}
       {isAddModalOpen && <AddCourseModal onClose={() => setIsAddModalOpen(false)} onSuccess={() => fetchCourses(teacherId)} />}
       
-      {/* 🌟 Modal แก้ไขรายวิชา */}
-      {isEditModalOpen && selectedCourseForEdit && (
-        <EditCourseModal course={selectedCourseForEdit} onClose={() => setIsEditModalOpen(false)} onSuccess={() => fetchCourses(teacherId)} />
-      )}
-
-      {isSettingsModalOpen && selectedCourseForConfig && (
-        <CourseSettingsModal courseId={selectedCourseForConfig.id} currentConfig={{ total_sessions: selectedCourseForConfig.total_sessions, late_threshold_minutes: selectedCourseForConfig.late_threshold_minutes, absent_threshold_minutes: selectedCourseForConfig.absent_threshold_minutes, max_absence_percent: selectedCourseForConfig.max_absence_percent }} onSaveSuccess={() => fetchCourses(teacherId)} onClose={() => setIsSettingsModalOpen(false)} />
-      )}
-
-      {/* 🌟 Modal ประวัติการเข้าเรียน (Web View + Manual Override) */}
-      {isAttendanceViewOpen && selectedCourseForView && (
-        <CourseAttendanceView 
-          courseId={selectedCourseForView.id} 
-          courseCode={selectedCourseForView.course_code}
-          courseName={selectedCourseForView.course_name}
-          onClose={() => setIsAttendanceViewOpen(false)} 
-        />
-      )}
-
       {/* 🌟 ส่วนต้อนรับและปุ่มคอนโทรล */}
-      <div className="animate-fade-in p-6">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+      <div className="min-w-0 animate-fade-in">
+        <div className="mb-6 flex flex-col items-start justify-between gap-4 md:mb-8 md:flex-row md:items-center">
           <div>
             {/* 🌟 ข้อความทักทายอาจารย์ */}
-            <h2 className="text-3xl font-bold text-gray-800 flex items-center gap-2">
+            <h2 className="flex items-center gap-2 text-2xl font-bold text-gray-800 sm:text-3xl">
               สวัสดี! {teacherName || 'อาจารย์'}
             </h2>
             <p className="text-gray-500 mt-1">จัดการรายวิชาและเปิดระบบเช็คชื่อนักศึกษา</p>
           </div>
-          <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:flex-nowrap">
             {/* 🌟 ปุ่มสลับมุมมอง Grid/List */}
             <div className="flex bg-white border border-gray-200 p-1 rounded-xl shadow-sm">
               <button onClick={() => setViewMode('grid')} className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-orange-100 text-orange-600' : 'text-gray-400 hover:text-gray-600'}`} title="Grid View"><Lucide.Grid size={20} /></button>
@@ -234,52 +187,43 @@ export default function TeacherDashboard() {
             {courses.map((course) => {
               const isThisCourseActive = activeSessionId && currentSelectedCourseCode === course.course_code;
               return (
-                <div key={course.id} className={`bg-white rounded-2xl shadow-sm border border-gray-200 hover:shadow-md transition-all flex ${viewMode === 'list' ? 'flex-col md:flex-row md:items-center p-4 gap-4' : 'flex-col p-6'}`}>
+                <div key={course.id} className={`flex min-w-0 rounded-2xl border border-gray-200 bg-white shadow-sm transition-all hover:shadow-md ${viewMode === 'list' ? 'flex-col gap-4 p-4 md:flex-row md:items-center' : 'flex-col p-4 sm:p-6'}`}>
                   
-                  <div className={`flex-1 ${viewMode === 'list' && 'flex items-center gap-6'}`}>
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="space-x-2">
+                    <div className={`min-w-0 flex-1 ${viewMode === 'list' ? 'flex flex-col gap-3 md:flex-row md:items-center md:gap-6' : ''}`}>
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <span className="inline-block px-3 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full">{course.course_code}</span>
                         <span className="inline-block px-3 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded-full">เทอม {course.semester}/{course.year}</span>                        
                       </div>
 
-                      {/* 🌟 ปุ่มจัดการ: Settings, Edit, Delete, View */}
+                      {/* เครื่องมือทั้งหมดของวิชารวมอยู่ในศูนย์จัดการเดียว */}
                       {viewMode === 'grid' && (
-                        <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border border-gray-100">
-                          <button onClick={() => { setSelectedCourseForView(course); setIsAttendanceViewOpen(true); }} className="text-gray-400 hover:text-emerald-600 p-1.5 hover:bg-white rounded-md transition-all shadow-sm" title="ประวัติเช็คชื่อ"><Lucide.Users size={16} /></button>
-                          <button onClick={() => { setSelectedCourseForConfig(course); setIsSettingsModalOpen(true); }} className="text-gray-400 hover:text-slate-700 p-1.5 hover:bg-white rounded-md transition-all shadow-sm" title="ตั้งค่าเกณฑ์เข้าเรียน"><Lucide.Settings size={16} /></button>
-                          <button onClick={() => { setSelectedCourseForEdit(course); setIsEditModalOpen(true); }} className="text-gray-400 hover:text-blue-600 p-1.5 hover:bg-white rounded-md transition-all shadow-sm" title="แก้ไขข้อมูล"><Lucide.Edit size={16} /></button>
-                          <button onClick={() => handleDeleteCourse(course.id, course.course_code)} className="text-gray-400 hover:text-red-600 p-1.5 hover:bg-white rounded-md transition-all shadow-sm" title="ลบรายวิชา"><Lucide.Trash2 size={16} /></button>
-                        </div>
+                        <Link to={`/teacher/courses/${course.id}/manage/overview`} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 hover:border-orange-200 hover:bg-orange-50 hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-300"><Lucide.Settings size={16} />จัดการรายวิชา</Link>
                       )}
                     </div>
 
                     <div>
-                      <h3 
-                        onClick={() => { setSelectedCourseForView(course); setIsAttendanceViewOpen(true); }}
-                        className={`font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors ${viewMode === 'list' ? 'text-lg mb-1' : 'text-xl mb-2'}`}
-                      >
-                        {course.course_name}
+                      <h3 className={`font-bold text-gray-900 ${viewMode === 'list' ? 'text-lg mb-1' : 'text-xl mb-2'}`}>
+                        <Link to={`/teacher/courses/${course.id}/manage/overview`} className="hover:text-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-300">
+                          {course.course_name}
+                        </Link>
                       </h3>
                       <p className="text-sm text-gray-500 mb-0">Section: {course.section}</p>
                     </div>
 
-                    {/* ปุ่มจัดการสำหรับมุมมองแบบ List (โชว์ตรงกลาง) */}
+                    {/* ปุ่มจัดการเดียวสำหรับมุมมองแบบ List */}
                     {viewMode === 'list' && (
-                       <div className="flex items-center gap-2 mt-3 md:mt-0 ml-auto">
-                          <button onClick={() => { setSelectedCourseForView(course); setIsAttendanceViewOpen(true); }} className="text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1"><Lucide.Users size={14} /> ประวัติ</button>
-                          <button onClick={() => { setSelectedCourseForConfig(course); setIsSettingsModalOpen(true); }} className="text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1"><Lucide.Settings size={14} /> ตั้งค่า</button>
-                          <button onClick={() => { setSelectedCourseForEdit(course); setIsEditModalOpen(true); }} className="text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1"><Lucide.Edit size={14} />แก้ไข</button>
-                          <button onClick={() => handleDeleteCourse(course.id, course.course_code)} className="text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1"><Lucide.Trash2 size={14} /> ลบ</button>
+                       <div className="mt-3 flex items-center gap-2 md:mt-0 md:ml-auto">
+                          <Link to={`/teacher/courses/${course.id}/manage/overview`} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 hover:border-orange-200 hover:bg-orange-50 hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-300"><Lucide.Settings size={16} />จัดการรายวิชา</Link>
                        </div>
                     )}
                   </div>
                   
                   {/* ปุ่มคอนโทรลระบบเช็คชื่อ */}
-                  <div className={`${viewMode === 'list' ? 'w-full md:w-64 border-t md:border-t-0 md:border-l border-gray-100 pt-4 md:pt-0 md:pl-4' : 'mt-6'}`}>
+                  <div className={`${viewMode === 'list' ? 'w-full border-t border-gray-100 pt-4 md:w-[clamp(13rem,25%,16rem)] md:shrink-0 md:border-t-0 md:border-l md:pt-0 md:pl-4' : 'mt-6'}`}>
                     {!activeSessionId ? (
                       <button onClick={() => handleStartSession(course.id, course.course_code, course.course_name)} disabled={isCreatingSession} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-medium py-3 rounded-xl transition-colors flex justify-center items-center gap-2 shadow-sm text-sm">
-                        <Lucide.Power size={18} /> {isCreatingSession ? 'กำลังเปิดระบบ...' : 'เปิดรับเช็คชื่อ'}
+                        <Lucide.Power size={18} /> {isCreatingSession ? 'กำลังเปิดระบบ...' : 'เปิดระบบเช็คชื่อ'}
                       </button>
                     ) : isThisCourseActive ? (
                       <div className="space-y-2 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">

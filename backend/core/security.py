@@ -2,6 +2,7 @@ from collections.abc import Callable
 import logging
 import re
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -25,6 +26,7 @@ class AuthenticatedUser(BaseModel):
     full_name: str | None = None
     academic_year: int | None = None
     class_level: str | None = None
+    avatar_url: str | None = None
     base_role: str
     temporary_admin: bool = False
     temporary_admin_expires_at: str | None = None
@@ -37,6 +39,29 @@ KMUTNB_EMAIL_PATTERN = re.compile(r"^[^@]+@(?:[a-z0-9-]+\.)*kmutnb\.ac\.th$", re
 
 def is_allowed_kmutnb_email(email: str | None) -> bool:
     return bool(email and KMUTNB_EMAIL_PATTERN.fullmatch(email.strip()))
+
+
+def trusted_google_avatar_url(user_metadata: object) -> str | None:
+    """Return a Google-hosted avatar URL for display only, never authorization."""
+    if not isinstance(user_metadata, dict):
+        return None
+    candidate = user_metadata.get("picture") or user_metadata.get("avatar_url")
+    if not isinstance(candidate, str) or len(candidate) > 2048:
+        return None
+    try:
+        parsed = urlsplit(candidate.strip())
+    except ValueError:
+        return None
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in {None, 443}
+        or not (hostname == "googleusercontent.com" or hostname.endswith(".googleusercontent.com"))
+    ):
+        return None
+    return candidate.strip()
 
 
 async def get_current_user(
@@ -70,6 +95,7 @@ async def get_current_user(
 
     user_id = str(auth_user.id)
     auth_email = getattr(auth_user, "email", None)
+    avatar_url = trusted_google_avatar_url(getattr(auth_user, "user_metadata", None))
     if not is_allowed_kmutnb_email(auth_email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -140,6 +166,7 @@ async def get_current_user(
         full_name=profile.get("full_name"),
         academic_year=profile.get("academic_year"),
         class_level=profile.get("class_level"),
+        avatar_url=avatar_url,
     )
 
 

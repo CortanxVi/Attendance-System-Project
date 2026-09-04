@@ -31,12 +31,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 (
-  cd "$project_root/backend"
-  exec .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
-) &
-backend_pid=$!
-
-(
   cd "$project_root/ocr-service"
   # The OCR worker must never inherit database or browser credentials.
   exec env \
@@ -52,6 +46,30 @@ backend_pid=$!
 ) &
 ocr_pid=$!
 
+echo "กำลังรอ Light OCR โหลดโมเดล..."
+ocr_ready=false
+for _attempt in $(seq 1 120); do
+  if ! kill -0 "$ocr_pid" 2>/dev/null; then
+    echo "Light OCR หยุดทำงานระหว่างเริ่มระบบ กรุณาตรวจสอบข้อความด้านบน" >&2
+    exit 1
+  fi
+  if node -e "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+    ocr_ready=true
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$ocr_ready" != "true" ]]; then
+  echo "Light OCR ไม่พร้อมภายใน 60 วินาที ระบบจึงยังไม่เปิด Frontend" >&2
+  exit 1
+fi
+
+(
+  cd "$project_root/backend"
+  exec .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+) &
+backend_pid=$!
+
 (
   cd "$project_root/frontend"
   exec npm run dev -- --host 127.0.0.1
@@ -59,6 +77,6 @@ ocr_pid=$!
 frontend_pid=$!
 
 echo "Backend : http://127.0.0.1:8000"
-echo "OCR     : http://127.0.0.1:3001"
+echo "OCR     : http://127.0.0.1:3001 (ready)"
 echo "Frontend: http://127.0.0.1:5173"
 wait -n "$backend_pid" "$ocr_pid" "$frontend_pid"

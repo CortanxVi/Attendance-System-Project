@@ -38,7 +38,7 @@ export default function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 'var(--z-backdrop)' }}>
+    <div className="fixed inset-0 flex items-center justify-center p-3 sm:p-4" style={{ zIndex: 'var(--z-backdrop)' }}>
       <button
         type="button"
         className="absolute inset-0 bg-slate-950/60"
@@ -50,12 +50,12 @@ export default function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-description"
-        className="relative w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl"
+        className="relative max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:p-6"
         style={{ zIndex: 'var(--z-dialog)' }}
       >
         <h2 id="confirm-dialog-title" className="text-xl font-bold text-gray-900">{title}</h2>
         <p id="confirm-dialog-description" className="mt-2 whitespace-pre-line text-sm leading-6 text-gray-600">{description}</p>
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
           <button
             ref={cancelRef}
             type="button"

@@ -30,7 +30,10 @@ components:
   dialog: {}
   toast: {}
   upload: {}
+  support-thread: {}
   live-feed: {}
+  course-management: {}
+  join-code: {}
 ---
 
 # KMUTNB Attendance Design System
@@ -63,7 +66,9 @@ components:
 
 ## Layout
 
-หน้า dashboard จำกัดความกว้างตามพื้นที่ใช้งานเดิมและใช้จังหวะ 1.5rem ระหว่าง section. นักศึกษาใช้ single-column mobile-first; teacher/admin เปลี่ยน sidebar เป็น navigation มือถือ. Upload และ action สำคัญต้องอยู่เหนือ fold โดยไม่ล็อกความสูงหน้าฟอร์ม
+หน้า Teacher/Admin ใช้พื้นที่แบบ fluid เต็มความกว้างโดยไม่กำหนดความกว้างหน้าแบบตายตัว; sidebar เป็น drawer บนมือถือ/แท็บเล็ตและคงอยู่เมื่อ viewport กว้างตั้งแต่ 1024px โดยพื้นที่เนื้อหาต้องมี `min-width: 0` และตารางเป็นเจ้าของ horizontal scroll ของตนเอง. Padding เปลี่ยนตาม viewport ตั้งแต่ 0.75rem ถึง 2rem และใช้จังหวะ 1.5rem ระหว่าง section.
+
+Student เป็น mobile-only shell ขนาดกว้าง 100% และจำกัดเพดาน 440px เพื่อครอบคลุม iPhone ตั้งแต่รุ่นหน้าจอแคบถึง Pro Max. Shell สูงตาม `100dvh` (fallback `100svh`), รองรับ iOS safe-area และมี vertical scroll owner เพียงจุดเดียวที่ main content; bottom navigation อยู่นอก scroller และต้องมองเห็นอยู่เสมอ. Breakpoint ของ viewport ภายนอกห้ามทำให้คอนเทนต์นักศึกษาเปลี่ยนเป็น desktop layout ภายใน shell 440px. Upload และ action สำคัญต้องเข้าถึงได้โดยไม่ล็อกความสูงหน้าฟอร์ม
 
 ## Elevation & Depth
 
@@ -87,11 +92,23 @@ Primary ใช้ส้มในงานทั่วไป, เขียวส�
 
 ตารางคงรูปแบบ header slate อ่อน; มือถืออนุญาต horizontal scroll. รายการ live เรียงใหม่สุดก่อนและแสดงชื่อ รหัส วิธี และสถานะ
 
+Scrollbar ของทุก application-owned scroll surface ใช้ baseline กลางจาก `frontend/src/index.css`: thumb slate, track โปร่งใส, รองรับทั้ง standards properties และ WebKit fallback โดยคืนให้สีระบบใน forced-colors mode
+
 ### Forms and overlays
 
 ฟอร์มเป็น app-owned validation พร้อม `noValidate`. รูปบัตรรับ JPEG/PNG แล้วปรับอัตโนมัติภายในกรอบ 1920×1920 px โดยคงสัดส่วน ไม่ตัดภาพ และเข้ารหัส JPEG คุณภาพ 94%; ไฟล์ผลลัพธ์ต้องไม่เกิน 8 MB ก่อนส่ง. Toast กลางอยู่ขวาบน, deduplicate 2 วินาที, success 5 วินาที, error คงอยู่จนปิด
 
+หน้าตรวจ liveness ใช้กล้อง stream เดียว แสดง native camera selector เมื่อมีกล้องหลายตัว และมี progress/instruction ที่อ่านได้โดย screen reader. ลำดับ challenge มาจาก server และประกอบด้วยการกะพริบตาทั้งสองข้างกับการหันซ้ายหรือขวาแบบสุ่ม; การก้ม/เงย ขยิบตาข้างเดียว ใบหน้าหลุด หรือสลับบุคคลต้องไม่ทำให้ผ่าน. ระบบเก็บภาพชั่วคราวตอนหลับตา หันหน้า และกลับมามองตรงให้ backend ตรวจซ้ำ แล้วทิ้งโดยไม่บันทึกถาวร. สีเขียวใช้เมื่อกำลังยืนยันเช็คชื่อและ success เท่านั้น ส่วน error แสดงสาเหตุพร้อมทางเริ่มใหม่
+
 ฟอร์ม PIN ใช้ช่อง masked, numeric input 6 หลัก, ปุ่มแสดง/ซ่อนที่มี accessible label และไม่ persist ค่าไว้ใน password/local storage. หน้าสิทธิ์ชั่วคราวต้องมีแถบเตือนสี amber พร้อมเวลาหมดอายุและปุ่มกลับสู่สิทธิ์อาจารย์ที่มองเห็นได้ใน Admin layout
+
+โปรไฟล์นักศึกษาใช้โครง mobile card: รูปวงกลมจาก Google Account พร้อม initials fallback, ชื่อ/อีเมล/รหัส, แก้ชั้นปีแบบ inline และแสดง action ลงทะเบียนใบหน้าเฉพาะสถานะที่ยังไม่ลงทะเบียน. คำร้องเป็น navigation row ไปยังหน้ารายการและ thread แยกที่มีทางกลับสู่โปรไฟล์; นักศึกษาและอาจารย์เห็นเฉพาะคู่สนทนาของรายวิชา. ไฟล์แนบใช้ shared preview card, แสดงตัวอย่างก่อนส่งและโหลดตัวอย่างที่ได้รับเมื่อผู้ใช้กดเท่านั้น
+
+การ์ดรายวิชาฝั่งอาจารย์มี action จัดการเพียงจุดเดียวที่มุมขวาบน และคงปุ่มเปิดเช็คชื่อเป็น primary classroom action. ศูนย์จัดการรายวิชาใช้ navigation แยกข้อมูล เกณฑ์ สมาชิก รหัสคลาส ประวัติ และพื้นที่อันตราย; desktop เป็นแถบด้านข้างและ mobile เลื่อนแนวนอนได้. รหัสคลาสใช้ monospace ขนาดใหญ่ในหัวสี slate เพื่อให้อ่านจากหน้าห้องได้ และทุกการหมุนรหัสหรืออนุมัติสมาชิกใช้ app-owned confirmation.
+
+การนำเข้ารายชื่อใช้ upload zone เส้นประพร้อม file picker เป็นทางเลือกเสมอ รองรับ `.xlsx` และ `.csv`; หลังตรวจไฟล์ต้องแสดงสรุปผลและตารางตัวอย่างแบบแบ่งหน้าก่อนเปิดปุ่มยืนยัน. สีเขียวหมายถึงเพิ่มบัญชีที่มีอยู่, น้ำเงินหมายถึงสร้าง/ผูกคำเชิญ, เทาหมายถึงข้อมูลเดิม และแดงหมายถึงแถวที่ต้องแก้ไข โดยทุกสถานะมีข้อความกำกับ. หน้าตั้งค่าระบบเป็นรายการ navigation rows และแต่ละหัวข้อเปิด route แยกที่มีปุ่มกลับ ไม่ซ้อนฟอร์มทั้งหมดในหน้าเดียว.
+
+หน้าจัดการรายวิชาของนักศึกษาเป็น mobile-first single column: ช่องรหัสอยู่ก่อนรายการวิชาที่เข้าร่วมและคำขอทั้งหมด. สถานะรออนุมัติ/อนุมัติ/ปฏิเสธ/ยกเลิกต้องมีทั้งข้อความและไอคอน ไม่สื่อด้วยสีอย่างเดียว.
 
 ### Iconography
 

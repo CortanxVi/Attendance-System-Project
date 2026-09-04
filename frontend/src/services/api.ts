@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { apiErrorMessage } from './apiError';
+import type { LivenessEvidence } from '../utils/liveness';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
 const API_BASE_URL = '/api/v1';
@@ -41,23 +43,31 @@ export const faceService = {
         }
       );
       return response.data;
-    } catch (error: any) {
-      // ดักจับ Error ที่ส่งมาจาก FastAPI (เช่น 400 Bad Request)
-      if (error.response && error.response.data) {
-        throw new Error(error.response.data.detail || 'เกิดข้อผิดพลาดในการเชื่อมต่อ');
-      }
-      throw new Error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้');
+    } catch (error: unknown) {
+      throw new Error(apiErrorMessage(error, 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้'), { cause: error });
     }
   },
 
   // ฟังก์ชันยิง API ยืนยันตัวตนเช็คชื่อ (ใบหน้าสด + รูปบัตรนักศึกษาหรือรหัสนักศึกษา)
   // 🌟 [เพิ่มใหม่] sessionId เป็น parameter แบบไม่บังคับ — ถ้ามี (มาจากการสแกน QR ผ่านแล้ว)
   // จะถูกส่งไปให้ backend ผูกกับคาบเรียนจริง และคำนวณสาย/ขาดให้ถูกต้อง
-  verifyAttendance: async (faceImage: File, idCardImage: File, challengeId: string): Promise<VerifyResponse> => {
+  verifyAttendance: async (
+    faceImage: File,
+    blinkImage: File,
+    turnImage: File,
+    idCardImage: File,
+    challengeId: string,
+    livenessToken: string,
+    livenessEvidence: LivenessEvidence,
+  ): Promise<VerifyResponse> => {
     const formData = new FormData();
     formData.append('face_image', faceImage);       // ภาพถ่ายใบหน้าสดจาก Liveness
+    formData.append('liveness_blink_image', blinkImage);
+    formData.append('liveness_turn_image', turnImage);
     formData.append('id_card_image', idCardImage);
     formData.append('challenge_id', challengeId);
+    formData.append('liveness_token', livenessToken);
+    formData.append('liveness_evidence', JSON.stringify(livenessEvidence));
 
     try {
       const response = await axios.post<VerifyResponse>(
@@ -67,15 +77,15 @@ export const faceService = {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
+          timeout: 46_000,
         }
       );
       return response.data;
-    } catch (error: any) {
-      // ดักจับ Error ที่ส่งมาจาก FastAPI (เช่น 400, 401, 404)
-      if (error.response && error.response.data) {
-        throw new Error(error.response.data.detail || 'เกิดข้อผิดพลาดในการยืนยันตัวตน');
-      }
-      throw new Error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบว่าระบบหลังบ้านทำงานอยู่');
+    } catch (error: unknown) {
+      throw new Error(
+        apiErrorMessage(error, 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบว่าระบบหลังบ้านทำงานอยู่'),
+        { cause: error },
+      );
     }
   },
 };

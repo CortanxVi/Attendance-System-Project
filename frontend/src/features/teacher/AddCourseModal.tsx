@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import axios from 'axios';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
+import { apiErrorMessage } from '../../services/apiError';
 
 interface AddCourseModalProps {
   onClose: () => void;      // ฟังก์ชันสำหรับปิดหน้าต่างป็อปอัป
@@ -36,9 +37,9 @@ export default function AddCourseModal({ onClose, onSuccess }: AddCourseModalPro
         onSuccess(); // รีเฟรชยอดวิชาบนหน้าจอหลัก
         onClose();   // ปิดหน้าต่างนี้ลงไป
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      const detailMsg = error.response?.data?.detail || error.message || 'ไม่สามารถบันทึกข้อมูลวิชาเรียนลงฐานข้อมูลได้';
+      const detailMsg = apiErrorMessage(error, 'ไม่สามารถบันทึกข้อมูลวิชาเรียนลงฐานข้อมูลได้');
       notify(`เพิ่มรายวิชาไม่สำเร็จ: ${detailMsg}`, 'error');
     } finally {
       setIsLoading(false);
@@ -46,19 +47,19 @@ export default function AddCourseModal({ onClose, onSuccess }: AddCourseModalPro
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-fade-in border border-gray-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4">
+      <div className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl animate-fade-in sm:max-h-[calc(100dvh-2rem)]">
         
         {/* หัวข้อโมดอล */}
-        <div className="flex justify-between items-center p-6 border-b border-gray-100">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-gray-100 bg-white p-4 sm:p-6">
           <h3 className="text-lg font-bold text-gray-900">➕ เพิ่มรายวิชาใหม่</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 cursor-pointer p-1">
+          <button type="button" aria-label="ปิดหน้าต่างเพิ่มรายวิชา" onClick={onClose} className="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
             <X size={20} />
           </button>
         </div>
 
         {/* ฟอร์มกรอกข้อมูล */}
-        <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4 p-4 sm:p-6">
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-1">รหัสวิชา</label>
             <input 
@@ -95,7 +96,7 @@ export default function AddCourseModal({ onClose, onSuccess }: AddCourseModalPro
             />
           </div>
 
-          <div className="flex gap-4">
+          <div className="grid grid-cols-1 gap-4 min-[380px]:grid-cols-2">
             <div className="flex-1">
               <label className="block text-sm font-bold text-gray-700 mb-1">ภาคการศึกษา (Semester)</label>
               <input 

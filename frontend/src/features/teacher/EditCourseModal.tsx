@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { X, Save } from 'lucide-react';
 import axios from 'axios';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
+import { apiErrorMessage } from '../../services/apiError';
 
 interface Course {
   id: string;
@@ -41,25 +42,25 @@ export default function EditCourseModal({ course, onClose, onSuccess }: EditCour
       notify('แก้ไขข้อมูลวิชาสำเร็จ', 'success');
       onSuccess();
       onClose();
-    } catch (error: any) {
-      notify(`แก้ไขรายวิชาไม่สำเร็จ: ${error.response?.data?.detail || 'ไม่สามารถอัปเดตได้'}`, 'error');
+    } catch (error: unknown) {
+      notify(`แก้ไขรายวิชาไม่สำเร็จ: ${apiErrorMessage(error, 'ไม่สามารถอัปเดตได้')}`, 'error');
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-fade-in border border-gray-100">
-        <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4">
+      <div className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl animate-fade-in sm:max-h-[calc(100dvh-2rem)]">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-gray-100 bg-gray-50 p-4 sm:p-6">
           <h3 className="text-lg font-bold text-gray-900">✏️ แก้ไขข้อมูลรายวิชา</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={20} /></button>
+          <button type="button" aria-label="ปิดหน้าต่างแก้ไขรายวิชา" onClick={onClose} className="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"><X size={20} /></button>
         </div>
-        <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4 p-4 sm:p-6">
           <div><label className="block text-sm font-bold text-gray-700 mb-1">รหัสวิชา</label><input type="text" value={courseCode} onChange={(e) => setCourseCode(e.target.value)} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
           <div><label className="block text-sm font-bold text-gray-700 mb-1">ชื่อรายวิชา</label><input type="text" value={courseName} onChange={(e) => setCourseName(e.target.value)} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
           <div><label className="block text-sm font-bold text-gray-700 mb-1">หมู่เรียน (Section)</label><input type="number" min="1" value={section} onChange={(e) => setSection(Number(e.target.value))} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
-          <div className="flex gap-4">
+          <div className="grid grid-cols-1 gap-4 min-[380px]:grid-cols-2">
             <div className="flex-1"><label className="block text-sm font-bold text-gray-700 mb-1">ภาคการศึกษา</label><input type="number" min="1" max="3" value={semester} onChange={(e) => setSemester(Number(e.target.value))} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
             <div className="flex-1"><label className="block text-sm font-bold text-gray-700 mb-1">ปีการศึกษา</label><input type="number" min="1" value={year} onChange={(e) => setYear(Number(e.target.value))} className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500" required /></div>
           </div>

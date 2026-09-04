@@ -19,8 +19,9 @@ if not supabase_url or not supabase_rkey:
 supabase_db: Client = create_client(supabase_url, supabase_rkey)
 
 OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:3001").rstrip("/")
-OCR_TIMEOUT_SECONDS = float(os.getenv("OCR_TIMEOUT_SECONDS", "25"))
+OCR_TIMEOUT_SECONDS = float(os.getenv("OCR_TIMEOUT_SECONDS", "42"))
 OCR_SERVICE_TOKEN = os.getenv("OCR_SERVICE_TOKEN", "")
+LIVENESS_SIGNING_KEY = os.getenv("LIVENESS_SIGNING_KEY", "")
 TEMP_ADMIN_PIN_PEPPER = os.getenv("TEMP_ADMIN_PIN_PEPPER", "")
 TEMP_ADMIN_GRANT_SECONDS = int(os.getenv("TEMP_ADMIN_GRANT_SECONDS", "600"))
 TEMP_ADMIN_ENROLLMENT_SECONDS = int(os.getenv("TEMP_ADMIN_ENROLLMENT_SECONDS", "86400"))
@@ -31,16 +32,54 @@ MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
 MAX_IMAGE_WIDTH = int(os.getenv("MAX_IMAGE_WIDTH", "4096"))
 MAX_IMAGE_HEIGHT = int(os.getenv("MAX_IMAGE_HEIGHT", "4096"))
 MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", "16000000"))
+OCR_UPLOAD_REQUEST_MAX_BYTES = int(
+    os.getenv("OCR_UPLOAD_REQUEST_MAX_BYTES", str(MAX_IMAGE_BYTES + 1024 * 1024))
+)
+ATTENDANCE_VERIFY_REQUEST_MAX_BYTES = int(
+    os.getenv("ATTENDANCE_VERIFY_REQUEST_MAX_BYTES", str(4 * MAX_IMAGE_BYTES + 2 * 1024 * 1024))
+)
 QR_REFRESH_SECONDS = int(os.getenv("QR_REFRESH_SECONDS", "12"))
 QR_CHALLENGE_SECONDS = int(os.getenv("QR_CHALLENGE_SECONDS", "120"))
+SUPPORT_ATTACHMENT_MAX_BYTES = int(
+    os.getenv("SUPPORT_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024))
+)
+SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE = int(
+    os.getenv("SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE", "3")
+)
+SUPPORT_UPLOAD_REQUEST_MAX_BYTES = int(
+    os.getenv(
+        "SUPPORT_UPLOAD_REQUEST_MAX_BYTES",
+        str(
+            SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE * SUPPORT_ATTACHMENT_MAX_BYTES
+            + 1024 * 1024
+        ),
+    )
+)
+ROSTER_IMPORT_REQUEST_MAX_BYTES = int(
+    os.getenv("ROSTER_IMPORT_REQUEST_MAX_BYTES", str(6 * 1024 * 1024))
+)
 
 if not 10 <= QR_REFRESH_SECONDS <= 15:
     raise RuntimeError("QR_REFRESH_SECONDS must be between 10 and 15")
 if min(MAX_IMAGE_BYTES, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, MAX_IMAGE_PIXELS) <= 0:
     raise RuntimeError("Image upload limits must be positive integers")
+if not 30 <= OCR_TIMEOUT_SECONDS <= 42:
+    raise RuntimeError("OCR_TIMEOUT_SECONDS must be between 30 and 42 seconds")
 if MAX_IMAGE_WIDTH > 4096 or MAX_IMAGE_HEIGHT > 4096 or MAX_IMAGE_PIXELS > 16_000_000:
     raise RuntimeError(
         "Image upload limits exceed the safe ceiling (4096x4096, 16,000,000 pixels)"
+    )
+if not 1 <= SUPPORT_ATTACHMENT_MAX_BYTES <= 10 * 1024 * 1024:
+    raise RuntimeError("SUPPORT_ATTACHMENT_MAX_BYTES must be between 1 byte and 10 MiB")
+if not 1 <= SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE <= 3:
+    raise RuntimeError("SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE must be between 1 and 3")
+if not SUPPORT_ATTACHMENT_MAX_BYTES <= SUPPORT_UPLOAD_REQUEST_MAX_BYTES <= 32 * 1024 * 1024:
+    raise RuntimeError(
+        "SUPPORT_UPLOAD_REQUEST_MAX_BYTES must be at least one attachment and at most 32 MiB"
+    )
+if not 5 * 1024 * 1024 <= ROSTER_IMPORT_REQUEST_MAX_BYTES <= 8 * 1024 * 1024:
+    raise RuntimeError(
+        "ROSTER_IMPORT_REQUEST_MAX_BYTES must be between 5 MiB and 8 MiB"
     )
 if not 300 <= TEMP_ADMIN_GRANT_SECONDS <= 900:
     raise RuntimeError("TEMP_ADMIN_GRANT_SECONDS must be between 300 and 900")
@@ -55,6 +94,8 @@ if (
     and len(OCR_SERVICE_TOKEN) < 32
 ):
     raise RuntimeError("OCR_SERVICE_TOKEN must contain at least 32 characters in production")
+if APP_ENV == "production" and len(LIVENESS_SIGNING_KEY) < 32:
+    raise RuntimeError("LIVENESS_SIGNING_KEY must contain at least 32 characters in production")
 if (
     APP_ENV == "production"
     and len(TEMP_ADMIN_PIN_PEPPER) < 32

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
-import LivenessScanner from './LivenessScanner';
+import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import { faceService } from '../../services/api';
 import {
   base64ToFile,
@@ -11,16 +10,18 @@ import {
 } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
 import { UploadCloud, CheckCircle, XCircle, Loader2, UserCheck } from 'lucide-react';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
+import type { LivenessAction, LivenessEvidence } from '../../utils/liveness';
 
 export default function StudentHome() {
   const { notify } = useNotification();
-  const navigate = useNavigate();
   const [isScanning, setIsScanning] = useState(false);
   const [verifiedCourse, setVerifiedCourse] = useState<string | null>(null);
   // 🌟 [เพิ่มใหม่] เก็บ session_id ที่ผ่านการตรวจสอบ QR แล้วไว้ใช้ตอนส่งเช็คชื่อจริง (ต่อสายให้ครบใน Step ถัดไป)
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
+  const [livenessToken, setLivenessToken] = useState<string | null>(null);
+  const [livenessActions, setLivenessActions] = useState<LivenessAction[]>([]);
   const [isLivenessActive, setIsLivenessActive] = useState(false);
   const [idCardImage, setIdCardImage] = useState<File | null>(null);
   const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
@@ -31,6 +32,9 @@ export default function StudentHome() {
 
   // สถานะเก็บรูปภาพ
   const [capturedFaceData, setCapturedFaceData] = useState<string | null>(null);
+  const [capturedTurnData, setCapturedTurnData] = useState<string | null>(null);
+  const [capturedBlinkData, setCapturedBlinkData] = useState<string | null>(null);
+  const [livenessEvidence, setLivenessEvidence] = useState<LivenessEvidence | null>(null);
   
   // สถานะการส่งข้อมูล
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -57,25 +61,42 @@ export default function StudentHome() {
     setVerifiedCourse(info.courseName || info.courseCode);
     setChallengeId(info.challengeId);
     setChallengeExpiresAt(info.challengeExpiresAt);
+    setLivenessToken(info.livenessToken);
+    setLivenessActions(info.livenessActions);
   };
 
-  const handleFaceCapture = (imageSrc: string) => {
-    setCapturedFaceData(imageSrc);
+  const handleFaceCapture = (capture: LivenessCapture) => {
+    setCapturedFaceData(capture.faceImageSrc);
+    setCapturedTurnData(capture.turnImageSrc);
+    setCapturedBlinkData(capture.blinkImageSrc);
+    setLivenessEvidence(capture.evidence);
     setIsLivenessActive(false);
   };
 
   // ฟังก์ชันกดยืนยันเช็คชื่อ — ยิง API ไปที่ FastAPI Backend จริง
   const handleSubmitAttendance = async () => {
-    if (!capturedFaceData || !idCardImage || !challengeId) return;
+    if (!capturedFaceData || !capturedBlinkData || !capturedTurnData || !idCardImage || !challengeId || !livenessToken || !livenessEvidence) return;
     setIsSubmitting(true);
 
     try {
       // 1. แปลง Base64 ของภาพใบหน้าจาก Liveness เป็น File object และบีบอัด
       const faceFile = base64ToFile(capturedFaceData, 'liveness_face.jpg');
+      const turnFile = base64ToFile(capturedTurnData, 'liveness_turn.jpg');
+      const blinkFile = base64ToFile(capturedBlinkData, 'liveness_blink.jpg');
       const compressedFace = await compressImage(faceFile, 600, 0.7);
+      const compressedTurn = await compressImage(turnFile, 600, 0.7);
+      const compressedBlink = await compressImage(blinkFile, 600, 0.7);
 
       // 2. ส่งข้อมูลไปยัง FastAPI Backend (POST /api/v1/attendance/verify)
-      const result = await faceService.verifyAttendance(compressedFace, idCardImage, challengeId);
+      const result = await faceService.verifyAttendance(
+        compressedFace,
+        compressedBlink,
+        compressedTurn,
+        idCardImage,
+        challengeId,
+        livenessToken,
+        livenessEvidence,
+      );
 
       // 3. สำเร็จ — เก็บข้อมูลจากหลังบ้านเพื่อแสดงผล
       setResultMessage(result.message);
@@ -124,14 +145,14 @@ export default function StudentHome() {
   };
 
   return (
-    <div className="p-6 max-w-md mx-auto">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+    <div className="mx-auto w-full p-3 min-[375px]:p-4">
+      <h1 className="mb-5 flex items-center gap-2 text-xl font-bold text-gray-800 min-[390px]:text-2xl">
         <UserCheck className="text-blue-600"/> เช็คชื่อนักศึกษา
       </h1>
       
       {finalResult === 'success' ? (
         /* หน้าจอสุดท้าย: สำเร็จ */
-        <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center shadow-sm">
+        <div className="rounded-xl border border-green-200 bg-green-50 p-5 text-center shadow-sm min-[390px]:p-8">
           <CheckCircle size={64} className="mx-auto text-green-500 mb-4" />
           <h2 className="text-2xl font-bold text-green-700 mb-2">เช็คชื่อสำเร็จ!</h2>
           <p className="text-gray-600 mb-2">{resultMessage}</p>
@@ -148,7 +169,7 @@ export default function StudentHome() {
         </div>
       ) : finalResult === 'failed' ? (
         /* หน้าจอสุดท้าย: ไม่สำเร็จ */
-        <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center shadow-sm">
+        <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-center shadow-sm min-[390px]:p-8">
            <XCircle size={64} className="mx-auto text-red-500 mb-4" />
            <h2 className="text-2xl font-bold text-red-700 mb-2">เช็คชื่อไม่สำเร็จ</h2>
            <p className="text-gray-600 mb-4">{resultMessage}</p>
@@ -169,7 +190,12 @@ export default function StudentHome() {
              {isSubmitting ? <><Loader2 className="animate-spin" size={20} /> กำลังตรวจสอบข้อมูลด้วย AI...</> : 'ยืนยันการเข้าเรียน'}
            </button>
            <button 
-             onClick={() => setCapturedFaceData(null)}
+             onClick={() => {
+               setCapturedFaceData(null);
+               setCapturedTurnData(null);
+               setCapturedBlinkData(null);
+               setLivenessEvidence(null);
+             }}
              disabled={isSubmitting}
              className="w-full mt-3 text-sm text-gray-500 hover:text-gray-700 underline"
            >
@@ -180,7 +206,7 @@ export default function StudentHome() {
         /* ด่านที่ 2: หน้าจอ Liveness Detection */
         <div className="relative">
            <button onClick={() => setIsLivenessActive(false)} className="absolute top-4 right-4 z-30 bg-white/80 p-2 rounded-full text-sm font-bold shadow-md">ยกเลิก</button>
-           <LivenessScanner onCaptureSuccess={handleFaceCapture} />
+           <LivenessScanner actions={livenessActions} onCaptureSuccess={handleFaceCapture} />
         </div>
       ) : verifiedCourse ? (
         /* ผ่าน Dynamic QR แล้ว: ต้องมีทั้งภาพบัตรสำหรับ Light OCR และภาพใบหน้าสด */
@@ -225,7 +251,7 @@ export default function StudentHome() {
           )}
           <button 
              onClick={() => setIsLivenessActive(true)}
-             disabled={!idCardImage || isPreparingCard}
+             disabled={!idCardImage || isPreparingCard || !livenessToken || livenessActions.length !== 2}
              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-lg w-full transition-colors"
           >
             เริ่มสแกนใบหน้า (Liveness)
@@ -247,17 +273,6 @@ export default function StudentHome() {
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors"
             >
               สแกน QR Code หน้าห้องเรียน
-            </button>
-          </div>
-          
-          <div className="bg-orange-50 rounded-xl shadow-sm border border-orange-200 p-6">
-            <h2 className="text-lg font-semibold text-orange-800 mb-4">ลงทะเบียนนักศึกษาใหม่</h2>
-            <p className="text-sm text-orange-700 mb-4">ลงทะเบียนถ่ายรูปใบหน้าเพื่อใช้ในการเช็คชื่อ (ทำเพียงครั้งแรกครั้งเดียว)</p>
-            <button 
-              onClick={() => navigate('/student/register')}
-              className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded-lg transition-colors"
-            >
-              ลงทะเบียนใบหน้า
             </button>
           </div>
         </div>

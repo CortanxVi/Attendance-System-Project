@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { supabase } from '../../lib/supabaseClient';
 import { CalendarClock, BookOpen, AlertTriangle, CheckCircle2, Clock3, XCircle } from 'lucide-react';
+import { apiErrorMessage } from '../../services/apiError';
 
 // 🌟 Type ของข้อมูลที่ได้จาก backend (GET /api/v1/students/{uuid}/attendance-history)
 interface CourseSummary {
@@ -53,11 +54,7 @@ export default function AttendanceHistory() {
   const [courseSummary, setCourseSummary] = useState<CourseSummary[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
-  useEffect(() => {
-    loadHistory();
-  }, []);
-
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     try {
       setLoading(true);
       setErrorMsg(null);
@@ -71,12 +68,17 @@ export default function AttendanceHistory() {
       const res = await axios.get(`/api/v1/students/${session.user.id}/attendance-history`);
       setCourseSummary(res.data.course_summary || []);
       setHistory(res.data.history || []);
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || 'ไม่สามารถโหลดประวัติการเข้าเรียนได้');
+    } catch (err: unknown) {
+      setErrorMsg(apiErrorMessage(err, 'ไม่สามารถโหลดประวัติการเข้าเรียนได้'));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadHistory(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadHistory]);
 
   const formatDateTime = (dateStr: string) => {
     return new Date(dateStr).toLocaleString('th-TH', {

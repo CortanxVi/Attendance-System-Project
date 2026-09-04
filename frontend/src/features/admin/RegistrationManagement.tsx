@@ -1,6 +1,7 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import { Camera, CreditCard, UserPlus, Image as ImageIcon, CheckCircle, AlertCircle } from 'lucide-react';
+import { apiErrorMessage } from '../../services/apiError';
 
 export default function RegistrationManagement() {
   const [activeTab, setActiveTab] = useState<'face' | 'nfc'>('face');
@@ -18,6 +19,10 @@ export default function RegistrationManagement() {
   const [nfcMessage, setNfcMessage] = useState({ text: '', type: '' });
   const [isNfcLoading, setIsNfcLoading] = useState(false);
   const nfcInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => () => {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
 
   // 📸 ฟังก์ชันจัดการลงทะเบียนใบหน้า
   const handleFaceImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -49,8 +54,8 @@ export default function RegistrationManagement() {
       setFaceStudentId('');
       setFaceImage(null);
       setImagePreview(null);
-    } catch (err: any) {
-      setFaceMessage({ text: `❌ ${err.response?.data?.detail || 'เกิดข้อผิดพลาดในการลงทะเบียนใบหน้า'}`, type: 'error' });
+    } catch (err: unknown) {
+      setFaceMessage({ text: `❌ ${apiErrorMessage(err, 'เกิดข้อผิดพลาดในการลงทะเบียนใบหน้า')}`, type: 'error' });
     } finally {
       setIsFaceLoading(false);
     }
@@ -82,8 +87,8 @@ export default function RegistrationManagement() {
         setNfcStudentId('');
         setNfcUid('');
       }
-    } catch (err: any) {
-      setNfcMessage({ text: `❌ ${err.response?.data?.detail || 'เกิดข้อผิดพลาด'}`, type: 'error' });
+    } catch (err: unknown) {
+      setNfcMessage({ text: `❌ ${apiErrorMessage(err, 'เกิดข้อผิดพลาด')}`, type: 'error' });
       setNfcUid('');
     } finally {
       setIsNfcLoading(false);
@@ -91,33 +96,33 @@ export default function RegistrationManagement() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto animate-fade-in space-y-6">
+    <div className="mx-auto w-full max-w-3xl space-y-6 animate-fade-in">
       <div className="flex items-center gap-3 mb-2">
         <div className="p-3 bg-red-100 text-red-600 rounded-xl"><UserPlus size={28} /></div>
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">ระบบลงทะเบียน (Enrollment)</h2>
+          <h2 className="text-xl font-bold text-gray-800 sm:text-2xl">ระบบลงทะเบียน (Enrollment)</h2>
           <p className="text-sm text-gray-500">จัดการผูกข้อมูลอัตลักษณ์และคีย์การ์ดเข้ากับบัญชีผู้ใช้</p>
         </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
         {/* แถบ Tabs */}
-        <div className="flex border-b border-gray-100">
+        <div className="grid grid-cols-2 border-b border-gray-100">
           <button 
             onClick={() => setActiveTab('face')}
-            className={`flex-1 py-4 text-sm font-bold flex justify-center items-center gap-2 transition-colors ${activeTab === 'face' ? 'bg-red-50 text-red-600 border-b-2 border-red-500' : 'text-gray-500 hover:bg-gray-50'}`}
+            className={`flex min-h-14 items-center justify-center gap-1 px-2 py-3 text-xs font-bold leading-5 transition-colors sm:gap-2 sm:text-sm ${activeTab === 'face' ? 'bg-red-50 text-red-600 border-b-2 border-red-500' : 'text-gray-500 hover:bg-gray-50'}`}
           >
             <Camera size={18} /> ลงทะเบียนใบหน้า (Face)
           </button>
           <button 
             onClick={() => setActiveTab('nfc')}
-            className={`flex-1 py-4 text-sm font-bold flex justify-center items-center gap-2 transition-colors ${activeTab === 'nfc' ? 'bg-red-50 text-red-600 border-b-2 border-red-500' : 'text-gray-500 hover:bg-gray-50'}`}
+            className={`flex min-h-14 items-center justify-center gap-1 px-2 py-3 text-xs font-bold leading-5 transition-colors sm:gap-2 sm:text-sm ${activeTab === 'nfc' ? 'bg-red-50 text-red-600 border-b-2 border-red-500' : 'text-gray-500 hover:bg-gray-50'}`}
           >
             <CreditCard size={18} /> ผูกบัตรคีย์การ์ด (NFC)
           </button>
         </div>
 
-        <div className="p-8">
+        <div className="p-4 sm:p-8">
           {/* 📸 TAB 1: FACE REGISTRATION */}
           {activeTab === 'face' && (
             <form onSubmit={handleFaceSubmit} noValidate className="space-y-6 animate-fade-in">

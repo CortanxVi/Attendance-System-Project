@@ -1,5 +1,5 @@
 // src/App.tsx
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import type { Session } from '@supabase/supabase-js';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -8,26 +8,28 @@ import Login from './features/auth/Login';
 
 // นำเข้า Layouts และ Pages ที่เพิ่งสร้าง
 import StudentLayout from './components/layout/StudentLayout';
-import StudentHome from './features/student/StudentHome';
-import AttendanceHistory from './features/student/AttendanceHistory';
-import StudentRegister from './features/student/StudentRegister';
-import StudentProfile from './features/student/StudentProfile';
 import TeacherLayout from './components/layout/TeacherLayout';
-import TeacherDashboard from './features/teacher/TeacherDashboard';
-import TeacherExportReports from './features/teacher/ExportReports';
-import ImportStudents from './features/teacher/ImportStudents';
-import TeacherSettings from './features/teacher/TeacherSettings';
-
 import AdminLayout from './components/layout/AdminLayout';
-import SystemOverview from './features/admin/SystemOverview';
-import UserManagement from './features/admin/UserManagement';
-import AllCoursesManagement from './features/admin/AllCoursesManagement';
-import SystemLogs from './features/admin/SystemLogs';
-import ExportReports from './features/admin/ExportReports';
-import RegistrationManagement from './features/admin/RegistrationManagement';
-import TemporaryAdminRequests from './features/admin/TemporaryAdminRequests';
-import { useTemporaryAdmin } from './contexts/TemporaryAdminContext';
+import { useTemporaryAdmin } from './contexts/temporaryAdminState';
 import { setAuthAccessToken } from './services/http';
+
+const StudentHome = lazy(() => import('./features/student/StudentHome'));
+const AttendanceHistory = lazy(() => import('./features/student/AttendanceHistory'));
+const StudentRegister = lazy(() => import('./features/student/StudentRegister'));
+const StudentProfile = lazy(() => import('./features/student/StudentProfile'));
+const StudentRequests = lazy(() => import('./features/student/StudentRequests'));
+const StudentCourses = lazy(() => import('./features/student/StudentCourses'));
+const TeacherDashboard = lazy(() => import('./features/teacher/TeacherDashboard'));
+const TeacherExportReports = lazy(() => import('./features/teacher/ExportReports'));
+const TeacherSettings = lazy(() => import('./features/teacher/TeacherSettings'));
+const CourseManagement = lazy(() => import('./features/teacher/CourseManagement'));
+const SystemOverview = lazy(() => import('./features/admin/SystemOverview'));
+const UserManagement = lazy(() => import('./features/admin/UserManagement'));
+const AllCoursesManagement = lazy(() => import('./features/admin/AllCoursesManagement'));
+const SystemLogs = lazy(() => import('./features/admin/SystemLogs'));
+const ExportReports = lazy(() => import('./features/admin/ExportReports'));
+const RegistrationManagement = lazy(() => import('./features/admin/RegistrationManagement'));
+const TemporaryAdminRequests = lazy(() => import('./features/admin/TemporaryAdminRequests'));
 
 interface UserProfile {
   id: string;
@@ -141,7 +143,7 @@ export default function App() {
   // หน้าโหลดครั้งแรกที่ npm run dev ก่อนจะแสดงผลหน้าต่าง Login
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="flex min-h-svh items-center justify-center bg-gray-50">
         <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-orange-500"></div>
       </div>
     );
@@ -150,7 +152,7 @@ export default function App() {
   // ทั้งเซสชันและโปรไฟล์ถ้าไม่มีข้อมูลจะให้โยนผู้ใช้ไปหน้าเพจเข้าสู่ระบบ
   if (session && !profile && profileError) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+      <div className="flex min-h-svh items-center justify-center bg-gray-50 px-4">
         <div className="w-full max-w-lg rounded-2xl border border-amber-200 bg-white p-7 text-center shadow-lg">
           <h2 className="text-xl font-bold text-gray-900">โหลดข้อมูลผู้ใช้งานไม่สำเร็จ</h2>
           <p role="alert" className="mt-3 text-sm leading-6 text-amber-800">{profileError}</p>
@@ -174,6 +176,7 @@ export default function App() {
   // ถ้านักศึกษาไปเข้า URL ของอาจารย์ จะถูกดีดกลับมาหน้าแรกของตัวเอง
   return (
       <BrowserRouter>
+        <Suspense fallback={<div className="flex min-h-48 items-center justify-center text-sm text-slate-500"><span className="mr-2 size-5 animate-spin rounded-full border-2 border-slate-300 border-t-orange-500" />กำลังโหลดหน้า…</div>}>
         <Routes>
           {/* เส้นทางสำหรับนักศึกษา */}
           {activeRole === 'student' && (
@@ -182,6 +185,8 @@ export default function App() {
             <Route path="history" element={<AttendanceHistory />} />
             <Route path="register" element={<StudentRegister />} />
             <Route path="profile" element={<StudentProfile />} />
+            <Route path="requests" element={<StudentRequests />} />
+            <Route path="courses" element={<StudentCourses />} />
           </Route>
         )}
 
@@ -203,8 +208,8 @@ export default function App() {
           <Route path="/teacher" element={<TeacherLayout />}>
             <Route index element={<TeacherDashboard />} />
             <Route path="reports" element={<TeacherExportReports />} />
-            <Route path="students" element={<ImportStudents />} />
-            <Route path="settings" element={<TeacherSettings />} />
+            <Route path="courses/:courseId/manage/:tab?" element={<CourseManagement />} />
+            <Route path="settings/:section?" element={<TeacherSettings />} />
           </Route>
         )}
 
@@ -213,7 +218,8 @@ export default function App() {
           path="*" 
           element={<Navigate to={activeRole === 'admin' ? "/admin" : activeRole === 'student' ? "/student" : "/teacher"} replace />} 
         />
-      </Routes>
+        </Routes>
+        </Suspense>
     </BrowserRouter>
   );
 }

@@ -3,13 +3,15 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { Shield, Users, BookOpen, FileText, ClipboardList, LogOut, LayoutDashboard, Menu, X, UserPlus, KeyRound } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
-import { useTemporaryAdmin } from '../../contexts/TemporaryAdminContext';
-import { useNotification } from '../notifications/NotificationProvider';
+import { useTemporaryAdmin } from '../../contexts/temporaryAdminState';
+import { useNotification } from '../notifications/notificationContext';
+import { useResponsiveDrawer } from './useResponsiveDrawer';
 
 export default function AdminLayout({ temporary = false }: { temporary?: boolean }) {
   const navigate = useNavigate(); // for Redirect
   const location = useLocation(); // passing state สำหรับรับค่า state มาจาก component อื่น
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const { drawerRef, triggerRef, closeRef } = useResponsiveDrawer(isSidebarOpen, setIsSidebarOpen);
   const temporaryAdmin = useTemporaryAdmin();
   const { notify } = useNotification();
 
@@ -48,25 +50,25 @@ export default function AdminLayout({ temporary = false }: { temporary?: boolean
   const currentPageName = menuItems.find(item => isActive(item.path))?.name || 'ระบบผู้ดูแล (Admin)';
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex min-h-svh w-full min-w-0 bg-slate-50">
       {isSidebarOpen && (
-        <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+        <button type="button" aria-label="ปิดเมนูด้านข้าง" className="fixed inset-0 z-40 cursor-pointer bg-black/50 lg:hidden" onClick={() => setIsSidebarOpen(false)} />
       )}
 
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800">
-          <h1 className="font-bold text-xl flex items-center gap-2">
+      <aside ref={drawerRef} id="admin-navigation" aria-label="เมนูผู้ดูแลระบบ" className={`fixed inset-y-0 left-0 z-50 flex w-[min(18rem,86vw)] flex-col overflow-hidden bg-slate-900 text-white shadow-2xl transition-transform duration-300 ease-in-out lg:visible lg:sticky lg:top-0 lg:h-svh lg:w-[clamp(14rem,20vw,18rem)] lg:shrink-0 lg:translate-x-0 lg:shadow-none ${isSidebarOpen ? 'visible translate-x-0' : 'invisible -translate-x-full'}`}>
+        <div className="flex min-h-16 items-center justify-between gap-3 border-b border-slate-800 px-4 sm:px-5">
+          <h1 className="flex min-w-0 items-center gap-2 font-bold">
             {/* Logo */}
             <Shield size={24} className="text-red-500" />
-            <span className="text-red-400 text-sm">Admin Control Center</span>
+            <span className="truncate text-sm text-red-400">Admin Control Center</span>
           </h1>
-          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white">
+          <button ref={closeRef} type="button" aria-label="ปิดเมนูด้านข้าง" onClick={() => setIsSidebarOpen(false)} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-gray-400 hover:bg-slate-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 lg:hidden">
             <X size={24} />
           </button>
         </div>
 
         {/* Menu Navigate buttons */}
-        <nav className="flex-1 py-6 space-y-1 px-3">
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-5">
           {/* .map() function ทำหน้าที่วิ่งลูปไปดูข้อมูลในกล่องอาร์เรย์ทีละ element
               จะหยิบข้อมูลทีละตัวส่งเข้าไปในฟังก์ชันที่เขียนไว้ข้างใน
               ส่งอาร์เรย์ชุดใหม่ออกมา: เมื่อมันทำงานครบทุกตัว มันจะรวบรวมผลลัพธ์ทั้งหมดแพ็กใส่กล่องอาร์เรย์ชุดใหม่ item params */}
@@ -78,7 +80,8 @@ export default function AdminLayout({ temporary = false }: { temporary?: boolean
               <button
                 key={item.name}
                 onClick={() => { navigate(item.path); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors cursor-pointer ${active ? 'bg-red-500 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                aria-current={active ? 'page' : undefined}
+                className={`flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 ${active ? 'bg-red-500 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                   }`}
               >
                 <Icon size={20} />
@@ -100,17 +103,19 @@ export default function AdminLayout({ temporary = false }: { temporary?: boolean
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
-        {temporary && temporaryAdmin.expiresAt && <div role="status" className="flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-6 py-3 text-sm text-amber-950"><span><strong>กำลังใช้สิทธิ์ผู้ดูแลชั่วคราว</strong> · หมดอายุ {new Date(temporaryAdmin.expiresAt).toLocaleTimeString('th-TH')}</span><button type="button" onClick={leaveTemporaryAdmin} className="rounded-lg border border-amber-700 px-3 py-1.5 font-semibold hover:bg-amber-200">กลับสิทธิ์อาจารย์</button></div>}
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 shadow-sm">
-          <div className="flex items-center gap-4">
-            <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-slate-800 focus:outline-none">
+      <main className="min-w-0 flex-1">
+        <div className="sticky top-0 z-30">
+        {temporary && temporaryAdmin.expiresAt && <div role="status" className="flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-3 py-3 text-sm text-amber-950 sm:px-5 lg:px-8"><span><strong>กำลังใช้สิทธิ์ผู้ดูแลชั่วคราว</strong> · หมดอายุ {new Date(temporaryAdmin.expiresAt).toLocaleTimeString('th-TH')}</span><button type="button" onClick={leaveTemporaryAdmin} className="min-h-10 cursor-pointer rounded-lg border border-amber-700 px-3 py-1.5 font-semibold hover:bg-amber-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-800">กลับสิทธิ์อาจารย์</button></div>}
+        <header className="flex min-h-16 items-center justify-between border-b border-gray-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:px-5 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+            <button ref={triggerRef} type="button" aria-label="เปิดเมนูด้านข้าง" aria-controls="admin-navigation" aria-expanded={isSidebarOpen} onClick={() => setIsSidebarOpen(true)} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-slate-800 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 lg:hidden">
               <Menu size={28} />
             </button>
-            <h1 className="text-xl font-semibold text-gray-800">{currentPageName}</h1>
+            <h1 className="truncate text-base font-semibold text-gray-800 sm:text-xl">{currentPageName}</h1>
           </div>
         </header>
-        <div className="p-6 md:p-8">
+        </div>
+        <div className="w-full min-w-0 p-3 sm:p-5 lg:p-8">
           <Outlet />
         </div>
       </main>

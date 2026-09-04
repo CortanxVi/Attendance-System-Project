@@ -3,15 +3,17 @@
 # CPUExecutionProvider, so CUDA/Triton packages are unnecessary.
 fastapi==0.136.1
 argon2-cffi==25.1.0
+defusedxml==0.7.1
 httpx==0.28.1
 insightface==1.0.1
 numpy==2.4.6
-onnx==1.21.0
+onnx==1.22.0
 onnxruntime==1.26.0
 opencv-python==4.13.0.92
-pillow==12.2.0
+openpyxl==3.1.5
+pillow==12.3.0
 python-dotenv==1.2.2
-python-multipart==0.0.29
+python-multipart==0.0.31
 requests==2.34.2
 scikit-image==0.26.0
 scipy==1.17.1

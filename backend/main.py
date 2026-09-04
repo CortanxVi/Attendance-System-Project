@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import logging
 import os
 import re
 import json
@@ -30,8 +31,11 @@ from core.config import (
     supabase_db as supabase,
 )
 from core.security import AuthenticatedUser, get_current_user, require_roles
-from services.light_ocr_service import extract_student_id, read_validated_image
+from core.request_limits import SupportUploadLimitMiddleware
+from services.light_ocr_service import extract_student_id, read_validated_image, student_card_ocr_limiter
 from services.insightface_service import face_service
+from services.liveness_service import create_liveness_challenge, verify_liveness_submission
+from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
 
 # นำเข้า Router สำหรับ Admin
 from routers.admin import admin_router
@@ -40,6 +44,11 @@ from routers.student import student_router
 # นำเข้า Router สำหรับอาจารย์
 from routers.teacher import teacher_router
 from routers.temporary_admin import router as temporary_admin_router
+from routers.support import support_router
+from routers.course_membership import router as course_membership_router
+
+
+logger = logging.getLogger(__name__)
 
 class NFCRegisterRequest(BaseModel):
     student_id: str
@@ -87,8 +96,13 @@ class CourseUpdateRequest(BaseModel):
 app = FastAPI(title="KMUTNB Face Recognition API")
 router = APIRouter()
 
+# This runs before FastAPI parses multipart bodies, preventing oversized
+# support attachments and roster files from being spooled to disk first.
+app.add_middleware(SupportUploadLimitMiddleware)
+
 # เกณฑ์คะแนนความเหมือนใบหน้า (0.45 - 0.50 ถือว่าแม่นยำและปลอดภัยสูงสำหรับ CPU)
 FACE_THRESHOLD = 0.45
+LIVENESS_FRAME_IDENTITY_THRESHOLD = 0.35
 SUPABASE_ERROR_MESSAGES = {
     '23505': 'นักศึกษาเช็คชื่อในคาบนี้ไปแล้ว',
     '23503': 'ไม่พบ session หรือนักศึกษาในระบบ',
@@ -102,7 +116,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Admin-Grant"],
 )
 
@@ -110,17 +124,19 @@ app.include_router(admin_router)
 app.include_router(student_router)
 app.include_router(teacher_router)
 app.include_router(temporary_admin_router)
+app.include_router(support_router)
+app.include_router(course_membership_router)
 
 
 @app.get("/api/v1/auth/me")
-async def get_authenticated_profile(
+def get_authenticated_profile(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     return {"status": "success", "user": current_user.model_dump()}
 
 
 @app.get("/api/v1/system/config")
-async def get_runtime_config(
+def get_runtime_config(
     _current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     return {
@@ -140,6 +156,7 @@ async def read_student_card(
     image: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(require_roles("student", "admin")),
 ):
+    student_card_ocr_limiter.check(current_user.id)
     uploaded = await read_validated_image(image, "ภาพบัตรนักศึกษา")
     student_id = await extract_student_id(uploaded)
     if current_user.role == "student" and student_id != current_user.student_id:
@@ -192,6 +209,12 @@ def resize_image_if_needed(img: np.ndarray, max_dimension: int = 1280) -> np.nda
     scale = max_dimension / longest_side
     new_size = (int(width * scale), int(height * scale))
     return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+
+def prepare_face_image(image_bytes: bytes) -> np.ndarray | None:
+    """Decode and resize an uploaded face away from the asyncio event loop."""
+    image = bytes_to_cv2_image(image_bytes)
+    return resize_image_if_needed(image) if image is not None else None
 
 def calculate_attendance_status(session_created_at: str, late_threshold_minutes: int, absent_threshold_minutes: int) -> tuple[str, float]:
     """
@@ -279,6 +302,120 @@ def load_valid_challenge(challenge_id: str, current_user: AuthenticatedUser) -> 
         raise HTTPException(status_code=400, detail="สิทธิ์จาก QR หมดอายุ กรุณาสแกน QR ใหม่")
     return challenge
 
+
+def finalize_face_attendance(
+    *,
+    challenge_id: str,
+    student_id: str,
+    session_id: str,
+    attendance_status: str,
+    similarity_score: float,
+    checked_in_at: str,
+    claim_token: str,
+) -> dict:
+    """Commit the attendance row and consume the QR challenge atomically."""
+
+    try:
+        response = supabase.rpc("finalize_face_attendance", {
+            "target_challenge_id": challenge_id,
+            "target_student_id": student_id,
+            "target_session_id": session_id,
+            "attendance_status": attendance_status,
+            "face_similarity": round(similarity_score, 4),
+            "checked_in_at": checked_in_at,
+            "claim_token": claim_token,
+        }).execute()
+    except Exception as exc:
+        logger.exception("Atomic face attendance finalization failed")
+        raise HTTPException(
+            status_code=503,
+            detail="บันทึกผลเช็คชื่อไม่สำเร็จชั่วคราว กรุณาลองอีกครั้งโดยไม่ต้องสแกน QR ใหม่",
+        ) from exc
+
+    result = response.data if isinstance(response.data, dict) else {}
+    outcome = result.get("result")
+    if outcome == "created":
+        return result
+    messages = {
+        "challenge_invalid": (403, "ไม่พบสิทธิ์เช็คชื่อจากการสแกน QR"),
+        "challenge_used": (409, "สิทธิ์จาก QR นี้ถูกใช้เช็คชื่อแล้ว"),
+        "challenge_expired": (400, "สิทธิ์จาก QR หมดอายุ กรุณาสแกน QR ใหม่"),
+        "session_closed": (400, "คาบเรียนนี้ปิดระบบเช็คชื่อแล้ว"),
+        "not_enrolled": (403, "คุณยังไม่ได้เข้าร่วมรายวิชานี้"),
+        "duplicate": (409, "คุณเช็คชื่อในคาบนี้แล้ว"),
+    }
+    status_code, detail = messages.get(
+        outcome,
+        (503, "บันทึกผลเช็คชื่อไม่สำเร็จชั่วคราว กรุณาลองอีกครั้ง"),
+    )
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def claim_face_attendance_challenge(challenge_id: str, student_id: str, claim_token: str) -> None:
+    try:
+        response = supabase.rpc("claim_face_attendance_challenge", {
+            "target_challenge_id": challenge_id,
+            "target_student_id": student_id,
+            "claim_token": claim_token,
+        }).execute()
+    except Exception as exc:
+        logger.exception("Face attendance challenge claim failed")
+        raise HTTPException(status_code=503, detail="เริ่มตรวจสอบเช็คชื่อไม่ได้ชั่วคราว กรุณาลองใหม่") from exc
+    result = response.data if isinstance(response.data, dict) else {}
+    outcome = result.get("result")
+    if outcome == "claimed":
+        return
+    messages = {
+        "challenge_invalid": (403, "ไม่พบสิทธิ์เช็คชื่อจากการสแกน QR"),
+        "challenge_used": (409, "สิทธิ์จาก QR นี้ถูกใช้เช็คชื่อแล้ว"),
+        "challenge_expired": (400, "สิทธิ์จาก QR หมดอายุ กรุณาสแกน QR ใหม่"),
+        "challenge_busy": (409, "คำขอเช็คชื่อนี้กำลังประมวลผลอยู่ กรุณารอผลเดิม"),
+    }
+    status_code, detail = messages.get(outcome, (503, "เริ่มตรวจสอบเช็คชื่อไม่ได้ชั่วคราว"))
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def release_face_attendance_challenge(challenge_id: str, student_id: str, claim_token: str) -> None:
+    try:
+        supabase.rpc("release_face_attendance_challenge", {
+            "target_challenge_id": challenge_id,
+            "target_student_id": student_id,
+            "claim_token": claim_token,
+        }).execute()
+    except Exception:
+        logger.exception("Face attendance challenge lease release failed")
+
+
+def renew_face_attendance_challenge(challenge_id: str, student_id: str, claim_token: str) -> bool:
+    try:
+        response = supabase.rpc("renew_face_attendance_challenge", {
+            "target_challenge_id": challenge_id,
+            "target_student_id": student_id,
+            "claim_token": claim_token,
+        }).execute()
+        return response.data is True
+    except Exception:
+        logger.exception("Face attendance challenge lease renewal failed")
+        return False
+
+
+async def keep_face_attendance_claim_alive(
+    challenge_id: str,
+    student_id: str,
+    claim_token: str,
+) -> None:
+    while True:
+        await asyncio.sleep(20)
+        renewed = await run_in_threadpool(
+            renew_face_attendance_challenge,
+            challenge_id,
+            student_id,
+            claim_token,
+        )
+        if not renewed:
+            logger.warning("Face attendance challenge lease could not be renewed")
+            return
+
 @app.post("/api/v1/enrollment/register-face")
 async def register_face(
     student_id: str = Form(...),
@@ -294,7 +431,7 @@ async def register_face(
                 raise HTTPException(status_code=403, detail="ลงทะเบียนใบหน้าได้เฉพาะบัญชีของตนเอง")
 
         face_upload = await read_validated_image(face_image, "ภาพใบหน้า")
-        img_selfie = bytes_to_cv2_image(face_upload.content)
+        img_selfie = await run_in_threadpool(prepare_face_image, face_upload.content)
         if img_selfie is None:
             raise HTTPException(status_code=400, detail="ไฟล์ภาพใบหน้าเสียหรืออ่านไม่ได้")
 
@@ -304,20 +441,22 @@ async def register_face(
         # รายละเอียดพื้นหลังเยอะๆ ยังเพิ่มโอกาสที่โมเดลจะตรวจจับจุดที่ไม่ใช่ใบหน้าจริงผิดพลาดเป็น
         # "คนที่ 2" ได้ง่ายขึ้นด้วย การย่อขนาดให้เท่ากับฝั่ง verify ช่วยให้พฤติกรรมของทั้งสอง endpoint
         # สอดคล้องกัน และลดปัญหานี้ลง
-        img_selfie = resize_image_if_needed(img_selfie)
-
         # 2. ส่งภาพไปให้ Service ประมวลผลและเช็คกฎเกณฑ์
-        embedding_list, error_msg = face_service.extract_face_for_registration(img_selfie)
+        embedding_list, error_msg = await run_in_threadpool(
+            face_service.extract_face_for_registration, img_selfie
+        )
         
         # ถ้าติดเงื่อนไข (ไม่เจอหน้า/หน้าซ้อน) ให้เตะออกทันที
         if error_msg:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
         
         # 3. อัปเดต Vector ใบหน้าลงตาราง profiles โดยผูกกับ student_id (ที่เป็น Text ตามโครงสร้างจริง)
-        response = supabase.table('profiles').update({
-            'face_registered': True,
-            'face_embedding': embedding_list
-        }).eq('student_id', target_student_id).execute()
+        response = await run_in_threadpool(
+            lambda: supabase.table('profiles').update({
+                'face_registered': True,
+                'face_embedding': embedding_list
+            }).eq('student_id', target_student_id).execute()
+        )
         
         # หากค้นหาเลข 13 หลักในตารางโปรไฟล์แล้วไม่เจอใครเลย
         if len(response.data) == 0:
@@ -343,15 +482,27 @@ async def register_face(
 @app.post("/api/v1/attendance/verify")
 async def verify_FaceReg_OCR_attendance(
     face_image: UploadFile = File(...),
+    liveness_blink_image: UploadFile = File(...),
+    liveness_turn_image: UploadFile = File(...),
     id_card_image: UploadFile = File(...),
     challenge_id: str = Form(...),
+    liveness_token: str = Form(...),
+    liveness_evidence: str = Form(...),
     current_user: AuthenticatedUser = Depends(require_roles("student")),
 ):
+    processing_claim_token: str | None = None
+    claim_renewal_task: asyncio.Task[None] | None = None
     try:
         if not current_user.student_id:
             raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
 
         challenge = await run_in_threadpool(load_valid_challenge, challenge_id, current_user)
+        verified_liveness = verify_liveness_submission(
+            liveness_token,
+            liveness_evidence,
+            challenge_id,
+            current_user.id,
+        )
         session_id = challenge["session_id"]
         session_res = await run_in_threadpool(
             lambda: supabase.table("attendance_sessions")
@@ -366,38 +517,89 @@ async def verify_FaceReg_OCR_attendance(
             session_res.data[0]["course_id"],
             current_user.id,
         )
-
-        consumed_at = datetime.now(timezone.utc).isoformat()
-        consumed = await run_in_threadpool(
-            lambda: supabase.table("attendance_checkin_challenges")
-            .update({"consumed_at": consumed_at})
-            .eq("id", challenge_id)
-            .eq("student_id", current_user.id)
-            .is_("consumed_at", "null")
-            .execute()
+        processing_claim_token = str(uuid.uuid4())
+        await run_in_threadpool(
+            claim_face_attendance_challenge,
+            challenge_id,
+            current_user.id,
+            processing_claim_token,
         )
-        if not consumed.data:
-            raise HTTPException(status_code=409, detail="สิทธิ์จาก QR นี้ถูกใช้แล้ว กรุณาสแกน QR ใหม่")
+        claim_renewal_task = asyncio.create_task(
+            keep_face_attendance_claim_alive(
+                challenge_id,
+                current_user.id,
+                processing_claim_token,
+            )
+        )
 
-        face_upload, card_upload = await asyncio.gather(
+        face_upload, blink_upload, turn_upload, card_upload = await asyncio.gather(
             read_validated_image(face_image, "ภาพใบหน้าสด"),
+            read_validated_image(liveness_blink_image, "ภาพขณะกะพริบตา"),
+            read_validated_image(liveness_turn_image, "ภาพขณะหันหน้า"),
             read_validated_image(id_card_image, "ภาพบัตรนักศึกษา"),
         )
-        img_live = bytes_to_cv2_image(face_upload.content)
-        if img_live is None:
-            raise HTTPException(status_code=400, detail="ไฟล์ภาพใบหน้าสดเสียหรืออ่านไม่ได้")
-        img_live = resize_image_if_needed(img_live)
+        img_live, img_blink, img_turn = await asyncio.gather(
+            run_in_threadpool(prepare_face_image, face_upload.content),
+            run_in_threadpool(prepare_face_image, blink_upload.content),
+            run_in_threadpool(prepare_face_image, turn_upload.content),
+        )
+        if img_live is None or img_blink is None or img_turn is None:
+            raise HTTPException(status_code=400, detail="ไฟล์ภาพ liveness เสียหรืออ่านไม่ได้")
 
-        emb_live, extracted_student_id = await asyncio.gather(
-            run_in_threadpool(face_service.extract_face_embedding, img_live),
+        live_observation, blink_observation, turn_observation, extracted_student_id = await asyncio.gather(
+            run_in_threadpool(face_service.extract_strict_face_observation, img_live),
+            run_in_threadpool(face_service.extract_strict_face_observation, img_blink),
+            run_in_threadpool(face_service.extract_strict_face_observation, img_turn),
             extract_student_id(card_upload),
         )
 
-        if emb_live is None:
+        if live_observation is None or blink_observation is None or turn_observation is None:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="ตรวจไม่พบใบหน้าในภาพสแกนสด กรุณาหันหน้าเข้าหากล้องตรงๆ"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ภาพ liveness ต้องพบใบหน้าชัดเจนเพียง 1 คนทุกช่วงการตรวจสอบ",
             )
+
+        blink_frame_similarity = face_service.calculate_similarity(
+            live_observation.embedding,
+            blink_observation.embedding,
+        )
+        blink_eye_ratio = blink_observation.eye_aperture_proxy / max(
+            live_observation.eye_aperture_proxy,
+            0.001,
+        )
+        blink_yaw_delta = abs(blink_observation.yaw_proxy - live_observation.yaw_proxy)
+        blink_pitch_delta = abs(blink_observation.pitch_proxy - live_observation.pitch_proxy)
+        if (
+            blink_frame_similarity < LIVENESS_FRAME_IDENTITY_THRESHOLD
+            or blink_eye_ratio > 0.78
+            or blink_yaw_delta > 0.10
+            or blink_pitch_delta > 0.12
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="หลักฐานการกะพริบตาไม่ผ่าน กรุณากะพริบตาทั้งสองข้างโดยมองตรงและไม่ผงกศีรษะ",
+            )
+
+        frame_similarity = face_service.calculate_similarity(
+            live_observation.embedding,
+            turn_observation.embedding,
+        )
+        yaw_delta = turn_observation.yaw_proxy - live_observation.yaw_proxy
+        pitch_delta = abs(turn_observation.pitch_proxy - live_observation.pitch_proxy)
+        roll_delta = abs(turn_observation.roll_proxy - live_observation.roll_proxy)
+        expected_direction = -1 if verified_liveness.turn_action == "turn_left" else 1
+        if (
+            frame_similarity < LIVENESS_FRAME_IDENTITY_THRESHOLD
+            or expected_direction * yaw_delta < 0.10
+            or pitch_delta > 0.18
+            or roll_delta > 0.20
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="หลักฐาน liveness ไม่ผ่าน กรุณาหันหน้าตามลูกศรโดยไม่ก้ม เงย หรือใช้ภาพของบุคคลอื่น",
+            )
+
+        emb_live = live_observation.embedding
 
         if extracted_student_id != current_user.student_id:
             raise HTTPException(
@@ -456,19 +658,18 @@ async def verify_FaceReg_OCR_attendance(
             course_cfg.get('absent_threshold_minutes') or 45,
         )
 
-        attendance_data = {
-            'student_id': profile_uuid,
-            'status': calculated_status,
-            'method': 'face_ocr', # face_ocr, nfc, manual 
-            'similarity_score': round(similarity_score, 4),
-            'check_in_time': datetime.now(timezone.utc).isoformat(),
-        }
-        attendance_data['session_id'] = session_id
-
-        # 🌟 [แก้ใหม่] ห่อด้วย run_in_threadpool เช่นกัน (จุดสุดท้ายที่เหลือของ endpoint นี้)
+        checked_in_at = datetime.now(timezone.utc).isoformat()
         await run_in_threadpool(
-            lambda: supabase.table('attendance_records').insert(attendance_data).execute()
+            finalize_face_attendance,
+            challenge_id=challenge_id,
+            student_id=profile_uuid,
+            session_id=session_id,
+            attendance_status=calculated_status,
+            similarity_score=similarity_score,
+            checked_in_at=checked_in_at,
+            claim_token=processing_claim_token,
         )
+        processing_claim_token = None
         # คืนค่าความสำเร็จกลับไปให้หน้าบ้าน (Frontend)
         return {
             "success": True,
@@ -477,7 +678,7 @@ async def verify_FaceReg_OCR_attendance(
             "method": "face_ocr",
             "score": round(similarity_score, 4),
             "calculated_status": calculated_status,  # 🌟 [เพิ่มใหม่] present / late / absent ให้ Frontend โชว์ได้ตรงจริง
-            "check_in_time": attendance_data["check_in_time"],
+            "check_in_time": checked_in_at,
             "message": f"เช็คชื่อคุณ {full_name} สำเร็จเรียบร้อยแล้ว!"
         }
 
@@ -490,9 +691,23 @@ async def verify_FaceReg_OCR_attendance(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail="เกิดข้อผิดพลาดภายในระบบ"
         )
+    finally:
+        if claim_renewal_task:
+            claim_renewal_task.cancel()
+            try:
+                await claim_renewal_task
+            except asyncio.CancelledError:
+                pass
+        if processing_claim_token:
+            await run_in_threadpool(
+                release_face_attendance_challenge,
+                challenge_id,
+                current_user.id,
+                processing_claim_token,
+            )
 
 @app.post("/api/v1/nfc/register")
-async def register_nfc_card(
+def register_nfc_card(
     payload: NFCRegisterRequest,
     _current_user: AuthenticatedUser = Depends(require_roles("admin")),
 ):
@@ -551,7 +766,7 @@ async def register_nfc_card(
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 @app.post("/api/v1/nfc/checkin")
-async def nfc_checkin(
+def nfc_checkin(
     payload: NFCCheckInRequest,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
@@ -559,7 +774,7 @@ async def nfc_checkin(
         uid_clean = payload.nfc_uid.strip().upper()
         if not re.fullmatch(r"[0-9A-F]{10}", uid_clean):
             raise HTTPException(status_code=400, detail="UID ของบัตรต้องเป็นเลขฐานสิบหก 10 ตัว")
-        session = await run_in_threadpool(require_owned_session, payload.session_id, current_user)
+        session = require_owned_session(payload.session_id, current_user)
         if session.get("status") != "open":
             raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อแล้ว")
 
@@ -577,14 +792,10 @@ async def nfc_checkin(
             
         student = user_response.data[0]
         student_uuid = student['id'] # UUID จาก auth.users
-        await run_in_threadpool(
-            require_course_enrollment,
-            session["course_id"],
-            student_uuid,
-        )
+        require_course_enrollment(session["course_id"], student_uuid)
 
-        existing_record = await run_in_threadpool(
-            lambda: supabase.table("attendance_records")
+        existing_record = (
+            supabase.table("attendance_records")
             .select("id")
             .eq("session_id", payload.session_id)
             .eq("student_id", student_uuid)
@@ -594,8 +805,8 @@ async def nfc_checkin(
         if existing_record.data:
             raise HTTPException(status_code=409, detail="นักศึกษาคนนี้เช็คชื่อในคาบนี้แล้ว")
 
-        course_res = await run_in_threadpool(
-            lambda: supabase.table("courses")
+        course_res = (
+            supabase.table("courses")
             .select("late_threshold_minutes, absent_threshold_minutes")
             .eq("id", session["course_id"])
             .execute()
@@ -644,12 +855,12 @@ async def nfc_checkin(
 
 # API สำหรับอาจารย์กดสร้างห้องเรียน (เปิด Session)
 @app.post("/api/v1/sessions/start")
-async def start_attendance_session(
+def start_attendance_session(
     payload: SessionStartRequest,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
-        await run_in_threadpool(require_owned_course, payload.course_id, current_user)
+        require_owned_course(payload.course_id, current_user)
         # 🌟 2. เจนเนอเรต Token ก้อนแรกขึ้นมาสำหรับเซสชันนี้
         initial_token = str(uuid.uuid4())
 
@@ -687,12 +898,12 @@ async def start_attendance_session(
 
 # API สำหรับกดปิดเซสชันแบบ Manual
 @app.post("/api/v1/sessions/{session_id}/close")
-async def close_attendance_session(
+def close_attendance_session(
     session_id: str,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
-        await run_in_threadpool(require_owned_session, session_id, current_user)
+        require_owned_session(session_id, current_user)
         # ดึงเวลาปัจจุบัน (UTC) เพื่อบันทึกเป็นเวลาปิด
         close_time = datetime.now(timezone.utc).isoformat()
         
@@ -721,12 +932,12 @@ async def close_attendance_session(
 # เพราะ endpoint /api/v1/attendance/checkin เช็คกับคอลัมน์นี้เท่านั้น)
 # ฝั่งอาจารย์ (LiveAttendance.tsx) ควรเรียก endpoint นี้ทุกๆ qr_refresh_rate_seconds แทนการยิง Supabase ตรงๆ
 @app.post("/api/v1/sessions/{session_id}/rotate-token")
-async def rotate_session_qr_token(
+def rotate_session_qr_token(
     session_id: str,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
-        session_row = await run_in_threadpool(require_owned_session, session_id, current_user)
+        session_row = require_owned_session(session_id, current_user)
         if session_row['status'] != 'open':
             raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดไปแล้ว ไม่สามารถหมุน QR ต่อได้")
         new_token = str(uuid.uuid4())
@@ -750,7 +961,7 @@ async def rotate_session_qr_token(
 # 🌟 [เพิ่มใหม่] API ให้นักศึกษาตรวจสอบว่า QR ที่สแกนมายังใช้ได้อยู่ไหม ก่อนจะไปขั้นตอนสแกนหน้า
 # (แก้บั๊กเดิมที่ QRScanner.tsx ไป query ตาราง active_sessions ที่ไม่มีอยู่จริงในระบบ)
 @app.post("/api/v1/sessions/{session_id}/validate")
-async def validate_session_qr_token(
+def validate_session_qr_token(
     session_id: str,
     payload: QRValidationRequest,
     current_user: AuthenticatedUser = Depends(require_roles("student")),
@@ -769,7 +980,7 @@ async def validate_session_qr_token(
 
         session_row = session_res.data[0]
         ensure_qr_token_is_current(session_row, payload.token)
-        await run_in_threadpool(require_course_enrollment, session_row["course_id"], current_user.id)
+        require_course_enrollment(session_row["course_id"], current_user.id)
 
         existing_record = (
             supabase.table("attendance_records")
@@ -802,14 +1013,22 @@ async def validate_session_qr_token(
             raise HTTPException(status_code=500, detail="ไม่สามารถสร้างสิทธิ์เช็คชื่อจาก QR ได้")
 
         course_info = session_row.get('courses') or {}
+        challenge_id = challenge_response.data[0]["id"]
+        liveness_token, liveness_actions = create_liveness_challenge(
+            challenge_id,
+            current_user.id,
+            expires_at,
+        )
         return {
             "status": "success",
             "session_id": session_id,
             "course_code": course_info.get('course_code'),
             "course_name": course_info.get('course_name'),
-            "challenge_id": challenge_response.data[0]["id"],
+            "challenge_id": challenge_id,
             "challenge_expires_at": expires_at.isoformat(),
             "challenge_ttl_seconds": QR_CHALLENGE_SECONDS,
+            "liveness_token": liveness_token,
+            "liveness_actions": liveness_actions,
         }
     except HTTPException:
         raise
@@ -818,13 +1037,13 @@ async def validate_session_qr_token(
 
 
 @app.get("/api/v1/sessions/{session_id}/checkins")
-async def get_live_session_checkins(
+def get_live_session_checkins(
     session_id: str,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
-    await run_in_threadpool(require_owned_session, session_id, current_user)
-    response = await run_in_threadpool(
-        lambda: supabase.table("attendance_records")
+    require_owned_session(session_id, current_user)
+    response = (
+        supabase.table("attendance_records")
         .select("id, check_in_time, status, method, profiles(student_id, full_name)")
         .eq("session_id", session_id)
         .order("check_in_time", desc=True)
@@ -845,7 +1064,7 @@ async def get_live_session_checkins(
 
 # 1. API สำหรับกดบันทึกเพิ่มรายวิชาใหม่ลงตาราง courses
 @app.post("/api/v1/courses")
-async def create_course(
+def create_course(
     payload: CourseCreateRequest,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
@@ -869,7 +1088,7 @@ async def create_course(
     "/api/v1/courses",
     dependencies=[Depends(require_roles("admin"))],
 )
-async def get_all_courses():
+def get_all_courses():
     try:
         response = supabase.table('courses').select('*').execute()
         return {"status": "success", "courses": response.data}
@@ -879,7 +1098,7 @@ async def get_all_courses():
 
 # 2. API สำหรับดึงรายวิชาทั้งหมดของอาจารย์ท่านนั้นมาแสดงผลบน Dashboard
 @app.get("/api/v1/courses/{teacher_id}")
-async def get_courses_by_teacher(
+def get_courses_by_teacher(
     teacher_id: str,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
@@ -905,7 +1124,7 @@ async def get_courses_by_teacher(
 @app.put(
     "/api/v1/courses/{course_id}/settings",
 )
-async def update_course_settings(
+def update_course_settings(
     course_id: str,
     payload: CourseSettingsRequest,
     current_user: Annotated[
@@ -914,7 +1133,7 @@ async def update_course_settings(
     ],
 ):
     try:
-        await run_in_threadpool(require_owned_course, course_id, current_user)
+        require_owned_course(course_id, current_user)
         response = supabase.table('courses').update({
             "total_sessions": payload.total_sessions,
             "late_threshold_minutes": payload.late_threshold_minutes,
@@ -945,7 +1164,7 @@ async def update_course_settings(
 @app.put(
     "/api/v1/courses/{course_id}",
 )
-async def update_course_details(
+def update_course_details(
     course_id: str,
     payload: CourseUpdateRequest,
     current_user: Annotated[
@@ -954,7 +1173,7 @@ async def update_course_details(
     ],
 ):
     try:
-        await run_in_threadpool(require_owned_course, course_id, current_user)
+        require_owned_course(course_id, current_user)
         response = supabase.table('courses').update({
             "course_code": payload.course_code.strip(),
             "course_name": payload.course_name.strip(),
@@ -983,14 +1202,22 @@ async def update_course_details(
     
 # 5. API ลบรายวิชา (Delete)
 @app.delete("/api/v1/courses/{course_id}")
-async def delete_course(
+def delete_course(
     course_id: str,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
-        course = await run_in_threadpool(require_owned_course, course_id, current_user)
+        course = require_owned_course(course_id, current_user)
         require_course_delete_permission(course, current_user)
+        support_paths = collect_support_storage_paths(course_id=course_id)
         response = supabase.table('courses').delete().eq('id', course_id).execute()
+        if support_paths:
+            try:
+                remove_support_storage_paths(support_paths)
+            except Exception:
+                # Rows were deleted successfully and the private objects are no
+                # longer addressable; operational cleanup can be retried later.
+                logger.exception("Failed to remove detached support attachments for course %s", course_id)
         # หมายเหตุ: หากฐานข้อมูลมีข้อมูลตารางอื่นผูกอยู่ ต้องแน่ใจว่าตั้งค่า ON DELETE CASCADE ไว้ที่ Supabase
         return {"status": "success", "message": "ลบรายวิชาเรียบร้อยแล้ว"}
     except HTTPException:
@@ -1001,12 +1228,12 @@ async def delete_course(
 @router.get(
     "/api/v1/courses/{course_id}/attendance-summary",
 )
-async def get_course_attendance_summary(
+def get_course_attendance_summary(
     course_id: str,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
-        await run_in_threadpool(require_owned_course, course_id, current_user)
+        require_owned_course(course_id, current_user)
         # 1. ดึงข้อมูลเกณฑ์ของวิชานี้ออกมาดู
         course_res = supabase.table('courses').select('*').eq('id', course_id).execute()
         if not course_res.data:
@@ -1082,4 +1309,4 @@ if __name__ == "__main__":
     # หน้า Admin/อาจารย์ ได้ตามปกติ (เสริมจากการแก้ให้ไม่บล็อก event loop ในโค้ดข้างบนแล้ว)
     # ตัวอย่างคำสั่งรันจริง (ไม่ต้องใช้ reload=True ในไฟล์นี้แล้ว):
     #   uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

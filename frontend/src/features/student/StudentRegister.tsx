@@ -4,7 +4,7 @@ import { Camera, Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react'
 import { compressImage, base64ToFile, prepareStudentCardImage } from '../../utils/imageUtils';
 import { faceService } from '../../services/api';
 import axios from 'axios';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
 
 export default function StudentRegister() {
   const { notify } = useNotification();
@@ -112,7 +112,7 @@ export default function StudentRegister() {
       
       if (res.success || res.message) {
         notify('ลงทะเบียนใบหน้าสำเร็จเรียบร้อย', 'success');
-        navigate('/student'); // กลับไปหน้าโฮมนักศึกษา
+        navigate('/student/profile', { replace: true });
       }
     } catch (err: unknown) {
       console.error('Register Error:', err);
@@ -125,7 +125,7 @@ export default function StudentRegister() {
   };
 
   return (
-    <div className="p-6 max-w-lg mx-auto mt-6 bg-white rounded-2xl shadow-sm border border-gray-100">
+    <div className="mx-3 my-3 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm min-[390px]:mx-4 min-[390px]:p-5">
       <div className="text-center mb-8">
         <h1 className="text-2xl font-bold text-gray-800">ลงทะเบียนเข้าสู่ระบบ</h1>
         <p className="text-gray-500 mt-2">โปรดทำตามขั้นตอนเพื่อลงทะเบียนใบหน้าสำหรับใช้เช็คชื่อ</p>

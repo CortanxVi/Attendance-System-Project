@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import axios from 'axios';
-import * as XLSX from 'xlsx';
-import { X, Download, Clock, Search, AlertCircle, Edit2, CheckCircle2, List, Grid, CalendarDays, CheckSquare, XSquare, MessageSquare } from 'lucide-react';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { X, Download, Clock, Search, AlertCircle, Edit2, CheckCircle2, List, Grid, CalendarDays, CheckSquare, XSquare } from 'lucide-react';
+import { useNotification } from '../../components/notifications/notificationContext';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
 import { sanitizeSpreadsheetMatrix } from '../../services/spreadsheet';
+import { apiErrorMessage } from '../../services/apiError';
 
 interface CourseAttendanceViewProps {
   courseId: string;
@@ -13,11 +13,15 @@ interface CourseAttendanceViewProps {
   onClose: () => void;
 }
 
+interface AttendanceRecord { id: string; student_id: string; full_name: string; session_id: string; status: string; check_in_time: string; method?: string | null }
+interface AttendanceSession { id: string; created_at: string; status?: string }
+interface AttendanceStudent { student_id: string; full_name: string }
+
 export default function CourseAttendanceView({ courseId, courseCode, courseName, onClose }: CourseAttendanceViewProps) {
   const { notify } = useNotification();
-  const [records, setRecords] = useState<any[]>([]);
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [students, setStudents] = useState<Array<{ student_id: string; full_name: string }>>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [sessions, setSessions] = useState<AttendanceSession[]>([]);
+  const [students, setStudents] = useState<AttendanceStudent[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'session' | 'list' | 'matrix'>('matrix');
@@ -31,11 +35,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
   const [updating, setUpdating] = useState(false);
   const [pendingBulkStatus, setPendingBulkStatus] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchData();
-  }, [courseId]);
-
-  const fetchData = async (preserveSession = false) => {
+  const fetchData = useCallback(async (preserveSession = false) => {
     try {
       if (!preserveSession) setLoading(true);
       const res = await axios.get(`/api/v1/teacher/export/attendance/${courseId}`);
@@ -44,17 +44,19 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         setStudents(res.data.students || []);
         const s = res.data.sessions || [];
         setSessions(s);
-        if (!preserveSession && s.length > 0 && !selectedSessionId) {
-          // Default to latest session
-          setSelectedSessionId(s[s.length - 1].id);
-        }
+        if (!preserveSession && s.length > 0) setSelectedSessionId((current) => current || s[s.length - 1].id);
       }
     } catch (err) {
       console.error("Error fetching attendance data", err);
     } finally {
       if (!preserveSession) setLoading(false);
     }
-  };
+  }, [courseId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchData(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchData]);
 
   const handleUpdateStatusList = async (recordId: string) => {
     try {
@@ -64,14 +66,14 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
       });
       await fetchData(true);
       setEditingRecordId(null);
-    } catch (err: any) {
-      notify(`ไม่สามารถแก้ไขสถานะได้: ${err.response?.data?.detail || err.message}`, 'error');
+    } catch (err: unknown) {
+      notify(`ไม่สามารถแก้ไขสถานะได้: ${apiErrorMessage(err, 'ไม่สามารถบันทึกได้')}`, 'error');
     } finally {
       setUpdating(false);
     }
   };
 
-  const handleUpdateSessionRecord = async (studentId: string, sessionId: string, currentRecord: any, newStatus: string) => {
+  const handleUpdateSessionRecord = async (studentId: string, sessionId: string, currentRecord: AttendanceRecord | undefined, newStatus: string) => {
     try {
       setUpdating(true);
       if (currentRecord) {
@@ -84,8 +86,8 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         });
       }
       await fetchData(true);
-    } catch (err: any) {
-      notify(`ไม่สามารถอัปเดตข้อมูลได้: ${err.response?.data?.detail || err.message}`, 'error');
+    } catch (err: unknown) {
+      notify(`ไม่สามารถอัปเดตข้อมูลได้: ${apiErrorMessage(err, 'ไม่สามารถบันทึกได้')}`, 'error');
     } finally {
       setUpdating(false);
     }
@@ -101,27 +103,20 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
     const status = pendingBulkStatus;
     setUpdating(true);
     try {
-      // Process updates sequentially to avoid overwhelming the server/DB
-      for (const student of filteredStudents) {
-        const record = matrixMap[student.student_id]?.[selectedSessionId];
-        // Only update if it's different
-        if (!record || record.status !== status) {
-          if (record) {
-            await axios.put(`/api/v1/teacher/attendance/${record.id}`, { status });
-          } else {
-            await axios.post(`/api/v1/teacher/attendance`, {
-              student_id: student.student_id,
-              session_id: selectedSessionId,
-              status
-            });
-          }
-        }
+      const studentIds = filteredStudents
+        .filter((student) => matrixMap[student.student_id]?.[selectedSessionId]?.status !== status)
+        .map((student) => student.student_id);
+      if (studentIds.length > 0) {
+        await axios.post(`/api/v1/teacher/attendance/bulk?session_id=${encodeURIComponent(selectedSessionId)}`, {
+          status,
+          student_ids: studentIds,
+        });
       }
       await fetchData(true);
       notify('อัปเดตสถานะสำเร็จ', 'success');
       setPendingBulkStatus(null);
-    } catch (err: any) {
-      notify(`เกิดข้อผิดพลาดในการอัปเดตแบบกลุ่ม: ${err.response?.data?.detail || err.message}`, 'error');
+    } catch (err: unknown) {
+      notify(`เกิดข้อผิดพลาดในการอัปเดตแบบกลุ่ม: ${apiErrorMessage(err, 'อัปเดตข้อมูลไม่สำเร็จ')}`, 'error');
     } finally {
       setUpdating(false);
     }
@@ -145,7 +140,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
     s.full_name?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const matrixMap: any = {};
+  const matrixMap: Record<string, Record<string, AttendanceRecord>> = {};
   records.forEach(r => {
     if (!matrixMap[r.student_id]) matrixMap[r.student_id] = {};
     matrixMap[r.student_id][r.session_id] = r;
@@ -154,7 +149,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
 
 
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     try {
       // Create worksheet data
       const wsData = [];
@@ -162,7 +157,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
       // Header row
       const header = ["รหัสนักศึกษา", "ชื่อ-นามสกุล"];
       sessions.forEach((_session, i) => header.push(`ครั้งที่ ${i + 1}`));
-      header.push("มา/สาย", "ลา", "ขาด");
+      header.push("มา/สาย", "ขาด");
       wsData.push(header);
       
       // Data rows
@@ -170,28 +165,26 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         const row = [student.student_id, student.full_name];
         let presentCount = 0;
         let absentCount = 0;
-        let leaveCount = 0;
         
         sessions.forEach(s => {
           const record = matrixMap[student.student_id]?.[s.id];
           const status = record?.status;
           const isAttended = status === 'present' || status === 'late';
           if (isAttended) presentCount++;
-          else if (status === 'leave') leaveCount++;
           else absentCount++;
           
           let statusText = 'ขาด';
           if (status === 'present') statusText = 'มา';
           else if (status === 'late') statusText = 'สาย';
-          else if (status === 'leave') statusText = 'ลา';
           
           row.push(statusText);
         });
         
-        row.push(presentCount.toString(), leaveCount.toString(), absentCount.toString());
+        row.push(presentCount.toString(), absentCount.toString());
         wsData.push(row);
       });
       
+      const XLSX = await import('xlsx');
       const ws = XLSX.utils.aoa_to_sheet(sanitizeSpreadsheetMatrix(wsData));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Attendance");
@@ -203,7 +196,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
     }
   };
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-2 backdrop-blur-sm sm:p-4">
       <ConfirmDialog
         open={Boolean(pendingBulkStatus)}
         title="ยืนยันการแก้ไขแบบกลุ่ม"
@@ -213,61 +206,62 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         onConfirm={confirmBulkAction}
         onCancel={() => setPendingBulkStatus(null)}
       />
-      <div className="bg-white rounded-2xl w-full max-w-6xl h-[85vh] overflow-hidden shadow-2xl flex flex-col animate-fade-in">
+      <div className="flex h-[calc(100dvh-1rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-fade-in sm:h-[calc(100dvh-2rem)]">
         
         {/* Header */}
-        <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 bg-gray-50 p-3 sm:items-center sm:p-6">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-gray-800 sm:text-2xl">
               จัดการประวัติการเข้าเรียน
             </h2>
-            <p className="text-gray-500 mt-1">วิชา: {courseCode} - {courseName}</p>
+            <p className="mt-1 break-words text-sm text-gray-500">วิชา: {courseCode} - {courseName}</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-200 rounded-xl transition-colors">
+          <button type="button" aria-label="ปิดหน้าจัดการประวัติ" onClick={onClose} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
             <X size={24} />
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden flex flex-col p-6">
-          <div className="flex justify-between items-center mb-6">
-            <div className="relative w-64">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-6">
+          <div className="mb-3 flex shrink-0 flex-col gap-3 xl:mb-6 xl:flex-row xl:items-center xl:justify-between">
+            <div className="relative w-full xl:max-w-sm">
               <input 
                 type="text" 
                 placeholder="ค้นหารหัสนักศึกษา / ชื่อ..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pr-11 pl-10 text-sm transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
               <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+              {searchTerm && <button type="button" aria-label="ล้างคำค้นหา" onClick={() => setSearchTerm('')} className="absolute inset-y-0 right-0 flex w-11 cursor-pointer items-center justify-center rounded-r-lg text-gray-500 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-orange-300"><X size={16} /></button>}
             </div>
 
             
-            <div className="flex items-center gap-4">
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
               <button 
                 onClick={handleExportExcel}
-                className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-colors"
+                className="flex min-h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-green-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-300"
               >
                 <Download size={16} /> โหลด Excel
               </button>
 
               {/* Toggle View Mode */}
-              <div className="flex bg-gray-100 p-1 rounded-lg">
+              <div className="grid min-w-0 grid-cols-3 rounded-lg bg-gray-100 p-1">
                 <button 
                   onClick={() => setViewMode('session')}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'session' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium leading-4 transition-colors sm:text-sm ${viewMode === 'session' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                 >
                   <CalendarDays size={16} /> จัดการรายวัน
                 </button>
                 <button 
                   onClick={() => setViewMode('list')}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'list' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium leading-4 transition-colors sm:text-sm ${viewMode === 'list' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                 >
                   <List size={16} /> แบบรายการ
                 </button>
                 <button 
                   onClick={() => setViewMode('matrix')}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'matrix' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`flex min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium leading-4 transition-colors sm:text-sm ${viewMode === 'matrix' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                 >
                   <Grid size={16} /> แบบสมุดตาราง
                 </button>
@@ -275,7 +269,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
             </div>
           </div>
 
-          <div className="flex-1 overflow-auto border border-gray-200 rounded-xl bg-white shadow-sm flex flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
             
             {/* SESSION VIEW */}
             {viewMode === 'session' && (
@@ -305,9 +299,6 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                     <button onClick={() => handleBulkAction('absent')} disabled={updating} className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                       <XSquare size={16} /> ขาดทั้งหมด
                     </button>
-                    <button onClick={() => handleBulkAction('leave')} disabled={updating} className="flex items-center gap-1.5 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
-                      <MessageSquare size={16} /> ลาทั้งหมด
-                    </button>
                     <button onClick={() => handleBulkAction('late')} disabled={updating} className="flex items-center gap-1.5 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                       <Clock size={16} /> สายทั้งหมด
                     </button>
@@ -315,7 +306,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                 </div>
 
                 <div className="flex-1 overflow-auto">
-                  <table className="w-full text-left text-sm text-gray-600">
+                  <table className="w-full min-w-max text-left text-sm text-gray-600">
                     <thead className="bg-gray-50 sticky top-0 border-b border-gray-200 text-gray-700 shadow-sm">
                       <tr>
                         <th className="px-6 py-4 font-semibold w-1/4">รหัสนักศึกษา</th>
@@ -350,14 +341,12 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                                     status === 'present' ? 'bg-green-50 text-green-700 border-green-300 focus:border-green-500' :
                                     status === 'absent' ? 'bg-red-50 text-red-700 border-red-300 focus:border-red-500' :
                                     status === 'late' ? 'bg-orange-50 text-orange-700 border-orange-300 focus:border-orange-500' :
-                                    status === 'leave' ? 'bg-yellow-50 text-yellow-700 border-yellow-300 focus:border-yellow-500' :
                                     'bg-gray-50 text-gray-500 border-gray-300 hover:bg-gray-100'
                                   }`}
                                 >
                                   <option value="" disabled className="text-gray-500 bg-white">-- ยังไม่เช็คชื่อ --</option>
                                   <option value="present" className="text-green-700 bg-white">มาเรียน</option>
                                   <option value="absent" className="text-red-700 bg-white">ขาดเรียน</option>
-                                  <option value="leave" className="text-yellow-700 bg-white">ลา</option>
                                   <option value="late" className="text-orange-700 bg-white">มาสาย</option>
                                 </select>
                               </td>
@@ -374,7 +363,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
             {/* LIST VIEW */}
             {viewMode === 'list' && (
               <div className="overflow-auto h-full">
-                <table className="w-full text-left text-sm text-gray-600">
+                <table className="w-full min-w-max text-left text-sm text-gray-600">
                   <thead className="bg-gray-50 sticky top-0 border-b border-gray-200 text-gray-700">
                     <tr>
                       <th className="px-6 py-4 font-semibold">รหัสนักศึกษา</th>
@@ -405,15 +394,13 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                                 <option value="present">มาเรียน</option>
                                 <option value="late">มาสาย</option>
                                 <option value="absent">ขาดเรียน</option>
-                                <option value="leave">ลา</option>
                               </select>
                             ) : (
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
                                 record.status === 'present' ? 'bg-green-100 text-green-700' : 
                                 record.status === 'late' ? 'bg-orange-100 text-orange-700' : 
-                                record.status === 'leave' ? 'bg-yellow-100 text-yellow-700' : 
                                 'bg-red-100 text-red-700'}`}>
-                                {record.status === 'present' ? 'มาเรียน' : record.status === 'late' ? 'มาสาย' : record.status === 'leave' ? 'ลา' : 'ขาดเรียน'}
+                                {record.status === 'present' ? 'มาเรียน' : record.status === 'late' ? 'มาสาย' : 'ขาดเรียน'}
                               </span>
                             )}
                           </td>
@@ -464,7 +451,6 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                       filteredStudents.map(student => {
                         let presentCount = 0;
                         let absentCount = 0;
-                        let leaveCount = 0;
 
                       
 
@@ -478,7 +464,6 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                               const record = matrixMap[student.student_id]?.[s.id];
                               const isAttended = record && (record.status === 'present' || record.status === 'late');
                               if (isAttended) presentCount++;
-                              else if (record && record.status === 'leave') leaveCount++;
                               else if (record && record.status === 'absent') absentCount++;
                               else absentCount++;
 
@@ -495,13 +480,11 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                                       className={`w-full rounded border text-sm p-1 cursor-pointer outline-none focus:ring-1 focus:ring-orange-500 transition-colors
                                         ${record?.status === 'present' ? 'bg-green-50 text-green-700 border-green-200' : 
                                           record?.status === 'late' ? 'bg-orange-50 text-orange-700 border-orange-200' :
-                                          record?.status === 'leave' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
                                           'bg-red-50 text-red-700 border-red-200'}
                                       `}
                                     >
                                       <option value="present">มาเรียน</option>
                                       <option value="late">มาสาย</option>
-                                      <option value="leave">ลา</option>
                                       <option value="absent">ขาดเรียน</option>
                                     </select>
                                   </td>
@@ -509,7 +492,6 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                             })}
                             <td className="px-6 py-3 text-center border-l border-gray-100 bg-orange-50/20 whitespace-nowrap text-xs">
                               <span className="text-green-600 font-bold mr-2" title="มาเรียน/สาย">มา: {presentCount}</span>
-                              <span className="text-yellow-600 font-bold mr-2" title="ลา">ลา: {leaveCount}</span>
                               <span className="text-red-500 font-bold" title="ขาดเรียน">ขาด: {absentCount}</span>
                             </td>
                           </tr>

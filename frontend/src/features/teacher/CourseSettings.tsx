@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import axios from 'axios';
 import { X, Settings, Save } from 'lucide-react';
-import { useNotification } from '../../components/notifications/NotificationProvider';
+import { useNotification } from '../../components/notifications/notificationContext';
+import { apiErrorMessage } from '../../services/apiError';
 
 // 🌟 1. กำหนดรูปแบบโครงสร้างข้อมูล (Type Definition) สำหรับการตั้งค่า
 interface CourseConfig {
@@ -48,9 +49,9 @@ export default function CourseSettingsModal({
       notify('บันทึกเกณฑ์การเข้าเรียนใหม่สำเร็จ', 'success');
       onSaveSuccess(); // รีเฟรชข้อมูลที่หน้าหลัก
       onClose();       // ปิดหน้าต่างลง
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      const detailMsg = error.response?.data?.detail || error.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลตั้งค่า';
+      const detailMsg = apiErrorMessage(error, 'เกิดข้อผิดพลาดในการบันทึกข้อมูลตั้งค่า');
       notify(detailMsg, 'error');
     } finally {
       setIsSaving(false);
@@ -58,22 +59,22 @@ export default function CourseSettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4">
+      <div className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white shadow-2xl animate-fade-in sm:max-h-[calc(100dvh-2rem)]">
         
         {/* ส่วนหัวหน้าต่าง */}
-        <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-gray-100 bg-gray-50 p-4 sm:p-6">
           <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
             <Settings size={20} className="text-slate-600" /> 
             ตั้งค่าเกณฑ์รายวิชา
           </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-md hover:bg-gray-200">
+          <button type="button" aria-label="ปิดหน้าต่างตั้งค่าเกณฑ์" onClick={onClose} className="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
             <X size={20} />
           </button>
         </div>
 
         {/* ส่วนฟอร์มกรอกข้อมูล */}
-        <form onSubmit={handleUpdateConfig} noValidate className="p-6 space-y-5">
+        <form onSubmit={handleUpdateConfig} noValidate className="space-y-5 p-4 sm:p-6">
           
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-1">

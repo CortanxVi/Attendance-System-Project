@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.config import supabase_db as supabase
 from core.security import AuthenticatedUser, require_roles
@@ -12,8 +13,15 @@ student_router = APIRouter(
 )
 
 
+class StudentProfileUpdate(BaseModel):
+    """Fields a student is allowed to edit on their own profile."""
+
+    model_config = ConfigDict(extra="forbid")
+    academic_year: int = Field(strict=True, ge=1, le=8)
+
+
 @student_router.get("/me/profile")
-async def get_my_student_profile(
+def get_my_student_profile(
     current_user: Annotated[AuthenticatedUser, Depends(require_roles("student"))],
 ):
     """Return only the signed-in student's own profile and registration status."""
@@ -29,6 +37,7 @@ async def get_my_student_profile(
         profile = profile_response.data[0]
         profile["nfc_registered"] = bool(profile.pop("nfc_uid", None))
         profile["enrolled_course_count"] = enrollment_response.count or 0
+        profile["avatar_url"] = current_user.avatar_url
         return {"status": "success", "profile": profile}
     except HTTPException:
         raise
@@ -36,10 +45,32 @@ async def get_my_student_profile(
         raise HTTPException(status_code=503, detail="ไม่สามารถโหลดโปรไฟล์นักศึกษาได้") from exc
 
 
+@student_router.patch("/me/profile")
+def update_my_student_profile(
+    payload: StudentProfileUpdate,
+    current_user: Annotated[AuthenticatedUser, Depends(require_roles("student"))],
+):
+    """Allow a signed-in student to update only their own academic year."""
+    try:
+        response = supabase.table("profiles").update({
+            "academic_year": payload.academic_year,
+        }).eq("id", current_user.id).eq("role", "student").execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="ไม่พบโปรไฟล์นักศึกษา")
+        return {
+            "status": "success",
+            "profile": {"academic_year": response.data[0].get("academic_year")},
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="ไม่สามารถบันทึกชั้นปีได้") from exc
+
+
 # --- Endpoint: ดูประวัติการเข้าเรียนของตนเอง + สถิติสรุปรายวิชา ---
 
 @student_router.get("/{student_uuid}/attendance-history")
-async def get_student_attendance_history(
+def get_student_attendance_history(
     student_uuid: str,
     current_user: Annotated[
         AuthenticatedUser,

@@ -11,7 +11,8 @@
     "start": "node ocr-server.js",
     "doctor": "light-ocr doctor --json",
     "test:security": "node scripts/test-security.mjs",
-    "test:ocr": "node scripts/test-ocr.mjs"
+    "test:ocr": "node scripts/test-ocr.mjs",
+    "test:concurrency": "node scripts/test-concurrency.mjs"
   },
   "dependencies": {
     "@arcships/light-ocr": "0.5.7",

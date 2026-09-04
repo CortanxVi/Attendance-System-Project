@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Annotated, Optional, Any
 
@@ -11,6 +12,10 @@ from core.security import (
     require_permanent_admin,
     require_roles,
 )
+from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
+
+
+logger = logging.getLogger(__name__)
 
 admin_router = APIRouter(
     prefix="/api/v1/admin",
@@ -110,7 +115,7 @@ def log_admin_action(admin_id: str, action: str, target_type: str, target_id: st
 # --- Endpoints: User Management ---
 
 @admin_router.get("/users")
-async def get_all_users():
+def get_all_users():
     """ดึงข้อมูลโปรไฟล์ผู้ใช้ทั้งหมดในระบบ"""
     try:
         response = supabase.table("profiles").select("id, email, student_id, full_name, role, academic_year, class_level, face_registered, nfc_uid").execute()
@@ -124,7 +129,7 @@ async def get_all_users():
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 @admin_router.put("/users/{user_id}/role")
-async def update_user_role(
+def update_user_role(
     user_id: str,
     payload: UpdateRoleRequest,
     current_user: Annotated[AuthenticatedUser, Depends(require_permanent_admin)],
@@ -153,7 +158,7 @@ async def update_user_role(
 
 # API สำหรับสร้างผู้ใช้ใหม่ (ตาราง profiles)
 @admin_router.post("/users")
-async def create_user(
+def create_user(
     payload: CreateUserRequest,
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ):
@@ -200,7 +205,7 @@ async def create_user(
 
 # API สำหรับแก้ไขรายละเอียดผู้ใช้งาน
 @admin_router.put("/users/{user_id}/info")
-async def update_user_info(
+def update_user_info(
     user_id: str,
     payload: UserInfoRequest,
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -256,7 +261,7 @@ async def update_user_info(
 
 # API สำหรับลบผู้ใช้งาน
 @admin_router.delete("/users/{user_id}")
-async def delete_user(
+def delete_user(
     user_id: str,
     current_user: Annotated[AuthenticatedUser, Depends(require_permanent_admin)],
 ):
@@ -264,11 +269,19 @@ async def delete_user(
     try:
         if user_id == current_user.id:
             raise HTTPException(status_code=400, detail="ไม่สามารถลบบัญชีผู้ดูแลที่กำลังใช้งานอยู่")
+        support_paths = collect_support_storage_paths(user_id=user_id)
         response = supabase.table("profiles").delete().eq("id", user_id).execute()
         if not response.data:
             response = supabase.table("profile_invites").delete().eq("id", user_id).is_("claimed_at", "null").execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้นี้ในระบบหรือลบไม่สำเร็จ")
+        if support_paths:
+            try:
+                remove_support_storage_paths(support_paths)
+            except Exception:
+                # The bucket is private and metadata is gone, so an orphaned object
+                # remains inaccessible. Cleanup can be retried from Storage logs.
+                logger.exception("Failed to remove detached support attachments for user %s", user_id)
             
         log_admin_action(
             admin_id=current_user.id,
@@ -288,7 +301,7 @@ async def delete_user(
 # --- Endpoints: Course Management ---
 
 @admin_router.get("/courses")
-async def get_all_courses():
+def get_all_courses():
     """ดึงข้อมูลรายวิชาทั้งหมดในระบบ โดยแสดงชื่ออาจารย์ผู้สอนด้วย"""
     try:
         response = supabase.table("courses").select("*, profiles(full_name)").execute()
@@ -298,7 +311,7 @@ async def get_all_courses():
 
 # ❌ [เพิ่มใหม่ตามโครงสร้างหน้าบ้าน] API สำหรับลบรายวิชาในฐานะ Admin
 @admin_router.delete("/courses/{course_id}")
-async def delete_course(
+def delete_course(
     course_id: str,
     current_user: Annotated[AuthenticatedUser, Depends(require_permanent_admin)],
 ):
@@ -310,11 +323,17 @@ async def delete_course(
             raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้ในระบบ")
         
         course_info = course_res.data[0]
+        support_paths = collect_support_storage_paths(course_id=course_id)
         
         # 2. ทำการลบข้อมูลวิชาออก (ตารางที่มี Foreign Key Cascade จะโดนลบตามอัตโนมัติ)
         response = supabase.table("courses").delete().eq("id", course_id).execute()
         if not response.data:
             raise HTTPException(status_code=400, detail="ไม่สามารถลบรายวิชาได้")
+        if support_paths:
+            try:
+                remove_support_storage_paths(support_paths)
+            except Exception:
+                logger.exception("Failed to remove detached support attachments for course %s", course_id)
             
         # 3. บันทึกประวัติการทำงานของแอดมินลง Audit Logs
         log_admin_action(
@@ -335,7 +354,7 @@ async def delete_course(
 # --- Endpoints: Audit Logs ---
 
 @admin_router.get("/logs")
-async def get_audit_logs():
+def get_audit_logs():
     """ดึงประวัติการทำงานในระบบทั้งหมด"""
     try:
         response = supabase.table("audit_logs") \
@@ -368,7 +387,7 @@ async def get_audit_logs():
 # --- Endpoints: Export Data ---
 
 @admin_router.get("/export/attendance/{course_id}")
-async def get_export_attendance_data(course_id: str):
+def get_export_attendance_data(course_id: str):
     """ดึงข้อมูลสำหรับนำไปสร้างไฟล์ Excel/CSV/PDF ที่หน้าบ้าน"""
     try:
         course_res = supabase.table("courses").select("*").eq("id", course_id).execute()
