@@ -4,24 +4,33 @@ import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import { faceService } from '../../services/api';
 import {
   base64ToFile,
-  compressImage,
   prepareStudentCardImage,
   STUDENT_CARD_IMAGE_RULES,
 } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
-import { UploadCloud, CheckCircle, XCircle, Loader2, UserCheck } from 'lucide-react';
+import { UploadCloud, CheckCircle, XCircle, Loader2, UserCheck, RotateCw, ShieldCheck } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import type { LivenessAction, LivenessEvidence } from '../../utils/liveness';
+import {
+  getFaceLandmarkerRuntimeSnapshot,
+  preloadFaceLandmarker,
+  retryFaceLandmarkerPreload,
+  subscribeFaceLandmarkerRuntime,
+} from '../../services/faceLandmarkerRuntime';
 
 export default function StudentHome() {
   const { notify } = useNotification();
+  const [faceRuntime, setFaceRuntime] = useState(getFaceLandmarkerRuntimeSnapshot);
   const [isScanning, setIsScanning] = useState(false);
   const [verifiedCourse, setVerifiedCourse] = useState<string | null>(null);
   // 🌟 [เพิ่มใหม่] เก็บ session_id ที่ผ่านการตรวจสอบ QR แล้วไว้ใช้ตอนส่งเช็คชื่อจริง (ต่อสายให้ครบใน Step ถัดไป)
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
+  const [challengeTtlSeconds, setChallengeTtlSeconds] = useState(0);
   const [livenessToken, setLivenessToken] = useState<string | null>(null);
   const [livenessActions, setLivenessActions] = useState<LivenessAction[]>([]);
+  const [livenessRequiredBlinks, setLivenessRequiredBlinks] = useState(0);
+  const [livenessPromptDelayMs, setLivenessPromptDelayMs] = useState(0);
   const [isLivenessActive, setIsLivenessActive] = useState(false);
   const [idCardImage, setIdCardImage] = useState<File | null>(null);
   const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
@@ -32,8 +41,11 @@ export default function StudentHome() {
 
   // สถานะเก็บรูปภาพ
   const [capturedFaceData, setCapturedFaceData] = useState<string | null>(null);
-  const [capturedTurnData, setCapturedTurnData] = useState<string | null>(null);
-  const [capturedBlinkData, setCapturedBlinkData] = useState<string | null>(null);
+  const [capturedBaselineData, setCapturedBaselineData] = useState<string | null>(null);
+  const [capturedNearData, setCapturedNearData] = useState<string | null>(null);
+  const [capturedReturnData, setCapturedReturnData] = useState<string | null>(null);
+  const [capturedBlinkClosedData, setCapturedBlinkClosedData] = useState<string[]>([]);
+  const [capturedBlinkOpenData, setCapturedBlinkOpenData] = useState<string[]>([]);
   const [livenessEvidence, setLivenessEvidence] = useState<LivenessEvidence | null>(null);
   
   // สถานะการส่งข้อมูล
@@ -56,42 +68,74 @@ export default function StudentHome() {
     cardSelectionId.current += 1;
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = subscribeFaceLandmarkerRuntime(setFaceRuntime);
+    void preloadFaceLandmarker().catch(() => {
+      // The shared runtime publishes a recoverable error state for this page.
+    });
+    return unsubscribe;
+  }, []);
+
   const handleVerifySuccess = (info: VerifiedSessionInfo) => {
     setIsScanning(false);
     setVerifiedCourse(info.courseName || info.courseCode);
     setChallengeId(info.challengeId);
     setChallengeExpiresAt(info.challengeExpiresAt);
+    setChallengeTtlSeconds(info.challengeTtlSeconds);
     setLivenessToken(info.livenessToken);
     setLivenessActions(info.livenessActions);
+    setLivenessRequiredBlinks(info.livenessRequiredBlinks);
+    setLivenessPromptDelayMs(info.livenessPromptDelayMs);
   };
 
   const handleFaceCapture = (capture: LivenessCapture) => {
     setCapturedFaceData(capture.faceImageSrc);
-    setCapturedTurnData(capture.turnImageSrc);
-    setCapturedBlinkData(capture.blinkImageSrc);
+    setCapturedBaselineData(capture.baselineImageSrc);
+    setCapturedNearData(capture.nearImageSrc);
+    setCapturedReturnData(capture.returnImageSrc);
+    setCapturedBlinkClosedData(capture.blinkClosedImageSrcs);
+    setCapturedBlinkOpenData(capture.blinkOpenImageSrcs);
     setLivenessEvidence(capture.evidence);
     setIsLivenessActive(false);
   };
 
   // ฟังก์ชันกดยืนยันเช็คชื่อ — ยิง API ไปที่ FastAPI Backend จริง
   const handleSubmitAttendance = async () => {
-    if (!capturedFaceData || !capturedBlinkData || !capturedTurnData || !idCardImage || !challengeId || !livenessToken || !livenessEvidence) return;
+    if (
+      !capturedFaceData
+      || !capturedBaselineData
+      || !capturedNearData
+      || !capturedReturnData
+      || capturedBlinkClosedData.length !== livenessRequiredBlinks
+      || capturedBlinkOpenData.length !== livenessRequiredBlinks
+      || !idCardImage
+      || !challengeId
+      || !livenessToken
+      || !livenessEvidence
+    ) return;
     setIsSubmitting(true);
 
     try {
-      // 1. แปลง Base64 ของภาพใบหน้าจาก Liveness เป็น File object และบีบอัด
+      // ภาพจาก Liveness ถูกย่อและเข้ารหัสครั้งเดียวตอนจับเฟรม เพื่อรักษารายละเอียดดวงตา
       const faceFile = base64ToFile(capturedFaceData, 'liveness_face.jpg');
-      const turnFile = base64ToFile(capturedTurnData, 'liveness_turn.jpg');
-      const blinkFile = base64ToFile(capturedBlinkData, 'liveness_blink.jpg');
-      const compressedFace = await compressImage(faceFile, 600, 0.7);
-      const compressedTurn = await compressImage(turnFile, 600, 0.7);
-      const compressedBlink = await compressImage(blinkFile, 600, 0.7);
+      const baselineFile = base64ToFile(capturedBaselineData, 'liveness_baseline.jpg');
+      const nearFile = base64ToFile(capturedNearData, 'liveness_near.jpg');
+      const returnFile = base64ToFile(capturedReturnData, 'liveness_return.jpg');
+      const blinkClosedFiles = capturedBlinkClosedData.map((image, index) => (
+        base64ToFile(image, `liveness_blink_closed_${index + 1}.jpg`)
+      ));
+      const blinkOpenFiles = capturedBlinkOpenData.map((image, index) => (
+        base64ToFile(image, `liveness_blink_open_${index + 1}.jpg`)
+      ));
 
       // 2. ส่งข้อมูลไปยัง FastAPI Backend (POST /api/v1/attendance/verify)
       const result = await faceService.verifyAttendance(
-        compressedFace,
-        compressedBlink,
-        compressedTurn,
+        faceFile,
+        baselineFile,
+        nearFile,
+        returnFile,
+        blinkClosedFiles,
+        blinkOpenFiles,
         idCardImage,
         challengeId,
         livenessToken,
@@ -192,8 +236,11 @@ export default function StudentHome() {
            <button 
              onClick={() => {
                setCapturedFaceData(null);
-               setCapturedTurnData(null);
-               setCapturedBlinkData(null);
+               setCapturedBaselineData(null);
+               setCapturedNearData(null);
+               setCapturedReturnData(null);
+               setCapturedBlinkClosedData([]);
+               setCapturedBlinkOpenData([]);
                setLivenessEvidence(null);
              }}
              disabled={isSubmitting}
@@ -206,7 +253,12 @@ export default function StudentHome() {
         /* ด่านที่ 2: หน้าจอ Liveness Detection */
         <div className="relative">
            <button onClick={() => setIsLivenessActive(false)} className="absolute top-4 right-4 z-30 bg-white/80 p-2 rounded-full text-sm font-bold shadow-md">ยกเลิก</button>
-           <LivenessScanner actions={livenessActions} onCaptureSuccess={handleFaceCapture} />
+           <LivenessScanner
+             actions={livenessActions}
+             requiredBlinks={livenessRequiredBlinks}
+             promptDelayMs={livenessPromptDelayMs}
+             onCaptureSuccess={handleFaceCapture}
+           />
         </div>
       ) : verifiedCourse ? (
         /* ผ่าน Dynamic QR แล้ว: ต้องมีทั้งภาพบัตรสำหรับ Light OCR และภาพใบหน้าสด */
@@ -247,11 +299,22 @@ export default function StudentHome() {
           )}
           <p id="student-card-error" role={cardError ? 'alert' : undefined} className={cardError ? 'mb-3 text-sm font-medium text-red-600' : 'sr-only'}>{cardError}</p>
           {challengeExpiresAt && (
-            <p className="mb-3 text-xs text-gray-500">สิทธิ์จาก QR ใช้ได้ถึง {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')}</p>
+            <p className="mb-3 text-xs text-gray-500">
+              สิทธิ์จาก QR ใช้ลอง Liveness ซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
+              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 45 วินาที
+            </p>
           )}
           <button 
              onClick={() => setIsLivenessActive(true)}
-             disabled={!idCardImage || isPreparingCard || !livenessToken || livenessActions.length !== 2}
+             disabled={
+               !idCardImage
+               || isPreparingCard
+               || !livenessToken
+               || livenessActions[0] !== 'move_closer'
+               || livenessActions[1] !== 'blink'
+               || ![1, 2].includes(livenessRequiredBlinks)
+               || livenessPromptDelayMs < 400
+             }
              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-lg w-full transition-colors"
           >
             เริ่มสแกนใบหน้า (Liveness)
@@ -268,9 +331,55 @@ export default function StudentHome() {
         <div className="flex flex-col gap-4">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-800 mb-4">เช็คชื่อเข้าเรียน (Live)</h2>
+            <div
+              role={faceRuntime.status === 'error' ? 'alert' : 'status'}
+              aria-live="polite"
+              className={`mb-4 flex min-h-14 items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+                faceRuntime.status === 'ready'
+                  ? 'border-green-200 bg-green-50 text-green-800'
+                  : faceRuntime.status === 'error'
+                    ? 'border-red-200 bg-red-50 text-red-800'
+                    : 'border-blue-200 bg-blue-50 text-blue-800'
+              }`}
+            >
+              {faceRuntime.status === 'ready' ? (
+                <ShieldCheck className="h-5 w-5 shrink-0" aria-hidden="true" />
+              ) : faceRuntime.status === 'error' ? (
+                <XCircle className="h-5 w-5 shrink-0" aria-hidden="true" />
+              ) : (
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">
+                  {faceRuntime.status === 'ready'
+                    ? 'ระบบตรวจจับใบหน้าพร้อมใช้งาน'
+                    : faceRuntime.status === 'error'
+                      ? 'เตรียมระบบตรวจจับใบหน้าไม่สำเร็จ'
+                      : 'กำลังดาวน์โหลดและเตรียมโมเดลตรวจจับใบหน้า...'}
+                </p>
+                <p className="mt-0.5 text-xs opacity-80">
+                  {faceRuntime.status === 'ready'
+                    ? 'สามารถสแกน QR แล้วเริ่มตรวจใบหน้าได้ทันที'
+                    : faceRuntime.status === 'error'
+                      ? 'ตรวจสอบเครือข่าย แล้วกดลองใหม่ก่อนสแกน QR'
+                      : 'ระบบจะเปิดปุ่มสแกน QR เมื่อโมเดลพร้อม'}
+                </p>
+              </div>
+              {faceRuntime.status === 'error' && (
+                <button
+                  type="button"
+                  onClick={() => { void retryFaceLandmarkerPreload().catch(() => undefined); }}
+                  className="inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-red-300 bg-white px-3 font-semibold text-red-700 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                >
+                  <RotateCw className="h-4 w-4" aria-hidden="true" />
+                  ลองใหม่
+                </button>
+              )}
+            </div>
             <button 
               onClick={() => setIsScanning(true)}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors"
+              disabled={faceRuntime.status !== 'ready'}
+              className="w-full rounded-lg bg-blue-600 py-3 font-bold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
             >
               สแกน QR Code หน้าห้องเรียน
             </button>

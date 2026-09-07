@@ -13,70 +13,141 @@ os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-t
 from services.liveness_service import create_liveness_challenge, verify_liveness_submission
 from services.light_ocr_service import OcrRateLimiter
 from core.request_limits import SupportUploadLimitMiddleware
+from main import app
 
 
 class LivenessEvidenceSecurityTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime.now(timezone.utc).replace(microsecond=0)
-        self.token, self.actions = create_liveness_challenge(
+        self.challenge = create_liveness_challenge(
             "challenge-1",
             "student-1",
             self.now + timedelta(minutes=1),
         )
 
     def evidence(self):
-        events = []
-        for action in self.actions:
-            events.append({
-                "action": action,
-                "durationMs": 120 if action == "blink" else 250,
-                "eyeRatio": 0.60,
-                "yawDelta": 0 if action == "blink" else (-0.15 if action == "turn_left" else 0.15),
-                "pitchDelta": 0.01,
+        started_at = 1_000
+        movement_started = 1_100
+        peak_at = 1_350
+        returned_at = 1_650
+        prompt_at = returned_at + self.challenge.prompt_delay_ms
+        blinks = []
+        frames = [
+            {"kind": "baseline_open", "timestampMs": started_at},
+            {"kind": "near", "timestampMs": peak_at},
+            {"kind": "returned", "timestampMs": returned_at},
+        ]
+        cursor = prompt_at + 100
+        for index in range(1, self.challenge.required_blinks + 1):
+            blinks.append({
+                "action": "blink",
+                "blinkIndex": index,
+                "closedAtMs": cursor,
+                "reopenedAtMs": cursor + 150,
+                "durationMs": 150,
+                "minLeftEyeRatio": 0.58,
+                "minRightEyeRatio": 0.60,
             })
+            frames.extend((
+                {"kind": "blink_closed", "timestampMs": cursor + 50, "blinkIndex": index},
+                {"kind": "blink_open", "timestampMs": cursor + 150, "blinkIndex": index},
+            ))
+            cursor += 250
+        completed_at = cursor + 100
+        frames.append({"kind": "final_open", "timestampMs": completed_at})
         return {
-            "version": 1,
-            "actions": self.actions,
-            "events": events,
-            "startedAtMs": 1000,
-            "completedAtMs": 1800,
+            "version": 2,
+            "actions": list(self.challenge.actions),
+            "requiredBlinks": self.challenge.required_blinks,
+            "promptDelayMs": self.challenge.prompt_delay_ms,
+            "movement": {
+                "action": "move_closer",
+                "startedAtMs": movement_started,
+                "peakAtMs": peak_at,
+                "completedAtMs": returned_at,
+                "baselineScale": 0.40,
+                "peakScale": 0.48,
+                "returnedScale": 0.41,
+            },
+            "blinks": blinks,
+            "frames": frames,
+            "startedAtMs": started_at,
+            "promptAtMs": prompt_at,
+            "completedAtMs": completed_at,
+            "effectiveFps": 20,
         }
 
     def test_accepts_signed_complete_sequence(self):
         result = verify_liveness_submission(
-            self.token,
+            self.challenge.token,
             json.dumps(self.evidence()),
             "challenge-1",
             "student-1",
             now=self.now,
         )
-        self.assertIn(result.turn_action, {"turn_left", "turn_right"})
+        self.assertEqual(result.actions, ("move_closer", "blink"))
+        self.assertEqual(result.required_blinks, self.challenge.required_blinks)
+
+    def test_accepts_slow_valid_attempt_but_rejects_over_45_seconds(self):
+        evidence = self.evidence()
+        evidence["effectiveFps"] = 8.2
+        evidence["completedAtMs"] = 41_000
+        evidence["frames"][-1]["timestampMs"] = 41_000
+        result = verify_liveness_submission(
+            self.challenge.token,
+            json.dumps(evidence),
+            "challenge-1",
+            "student-1",
+            now=self.now,
+        )
+        self.assertEqual(result.total_duration_ms, 40_000)
+
+        evidence["completedAtMs"] = 46_100
+        evidence["frames"][-1]["timestampMs"] = 46_100
+        with self.assertRaises(HTTPException):
+            verify_liveness_submission(
+                self.challenge.token,
+                json.dumps(evidence),
+                "challenge-1",
+                "student-1",
+                now=self.now,
+            )
 
     def test_rejects_tampered_token_and_wrong_student(self):
-        tampered = f"{self.token[:-1]}{'A' if self.token[-1] != 'A' else 'B'}"
+        token = self.challenge.token
+        tampered = f"{token[:-1]}{'A' if token[-1] != 'A' else 'B'}"
         with self.assertRaises(HTTPException):
             verify_liveness_submission(tampered, json.dumps(self.evidence()), "challenge-1", "student-1")
         with self.assertRaises(HTTPException):
-            verify_liveness_submission(self.token, json.dumps(self.evidence()), "challenge-1", "student-2")
+            verify_liveness_submission(token, json.dumps(self.evidence()), "challenge-1", "student-2")
 
-    def test_rejects_nod_as_turn_and_one_eye_blink(self):
+    def test_rejects_static_scale_and_one_eye_blink(self):
         evidence = self.evidence()
-        for event in evidence["events"]:
-            if event["action"] != "blink":
-                event["yawDelta"] = 0.01
-                event["pitchDelta"] = 0.20
+        evidence["movement"]["peakScale"] = 0.41
         with self.assertRaises(HTTPException):
-            verify_liveness_submission(self.token, json.dumps(evidence), "challenge-1", "student-1", now=self.now)
+            verify_liveness_submission(self.challenge.token, json.dumps(evidence), "challenge-1", "student-1", now=self.now)
 
         evidence = self.evidence()
-        next(event for event in evidence["events"] if event["action"] == "blink")["eyeRatio"] = 0.90
+        evidence["blinks"][0]["minRightEyeRatio"] = 0.90
         with self.assertRaises(HTTPException):
-            verify_liveness_submission(self.token, json.dumps(evidence), "challenge-1", "student-1", now=self.now)
+            verify_liveness_submission(self.challenge.token, json.dumps(evidence), "challenge-1", "student-1", now=self.now)
+
+    def test_rejects_client_attempt_to_reduce_signed_blink_count(self):
+        evidence = self.evidence()
+        evidence["requiredBlinks"] = 1 if self.challenge.required_blinks == 2 else 2
+        with self.assertRaises(HTTPException):
+            verify_liveness_submission(
+                self.challenge.token,
+                json.dumps(evidence),
+                "challenge-1",
+                "student-1",
+                now=self.now,
+            )
 
     def test_rejects_expired_token(self):
         with self.assertRaises(HTTPException):
             verify_liveness_submission(
-                self.token,
+                self.challenge.token,
                 json.dumps(self.evidence()),
                 "challenge-1",
                 "student-1",
@@ -105,6 +176,22 @@ class AtomicFaceAttendanceMigrationTests(unittest.TestCase):
         self.assertIn("claim_face_attendance_challenge", sql)
         self.assertIn("release_face_attendance_challenge", sql)
         self.assertIn("renew_face_attendance_challenge", sql)
+
+
+class LivenessApiContractTests(unittest.TestCase):
+    def test_protocol_v2_upload_contract_has_no_legacy_turn_frame(self):
+        schema = app.openapi()
+        request_schema = schema["paths"]["/api/v1/attendance/verify"]["post"]["requestBody"]["content"][
+            "multipart/form-data"
+        ]["schema"]
+        reference = request_schema["$ref"].rsplit("/", 1)[-1]
+        properties = schema["components"]["schemas"][reference]["properties"]
+        self.assertIn("liveness_near_image", properties)
+        self.assertIn("liveness_return_image", properties)
+        self.assertIn("liveness_blink_closed_images", properties)
+        self.assertIn("liveness_blink_open_images", properties)
+        self.assertNotIn("liveness_turn_image", properties)
+        self.assertNotIn("liveness_blink_image", properties)
 
 
 class OcrFairUseTests(unittest.TestCase):

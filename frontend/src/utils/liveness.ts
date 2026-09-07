@@ -1,242 +1,533 @@
-export type LivenessAction = 'blink' | 'turn_left' | 'turn_right';
+export type LivenessAction = 'move_closer' | 'blink';
+
+export type LivenessFrameKind =
+  | 'baseline_open'
+  | 'near'
+  | 'returned'
+  | 'blink_closed'
+  | 'blink_open'
+  | 'final_open';
 
 export interface LivenessObservation {
   timestampMs: number;
   faceCount: number;
   leftEar: number;
   rightEar: number;
+  leftBlinkScore: number;
+  rightBlinkScore: number;
   yaw: number;
   pitch: number;
   faceWidthRatio: number;
   centerOffset: number;
 }
 
-export interface LivenessEvent {
-  action: LivenessAction;
+export interface LivenessFrameMarker {
+  kind: LivenessFrameKind;
+  timestampMs: number;
+  blinkIndex?: number;
+}
+
+export interface MoveCloserEvent {
+  action: 'move_closer';
+  startedAtMs: number;
+  peakAtMs: number;
+  completedAtMs: number;
+  baselineScale: number;
+  peakScale: number;
+  returnedScale: number;
+}
+
+export interface BlinkEvent {
+  action: 'blink';
+  blinkIndex: number;
+  closedAtMs: number;
+  reopenedAtMs: number;
   durationMs: number;
-  eyeRatio: number;
-  yawDelta: number;
-  pitchDelta: number;
+  minLeftEyeRatio: number;
+  minRightEyeRatio: number;
 }
 
 export interface LivenessEvidence {
-  version: 1;
+  version: 2;
   actions: LivenessAction[];
-  events: LivenessEvent[];
+  requiredBlinks: number;
+  promptDelayMs: number;
+  movement: MoveCloserEvent;
+  blinks: BlinkEvent[];
+  frames: LivenessFrameMarker[];
   startedAtMs: number;
+  promptAtMs: number;
   completedAtMs: number;
+  effectiveFps: number;
 }
 
 export interface LivenessStep {
   instruction: string;
   progress: number;
-  captureTurn: boolean;
-  captureBlink: boolean;
+  captures: LivenessFrameMarker[];
   completed: boolean;
+  failed?: boolean;
   evidence?: LivenessEvidence;
 }
 
-const CALIBRATION_FRAMES = 12;
+export interface FaceLandmarkerPoint {
+  x: number;
+  y: number;
+}
+
+export interface FaceBlendshapeCategory {
+  categoryName: string;
+  score: number;
+}
+
+/**
+ * Device-side usability tuning. The backend independently recomputes all
+ * security-sensitive geometry from the submitted evidence frames.
+ *
+ * These values deliberately tolerate variable-FPS phone bridges such as
+ * Iriun and ordinary notebook webcams, while still requiring one face,
+ * forward/back movement, bilateral closure, reopening, and a stable final
+ * frame. Do not remove the corresponding backend checks when tuning these.
+ */
+export const LIVENESS_TRACKER_LIMITS = Object.freeze({
+  calibrationFrames: 10,
+  maxBadQualityFrames: 8,
+  minEffectiveFps: 8,
+  maxAttemptDurationMs: 45_000,
+  maxBlinkWindowMs: 8_000,
+  minMovementScaleRatio: 1.08,
+  maxMovementScaleRatio: 1.80,
+  returnScaleTolerance: 0.15,
+  finalScaleTolerance: 0.18,
+  centerOffset: 0.30,
+  yawTolerance: 0.12,
+  pitchTolerance: 0.15,
+  closedEyeRatio: 0.74,
+  reopenEyeRatio: 0.80,
+  closedBlendshape: 0.32,
+  openBlendshape: 0.40,
+  minBlinkDurationMs: 60,
+  maxBlinkDurationMs: 900,
+  stableFrames: 2,
+});
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length === 0) return 0;
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
 }
 
-function actionInstruction(action: LivenessAction): string {
-  if (action === 'blink') return 'มองตรงแล้วกะพริบตาทั้งสองข้าง 1 ครั้ง';
-  return action === 'turn_left'
-    ? 'หันหน้าไปทางซ้ายตามลูกศร แล้วกลับมามองตรง'
-    : 'หันหน้าไปทางขวาตามลูกศร แล้วกลับมามองตรง';
+function distance(p1: FaceLandmarkerPoint, p2: FaceLandmarkerPoint): number {
+  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
 }
+
+function eyeAspectRatio(landmarks: FaceLandmarkerPoint[], indices: number[]): number {
+  const points = indices.map((index) => landmarks[index]);
+  if (points.some((point) => !point)) return 0;
+  const [p1, p2, p3, p4, p5, p6] = points;
+  return (distance(p2, p6) + distance(p3, p5))
+    / Math.max(2 * distance(p1, p4), 0.0001);
+}
+
+/** Convert MediaPipe Face Landmarker output into the small, testable tracker contract. */
+export function observationFromLandmarker(
+  faces: FaceLandmarkerPoint[][],
+  blendshapes: FaceBlendshapeCategory[][],
+  timestampMs: number,
+): LivenessObservation {
+  const landmarks = faces[0];
+  if (!landmarks) {
+    return {
+      timestampMs,
+      faceCount: 0,
+      leftEar: 0,
+      rightEar: 0,
+      leftBlinkScore: 0,
+      rightBlinkScore: 0,
+      yaw: 0,
+      pitch: 0,
+      faceWidthRatio: 0,
+      centerOffset: 1,
+    };
+  }
+
+  const leftCheek = landmarks[234];
+  const rightCheek = landmarks[454];
+  const nose = landmarks[1];
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  const mouth = landmarks[13];
+  if (!leftCheek || !rightCheek || !nose || !leftEye || !rightEye || !mouth) {
+    return {
+      timestampMs,
+      faceCount: faces.length,
+      leftEar: 0,
+      rightEar: 0,
+      leftBlinkScore: 0,
+      rightBlinkScore: 0,
+      yaw: 0,
+      pitch: 0,
+      faceWidthRatio: 0,
+      centerOffset: 1,
+    };
+  }
+
+  const scores = new Map(
+    (blendshapes[0] ?? []).map((category) => [category.categoryName, category.score]),
+  );
+  const faceWidth = Math.max(Math.abs(rightCheek.x - leftCheek.x), 0.0001);
+  const faceCenterX = (leftCheek.x + rightCheek.x) / 2;
+  const eyeMidY = (leftEye.y + rightEye.y) / 2;
+
+  return {
+    timestampMs,
+    faceCount: faces.length,
+    leftEar: eyeAspectRatio(landmarks, [362, 385, 387, 263, 373, 380]),
+    rightEar: eyeAspectRatio(landmarks, [33, 160, 158, 133, 153, 144]),
+    leftBlinkScore: scores.get('eyeBlinkLeft') ?? 0,
+    rightBlinkScore: scores.get('eyeBlinkRight') ?? 0,
+    yaw: (nose.x - faceCenterX) / faceWidth,
+    pitch: (nose.y - eyeMidY) / Math.max(mouth.y - eyeMidY, 0.0001),
+    faceWidthRatio: faceWidth,
+    centerOffset: Math.abs(faceCenterX - 0.5),
+  };
+}
+
+type Phase = 'calibrating' | 'move_near' | 'return' | 'wait_prompt' | 'blink' | 'final' | 'complete';
 
 export class LivenessTracker {
   private readonly actions: LivenessAction[];
+  private readonly requiredBlinks: number;
+  private readonly promptDelayMs: number;
   private readonly calibration: LivenessObservation[] = [];
-  private readonly events: LivenessEvent[] = [];
-  private baselineEar = 0;
+  private readonly blinks: BlinkEvent[] = [];
+  private readonly frames: LivenessFrameMarker[] = [];
+  private readonly observedTimestamps: number[] = [];
+  private phase: Phase = 'calibrating';
+  private baselineLeftEar = 0;
+  private baselineRightEar = 0;
   private baselineYaw = 0;
   private baselinePitch = 0;
-  private actionIndex = 0;
+  private baselineScale = 0;
   private startedAtMs = 0;
-  private blinkStartedAt: number | null = null;
+  private nearStartedAtMs: number | null = null;
+  private nearStableFrames = 0;
+  private peakScale = 0;
+  private peakAtMs = 0;
+  private returnStableFrames = 0;
+  private returnedAtMs = 0;
+  private returnedScale = 0;
+  private promptAtMs = 0;
+  private blinkStartedAtMs: number | null = null;
   private blinkClosedFrames = 0;
-  private turnStartedAt: number | null = null;
-  private turnCapturedAt: number | null = null;
-  private turnPeakYaw = 0;
-  private returnFrames = 0;
-  private completionFrames = 0;
+  private blinkMinLeftRatio = 1;
+  private blinkMinRightRatio = 1;
+  private finalStableFrames = 0;
+  private badQualityFrames = 0;
 
-  constructor(actions: LivenessAction[]) {
-    const valid = actions.length === 2
-      && actions.includes('blink')
-      && actions.filter((action) => action.startsWith('turn_')).length === 1;
-    if (!valid) throw new Error('ลำดับ liveness ไม่ถูกต้อง');
+  constructor(actions: LivenessAction[], requiredBlinks: number, promptDelayMs: number) {
+    if (
+      actions.length !== 2
+      || actions[0] !== 'move_closer'
+      || actions[1] !== 'blink'
+      || !Number.isInteger(requiredBlinks)
+      || requiredBlinks < 1
+      || requiredBlinks > 2
+      || !Number.isInteger(promptDelayMs)
+      || promptDelayMs < 300
+      || promptDelayMs > 1_500
+    ) {
+      throw new Error('ข้อมูล challenge สำหรับ liveness ไม่ถูกต้อง');
+    }
     this.actions = [...actions];
+    this.requiredBlinks = requiredBlinks;
+    this.promptDelayMs = promptDelayMs;
   }
 
-  private resetTransient(): void {
-    this.blinkStartedAt = null;
-    this.blinkClosedFrames = 0;
-    this.turnStartedAt = null;
-    this.turnCapturedAt = null;
-    this.turnPeakYaw = 0;
-    this.returnFrames = 0;
+  private qualityOk(observation: LivenessObservation): boolean {
+    return observation.faceCount === 1
+      && observation.faceWidthRatio >= 0.18
+      && observation.faceWidthRatio <= 0.84
+      && observation.centerOffset <= LIVENESS_TRACKER_LIMITS.centerOffset
+      && observation.leftEar > 0.08
+      && observation.rightEar > 0.08;
   }
 
-  private resetSequence(): void {
+  private resetAll(): void {
     this.calibration.splice(0);
-    this.events.splice(0);
-    this.baselineEar = 0;
+    this.blinks.splice(0);
+    this.frames.splice(0);
+    this.observedTimestamps.splice(0);
+    this.phase = 'calibrating';
+    this.baselineLeftEar = 0;
+    this.baselineRightEar = 0;
     this.baselineYaw = 0;
     this.baselinePitch = 0;
-    this.actionIndex = 0;
+    this.baselineScale = 0;
     this.startedAtMs = 0;
-    this.completionFrames = 0;
-    this.resetTransient();
+    this.nearStartedAtMs = null;
+    this.nearStableFrames = 0;
+    this.peakScale = 0;
+    this.peakAtMs = 0;
+    this.returnStableFrames = 0;
+    this.returnedAtMs = 0;
+    this.returnedScale = 0;
+    this.promptAtMs = 0;
+    this.resetBlink();
+    this.finalStableFrames = 0;
+    this.badQualityFrames = 0;
+  }
+
+  private resetBlink(): void {
+    this.blinkStartedAtMs = null;
+    this.blinkClosedFrames = 0;
+    this.blinkMinLeftRatio = 1;
+    this.blinkMinRightRatio = 1;
+  }
+
+  private marker(kind: LivenessFrameKind, observation: LivenessObservation, blinkIndex?: number): LivenessFrameMarker {
+    const marker: LivenessFrameMarker = { kind, timestampMs: observation.timestampMs };
+    if (blinkIndex !== undefined) marker.blinkIndex = blinkIndex;
+    this.frames.push(marker);
+    return marker;
+  }
+
+  private step(instruction: string, progress: number, captures: LivenessFrameMarker[] = []): LivenessStep {
+    return { instruction, progress, captures, completed: false };
   }
 
   add(observation: LivenessObservation): LivenessStep {
-    const qualityOk = observation.faceCount === 1
-      && observation.faceWidthRatio >= 0.22
-      && observation.faceWidthRatio <= 0.78
-      && observation.centerOffset <= 0.28;
-    if (!qualityOk) {
-      this.resetSequence();
-      return {
-        instruction: observation.faceCount > 1
+    if (this.phase === 'complete') return this.step('ตรวจสอบ liveness สำเร็จ', 1);
+
+    this.observedTimestamps.push(observation.timestampMs);
+    if (this.observedTimestamps.length > 120) this.observedTimestamps.shift();
+
+    if (!this.qualityOk(observation)) {
+      this.badQualityFrames += 1;
+      if (
+        this.phase !== 'calibrating'
+        && this.badQualityFrames > LIVENESS_TRACKER_LIMITS.maxBadQualityFrames
+      ) {
+        this.resetAll();
+      }
+      return this.step(
+        observation.faceCount > 1
           ? 'พบมากกว่า 1 ใบหน้า กรุณาอยู่ในเฟรมเพียงคนเดียว'
           : 'จัดใบหน้าให้อยู่กลางกรอบ เห็นใบหน้าชัดเจนเพียง 1 คน',
-        progress: this.actionIndex / this.actions.length,
-        captureTurn: false,
-        captureBlink: false,
-        completed: false,
-      };
+        0,
+      );
     }
+    this.badQualityFrames = 0;
 
-    if (this.calibration.length < CALIBRATION_FRAMES) {
+    if (this.phase === 'calibrating') {
+      const eyesOpen = observation.leftBlinkScore <= LIVENESS_TRACKER_LIMITS.openBlendshape
+        && observation.rightBlinkScore <= LIVENESS_TRACKER_LIMITS.openBlendshape;
+      if (!eyesOpen) return this.step('ลืมตาและมองตรงเพื่อปรับเทียบดวงตา', 0.04);
       this.calibration.push(observation);
-      if (this.calibration.length === CALIBRATION_FRAMES) {
-        this.baselineEar = median(this.calibration.map((item) => (item.leftEar + item.rightEar) / 2));
-        this.baselineYaw = median(this.calibration.map((item) => item.yaw));
-        this.baselinePitch = median(this.calibration.map((item) => item.pitch));
-        this.startedAtMs = observation.timestampMs;
+      if (this.calibration.length < LIVENESS_TRACKER_LIMITS.calibrationFrames) {
+        return this.step('วางใบหน้าให้อยู่ในกรอบ มองตรงและอยู่นิ่ง', 0.10);
       }
-      return {
-        instruction: 'มองตรงและอยู่นิ่ง กำลังปรับเทียบใบหน้า',
-        progress: 0,
-        captureTurn: false,
-        captureBlink: false,
-        completed: false,
-      };
+
+      this.baselineLeftEar = median(this.calibration.map((item) => item.leftEar));
+      this.baselineRightEar = median(this.calibration.map((item) => item.rightEar));
+      this.baselineYaw = median(this.calibration.map((item) => item.yaw));
+      this.baselinePitch = median(this.calibration.map((item) => item.pitch));
+      this.baselineScale = median(this.calibration.map((item) => item.faceWidthRatio));
+      this.startedAtMs = observation.timestampMs;
+      this.phase = 'move_near';
+      return this.step(
+        'ค่อย ๆ ขยับใบหน้าเข้าใกล้กล้อง',
+        0.20,
+        [this.marker('baseline_open', observation)],
+      );
     }
 
     const yawDelta = observation.yaw - this.baselineYaw;
     const pitchDelta = observation.pitch - this.baselinePitch;
-    const leftEyeRatio = observation.leftEar / Math.max(this.baselineEar, 0.001);
-    const rightEyeRatio = observation.rightEar / Math.max(this.baselineEar, 0.001);
-    const currentAction = this.actions[this.actionIndex];
+    const leftEyeRatio = observation.leftEar / Math.max(this.baselineLeftEar, 0.001);
+    const rightEyeRatio = observation.rightEar / Math.max(this.baselineRightEar, 0.001);
+    const headStable = Math.abs(yawDelta) <= LIVENESS_TRACKER_LIMITS.yawTolerance
+      && Math.abs(pitchDelta) <= LIVENESS_TRACKER_LIMITS.pitchTolerance;
+    const eyesOpen = leftEyeRatio >= LIVENESS_TRACKER_LIMITS.reopenEyeRatio
+      && rightEyeRatio >= LIVENESS_TRACKER_LIMITS.reopenEyeRatio
+      && observation.leftBlinkScore <= LIVENESS_TRACKER_LIMITS.openBlendshape
+      && observation.rightBlinkScore <= LIVENESS_TRACKER_LIMITS.openBlendshape;
 
-    if (!currentAction) {
-      if (Math.abs(yawDelta) <= 0.055 && Math.abs(pitchDelta) <= 0.08) this.completionFrames += 1;
-      else this.completionFrames = 0;
-      if (this.completionFrames < 3) {
-        return {
-          instruction: 'กลับมามองตรงเพื่อถ่ายภาพยืนยัน',
-          progress: 0.95,
-          captureTurn: false,
-          captureBlink: false,
-          completed: false,
-        };
-      }
-      const evidence: LivenessEvidence = {
-        version: 1,
-        actions: [...this.actions],
-        events: [...this.events],
-        startedAtMs: this.startedAtMs,
-        completedAtMs: observation.timestampMs,
-      };
-      return { instruction: 'ตรวจสอบ liveness สำเร็จ', progress: 1, captureTurn: false, captureBlink: false, completed: true, evidence };
-    }
-
-    if (currentAction === 'blink') {
-      const bothClosed = leftEyeRatio <= 0.68 && rightEyeRatio <= 0.68;
-      const bothOpen = leftEyeRatio >= 0.82 && rightEyeRatio >= 0.82;
-      const headStable = Math.abs(yawDelta) <= 0.08 && Math.abs(pitchDelta) <= 0.08;
-      if (bothClosed && headStable) {
-        this.blinkStartedAt ??= observation.timestampMs;
-        this.blinkClosedFrames += 1;
-        if (this.blinkClosedFrames === 2) {
-          return {
-            instruction: 'ตรวจพบการกะพริบตา กรุณาลืมตา',
-            progress: (this.actionIndex + 0.4) / this.actions.length,
-            captureTurn: false,
-            captureBlink: true,
-            completed: false,
-          };
+    if (this.phase === 'move_near') {
+      const scaleRatio = observation.faceWidthRatio / Math.max(this.baselineScale, 0.001);
+      if (
+        scaleRatio >= LIVENESS_TRACKER_LIMITS.minMovementScaleRatio
+        && scaleRatio <= LIVENESS_TRACKER_LIMITS.maxMovementScaleRatio
+        && headStable
+      ) {
+        this.nearStartedAtMs ??= observation.timestampMs;
+        this.nearStableFrames += 1;
+        if (observation.faceWidthRatio > this.peakScale) {
+          this.peakScale = observation.faceWidthRatio;
+          this.peakAtMs = observation.timestampMs;
         }
-      } else if (this.blinkStartedAt !== null && bothOpen) {
-        const durationMs = observation.timestampMs - this.blinkStartedAt;
-        if (this.blinkClosedFrames >= 2 && durationMs >= 60 && durationMs <= 700 && headStable) {
-          this.events.push({
-            action: currentAction,
-            durationMs,
-            eyeRatio: Math.min(leftEyeRatio, rightEyeRatio),
-            yawDelta,
-            pitchDelta,
-          });
-          this.actionIndex += 1;
-          this.resetTransient();
-        } else {
-          this.resetTransient();
-        }
-      } else if (this.blinkStartedAt !== null && observation.timestampMs - this.blinkStartedAt > 700) {
-        this.resetTransient();
-      }
-    } else {
-      const direction = currentAction === 'turn_left' ? -1 : 1;
-      const reachesTurn = direction * yawDelta >= 0.12 && Math.abs(pitchDelta) <= 0.10;
-      if (this.turnCapturedAt === null) {
-        if (reachesTurn) {
-          this.turnStartedAt ??= observation.timestampMs;
-          this.turnPeakYaw = Math.abs(yawDelta) > Math.abs(this.turnPeakYaw) ? yawDelta : this.turnPeakYaw;
-          if (observation.timestampMs - this.turnStartedAt >= 180) {
-            this.turnCapturedAt = observation.timestampMs;
-            return {
-              instruction: 'ดีมาก กลับมามองตรง',
-              progress: (this.actionIndex + 0.7) / this.actions.length,
-              captureTurn: true,
-              captureBlink: false,
-              completed: false,
-            };
-          }
-        } else if (this.turnStartedAt !== null) {
-          this.turnStartedAt = null;
-          this.turnPeakYaw = 0;
+        if (this.nearStableFrames >= LIVENESS_TRACKER_LIMITS.stableFrames) {
+          this.phase = 'return';
+          return this.step('ดีมาก ถอยกลับมาวางใบหน้าในกรอบเดิม', 0.40, [this.marker('near', observation)]);
         }
       } else {
-        if (Math.abs(yawDelta) <= 0.055 && Math.abs(pitchDelta) <= 0.08) this.returnFrames += 1;
-        else this.returnFrames = 0;
-        if (this.returnFrames >= 3 && this.turnStartedAt !== null) {
-          this.events.push({
-            action: currentAction,
-            durationMs: this.turnCapturedAt - this.turnStartedAt,
-            eyeRatio: Math.min(leftEyeRatio, rightEyeRatio),
-            yawDelta: this.turnPeakYaw,
-            pitchDelta,
-          });
-          this.actionIndex += 1;
-          this.resetTransient();
-        }
+        this.nearStartedAtMs = null;
+        this.nearStableFrames = 0;
       }
+      return this.step('ค่อย ๆ ขยับใบหน้าเข้าใกล้กล้อง', 0.28);
     }
 
-    return {
-      instruction: actionInstruction(this.actions[this.actionIndex] ?? currentAction),
-      progress: this.actionIndex / this.actions.length,
-      captureTurn: false,
-      captureBlink: false,
-      completed: false,
-    };
+    if (this.phase === 'return') {
+      const returned = Math.abs(observation.faceWidthRatio / this.baselineScale - 1)
+          <= LIVENESS_TRACKER_LIMITS.returnScaleTolerance
+        && headStable
+        && eyesOpen;
+      this.returnStableFrames = returned ? this.returnStableFrames + 1 : 0;
+      if (
+        this.returnStableFrames >= LIVENESS_TRACKER_LIMITS.stableFrames
+        && this.nearStartedAtMs !== null
+      ) {
+        this.returnedAtMs = observation.timestampMs;
+        this.returnedScale = observation.faceWidthRatio;
+        this.promptAtMs = observation.timestampMs + this.promptDelayMs;
+        this.phase = 'wait_prompt';
+        return this.step('อยู่นิ่งและรอคำสั่งกระพริบตา', 0.55, [this.marker('returned', observation)]);
+      }
+      return this.step('ถอยกลับจนใบหน้าพอดีกับกรอบเดิม', 0.48);
+    }
+
+    if (this.phase === 'wait_prompt') {
+      if (observation.timestampMs < this.promptAtMs) {
+        return this.step('อยู่นิ่งและรอคำสั่งกระพริบตา', 0.56);
+      }
+      this.phase = 'blink';
+    }
+
+    if (this.phase === 'blink') {
+      if (observation.timestampMs - this.promptAtMs > LIVENESS_TRACKER_LIMITS.maxBlinkWindowMs) {
+        return {
+          ...this.step('ไม่พบการกระพริบตาภายในเวลาที่กำหนด กรุณาเริ่มใหม่', 0.58),
+          failed: true,
+        };
+      }
+
+      const bothClosed = leftEyeRatio <= LIVENESS_TRACKER_LIMITS.closedEyeRatio
+        && rightEyeRatio <= LIVENESS_TRACKER_LIMITS.closedEyeRatio
+        && observation.leftBlinkScore >= LIVENESS_TRACKER_LIMITS.closedBlendshape
+        && observation.rightBlinkScore >= LIVENESS_TRACKER_LIMITS.closedBlendshape
+        && headStable;
+      const blinkIndex = this.blinks.length + 1;
+      if (bothClosed) {
+        this.blinkStartedAtMs ??= observation.timestampMs;
+        this.blinkClosedFrames += 1;
+        this.blinkMinLeftRatio = Math.min(this.blinkMinLeftRatio, leftEyeRatio);
+        this.blinkMinRightRatio = Math.min(this.blinkMinRightRatio, rightEyeRatio);
+        if (this.blinkClosedFrames === LIVENESS_TRACKER_LIMITS.stableFrames) {
+          return this.step(
+            'ตรวจพบว่าหลับตาแล้ว กรุณาลืมตา',
+            0.64 + (this.blinks.length / this.requiredBlinks) * 0.20,
+            [this.marker('blink_closed', observation, blinkIndex)],
+          );
+        }
+      } else if (this.blinkStartedAtMs !== null && eyesOpen && headStable) {
+        const durationMs = observation.timestampMs - this.blinkStartedAtMs;
+        if (
+          this.blinkClosedFrames >= LIVENESS_TRACKER_LIMITS.stableFrames
+          && durationMs >= LIVENESS_TRACKER_LIMITS.minBlinkDurationMs
+          && durationMs <= LIVENESS_TRACKER_LIMITS.maxBlinkDurationMs
+        ) {
+          this.blinks.push({
+            action: 'blink',
+            blinkIndex,
+            closedAtMs: this.blinkStartedAtMs,
+            reopenedAtMs: observation.timestampMs,
+            durationMs,
+            minLeftEyeRatio: this.blinkMinLeftRatio,
+            minRightEyeRatio: this.blinkMinRightRatio,
+          });
+          const capture = this.marker('blink_open', observation, blinkIndex);
+          this.resetBlink();
+          if (this.blinks.length >= this.requiredBlinks) {
+            this.phase = 'final';
+            return this.step('มองตรงและอยู่นิ่งเพื่อถ่ายภาพยืนยัน', 0.90, [capture]);
+          }
+          return this.step(`กระพริบตาทั้งสองข้างอีก ${this.requiredBlinks - this.blinks.length} ครั้ง`, 0.76, [capture]);
+        }
+        this.resetBlink();
+      } else if (
+        this.blinkStartedAtMs !== null
+        && observation.timestampMs - this.blinkStartedAtMs
+          > LIVENESS_TRACKER_LIMITS.maxBlinkDurationMs
+      ) {
+        this.resetBlink();
+      }
+
+      const remaining = this.requiredBlinks - this.blinks.length;
+      return this.step(`กระพริบตาทั้งสองข้าง ${remaining} ครั้ง โดยไม่ผงกศีรษะ`, 0.62);
+    }
+
+    if (this.phase === 'final') {
+      const finalOk = headStable
+        && eyesOpen
+        && Math.abs(observation.faceWidthRatio / this.baselineScale - 1)
+          <= LIVENESS_TRACKER_LIMITS.finalScaleTolerance;
+      this.finalStableFrames = finalOk ? this.finalStableFrames + 1 : 0;
+      if (this.finalStableFrames < LIVENESS_TRACKER_LIMITS.stableFrames) {
+        return this.step('มองตรง ลืมตา และวางใบหน้าให้พอดีกับกรอบ', 0.94);
+      }
+
+      const elapsed = observation.timestampMs - this.startedAtMs;
+      const firstTimestamp = this.observedTimestamps[0] ?? observation.timestampMs;
+      const measuredDuration = observation.timestampMs - firstTimestamp;
+      const effectiveFps = measuredDuration > 0
+        ? ((this.observedTimestamps.length - 1) * 1000) / measuredDuration
+        : 0;
+      if (
+        effectiveFps < LIVENESS_TRACKER_LIMITS.minEffectiveFps
+        || elapsed > LIVENESS_TRACKER_LIMITS.maxAttemptDurationMs
+      ) {
+        return {
+          ...this.step('อัตราภาพจากกล้องต่ำหรือใช้เวลานานเกินไป กรุณาเริ่มใหม่ในที่สว่าง', 0.94),
+          failed: true,
+        };
+      }
+
+      const finalMarker = this.marker('final_open', observation);
+      const movement: MoveCloserEvent = {
+        action: 'move_closer',
+        startedAtMs: this.nearStartedAtMs ?? this.startedAtMs,
+        peakAtMs: this.peakAtMs,
+        completedAtMs: this.returnedAtMs,
+        baselineScale: this.baselineScale,
+        peakScale: this.peakScale,
+        returnedScale: this.returnedScale,
+      };
+      const evidence: LivenessEvidence = {
+        version: 2,
+        actions: [...this.actions],
+        requiredBlinks: this.requiredBlinks,
+        promptDelayMs: this.promptDelayMs,
+        movement,
+        blinks: [...this.blinks],
+        frames: [...this.frames],
+        startedAtMs: this.startedAtMs,
+        promptAtMs: this.promptAtMs,
+        completedAtMs: observation.timestampMs,
+        effectiveFps: Number(effectiveFps.toFixed(2)),
+      };
+      this.phase = 'complete';
+      return {
+        instruction: 'ตรวจสอบ liveness สำเร็จ',
+        progress: 1,
+        captures: [finalMarker],
+        completed: true,
+        evidence,
+      };
+    }
+
+    return this.step('กำลังตรวจสอบ liveness', 0.95);
   }
 }

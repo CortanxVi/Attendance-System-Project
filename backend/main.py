@@ -35,6 +35,7 @@ from core.request_limits import SupportUploadLimitMiddleware
 from services.light_ocr_service import extract_student_id, read_validated_image, student_card_ocr_limiter
 from services.insightface_service import face_service
 from services.liveness_service import create_liveness_challenge, verify_liveness_submission
+from services.liveness_frame_service import verify_liveness_frames
 from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
 
 # นำเข้า Router สำหรับ Admin
@@ -102,7 +103,6 @@ app.add_middleware(SupportUploadLimitMiddleware)
 
 # เกณฑ์คะแนนความเหมือนใบหน้า (0.45 - 0.50 ถือว่าแม่นยำและปลอดภัยสูงสำหรับ CPU)
 FACE_THRESHOLD = 0.45
-LIVENESS_FRAME_IDENTITY_THRESHOLD = 0.35
 SUPABASE_ERROR_MESSAGES = {
     '23505': 'นักศึกษาเช็คชื่อในคาบนี้ไปแล้ว',
     '23503': 'ไม่พบ session หรือนักศึกษาในระบบ',
@@ -482,8 +482,11 @@ async def register_face(
 @app.post("/api/v1/attendance/verify")
 async def verify_FaceReg_OCR_attendance(
     face_image: UploadFile = File(...),
-    liveness_blink_image: UploadFile = File(...),
-    liveness_turn_image: UploadFile = File(...),
+    liveness_baseline_image: UploadFile = File(...),
+    liveness_near_image: UploadFile = File(...),
+    liveness_return_image: UploadFile = File(...),
+    liveness_blink_closed_images: list[UploadFile] = File(...),
+    liveness_blink_open_images: list[UploadFile] = File(...),
     id_card_image: UploadFile = File(...),
     challenge_id: str = Form(...),
     liveness_token: str = Form(...),
@@ -532,74 +535,64 @@ async def verify_FaceReg_OCR_attendance(
             )
         )
 
-        face_upload, blink_upload, turn_upload, card_upload = await asyncio.gather(
-            read_validated_image(face_image, "ภาพใบหน้าสด"),
-            read_validated_image(liveness_blink_image, "ภาพขณะกะพริบตา"),
-            read_validated_image(liveness_turn_image, "ภาพขณะหันหน้า"),
+        if (
+            len(liveness_blink_closed_images) != verified_liveness.required_blinks
+            or len(liveness_blink_open_images) != verified_liveness.required_blinks
+        ):
+            raise HTTPException(status_code=422, detail="จำนวนภาพกระพริบตาไม่ตรงกับ challenge")
+
+        upload_tasks = [
+            read_validated_image(face_image, "ภาพใบหน้าสุดท้าย"),
+            read_validated_image(liveness_baseline_image, "ภาพปรับเทียบใบหน้า"),
+            read_validated_image(liveness_near_image, "ภาพขณะเข้าใกล้กล้อง"),
+            read_validated_image(liveness_return_image, "ภาพหลังกลับเข้ากรอบ"),
             read_validated_image(id_card_image, "ภาพบัตรนักศึกษา"),
+        ]
+        upload_tasks.extend(
+            read_validated_image(upload, f"ภาพหลับตาครั้งที่ {index}")
+            for index, upload in enumerate(liveness_blink_closed_images, start=1)
         )
-        img_live, img_blink, img_turn = await asyncio.gather(
-            run_in_threadpool(prepare_face_image, face_upload.content),
-            run_in_threadpool(prepare_face_image, blink_upload.content),
-            run_in_threadpool(prepare_face_image, turn_upload.content),
+        upload_tasks.extend(
+            read_validated_image(upload, f"ภาพลืมตาครั้งที่ {index}")
+            for index, upload in enumerate(liveness_blink_open_images, start=1)
         )
-        if img_live is None or img_blink is None or img_turn is None:
+        validated_uploads = await asyncio.gather(*upload_tasks)
+        face_upload, baseline_upload, near_upload, return_upload, card_upload = validated_uploads[:5]
+        blink_closed_uploads = validated_uploads[5:5 + verified_liveness.required_blinks]
+        blink_open_uploads = validated_uploads[5 + verified_liveness.required_blinks:]
+
+        face_inputs = [
+            face_upload,
+            baseline_upload,
+            near_upload,
+            return_upload,
+            *blink_closed_uploads,
+            *blink_open_uploads,
+        ]
+        prepared_images = await asyncio.gather(*(
+            run_in_threadpool(prepare_face_image, upload.content)
+            for upload in face_inputs
+        ))
+        if any(image is None for image in prepared_images):
             raise HTTPException(status_code=400, detail="ไฟล์ภาพ liveness เสียหรืออ่านไม่ได้")
 
-        live_observation, blink_observation, turn_observation, extracted_student_id = await asyncio.gather(
-            run_in_threadpool(face_service.extract_strict_face_observation, img_live),
-            run_in_threadpool(face_service.extract_strict_face_observation, img_blink),
-            run_in_threadpool(face_service.extract_strict_face_observation, img_turn),
+        img_live, img_baseline, img_near, img_return = prepared_images[:4]
+        img_blink_closed = prepared_images[4:4 + verified_liveness.required_blinks]
+        img_blink_open = prepared_images[4 + verified_liveness.required_blinks:]
+        verified_frames, extracted_student_id = await asyncio.gather(
+            run_in_threadpool(
+                verify_liveness_frames,
+                img_baseline,
+                img_near,
+                img_return,
+                img_blink_closed,
+                img_blink_open,
+                img_live,
+                verified_liveness.required_blinks,
+            ),
             extract_student_id(card_upload),
         )
-
-        if live_observation is None or blink_observation is None or turn_observation is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ภาพ liveness ต้องพบใบหน้าชัดเจนเพียง 1 คนทุกช่วงการตรวจสอบ",
-            )
-
-        blink_frame_similarity = face_service.calculate_similarity(
-            live_observation.embedding,
-            blink_observation.embedding,
-        )
-        blink_eye_ratio = blink_observation.eye_aperture_proxy / max(
-            live_observation.eye_aperture_proxy,
-            0.001,
-        )
-        blink_yaw_delta = abs(blink_observation.yaw_proxy - live_observation.yaw_proxy)
-        blink_pitch_delta = abs(blink_observation.pitch_proxy - live_observation.pitch_proxy)
-        if (
-            blink_frame_similarity < LIVENESS_FRAME_IDENTITY_THRESHOLD
-            or blink_eye_ratio > 0.78
-            or blink_yaw_delta > 0.10
-            or blink_pitch_delta > 0.12
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail="หลักฐานการกะพริบตาไม่ผ่าน กรุณากะพริบตาทั้งสองข้างโดยมองตรงและไม่ผงกศีรษะ",
-            )
-
-        frame_similarity = face_service.calculate_similarity(
-            live_observation.embedding,
-            turn_observation.embedding,
-        )
-        yaw_delta = turn_observation.yaw_proxy - live_observation.yaw_proxy
-        pitch_delta = abs(turn_observation.pitch_proxy - live_observation.pitch_proxy)
-        roll_delta = abs(turn_observation.roll_proxy - live_observation.roll_proxy)
-        expected_direction = -1 if verified_liveness.turn_action == "turn_left" else 1
-        if (
-            frame_similarity < LIVENESS_FRAME_IDENTITY_THRESHOLD
-            or expected_direction * yaw_delta < 0.10
-            or pitch_delta > 0.18
-            or roll_delta > 0.20
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail="หลักฐาน liveness ไม่ผ่าน กรุณาหันหน้าตามลูกศรโดยไม่ก้ม เงย หรือใช้ภาพของบุคคลอื่น",
-            )
-
-        emb_live = live_observation.embedding
+        emb_live = verified_frames.final_embedding
 
         if extracted_student_id != current_user.student_id:
             raise HTTPException(
@@ -1014,7 +1007,7 @@ def validate_session_qr_token(
 
         course_info = session_row.get('courses') or {}
         challenge_id = challenge_response.data[0]["id"]
-        liveness_token, liveness_actions = create_liveness_challenge(
+        liveness_challenge = create_liveness_challenge(
             challenge_id,
             current_user.id,
             expires_at,
@@ -1027,8 +1020,11 @@ def validate_session_qr_token(
             "challenge_id": challenge_id,
             "challenge_expires_at": expires_at.isoformat(),
             "challenge_ttl_seconds": QR_CHALLENGE_SECONDS,
-            "liveness_token": liveness_token,
-            "liveness_actions": liveness_actions,
+            "liveness_protocol_version": 2,
+            "liveness_token": liveness_challenge.token,
+            "liveness_actions": list(liveness_challenge.actions),
+            "liveness_required_blinks": liveness_challenge.required_blinks,
+            "liveness_prompt_delay_ms": liveness_challenge.prompt_delay_ms,
         }
     except HTTPException:
         raise

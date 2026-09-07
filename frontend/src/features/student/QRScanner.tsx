@@ -12,8 +12,11 @@ export interface VerifiedSessionInfo {
   courseName: string;
   challengeId: string;
   challengeExpiresAt: string;
+  challengeTtlSeconds: number;
   livenessToken: string;
   livenessActions: LivenessAction[];
+  livenessRequiredBlinks: number;
+  livenessPromptDelayMs: number;
 }
 
 export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info: VerifiedSessionInfo) => void }) {
@@ -54,14 +57,34 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
         token: qrToken,
       });
 
-      const { course_code, course_name, challenge_id, challenge_expires_at, liveness_token, liveness_actions } = res.data;
+      const {
+        course_code,
+        course_name,
+        challenge_id,
+        challenge_expires_at,
+        challenge_ttl_seconds,
+        liveness_protocol_version,
+        liveness_token,
+        liveness_actions,
+        liveness_required_blinks,
+        liveness_prompt_delay_ms,
+      } = res.data;
       if (
         typeof challenge_id !== 'string'
         || typeof challenge_expires_at !== 'string'
+        || !Number.isInteger(challenge_ttl_seconds)
+        || challenge_ttl_seconds < 60
+        || challenge_ttl_seconds > 600
+        || liveness_protocol_version !== 2
         || typeof liveness_token !== 'string'
         || !Array.isArray(liveness_actions)
         || liveness_actions.length !== 2
-        || liveness_actions.some((action) => !['blink', 'turn_left', 'turn_right'].includes(action))
+        || liveness_actions[0] !== 'move_closer'
+        || liveness_actions[1] !== 'blink'
+        || ![1, 2].includes(liveness_required_blinks)
+        || !Number.isInteger(liveness_prompt_delay_ms)
+        || liveness_prompt_delay_ms < 400
+        || liveness_prompt_delay_ms > 1_000
       ) {
         throw new Error('ข้อมูล challenge สำหรับตรวจสอบใบหน้าไม่ครบ');
       }
@@ -76,8 +99,11 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
           courseName: course_name || '',
           challengeId: challenge_id,
           challengeExpiresAt: challenge_expires_at,
+          challengeTtlSeconds: challenge_ttl_seconds,
           livenessToken: liveness_token,
           livenessActions: liveness_actions as LivenessAction[],
+          livenessRequiredBlinks: liveness_required_blinks,
+          livenessPromptDelayMs: liveness_prompt_delay_ms,
         });
       }, 1500); // ดีเลย์ให้เห็นเครื่องหมายถูก 1.5 วินาที แล้วค่อยเปลี่ยนหน้า
 

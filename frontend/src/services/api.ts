@@ -53,17 +53,23 @@ export const faceService = {
   // จะถูกส่งไปให้ backend ผูกกับคาบเรียนจริง และคำนวณสาย/ขาดให้ถูกต้อง
   verifyAttendance: async (
     faceImage: File,
-    blinkImage: File,
-    turnImage: File,
+    baselineImage: File,
+    nearImage: File,
+    returnImage: File,
+    blinkClosedImages: File[],
+    blinkOpenImages: File[],
     idCardImage: File,
     challengeId: string,
     livenessToken: string,
     livenessEvidence: LivenessEvidence,
   ): Promise<VerifyResponse> => {
     const formData = new FormData();
-    formData.append('face_image', faceImage);       // ภาพถ่ายใบหน้าสดจาก Liveness
-    formData.append('liveness_blink_image', blinkImage);
-    formData.append('liveness_turn_image', turnImage);
+    formData.append('face_image', faceImage);
+    formData.append('liveness_baseline_image', baselineImage);
+    formData.append('liveness_near_image', nearImage);
+    formData.append('liveness_return_image', returnImage);
+    blinkClosedImages.forEach((image) => formData.append('liveness_blink_closed_images', image));
+    blinkOpenImages.forEach((image) => formData.append('liveness_blink_open_images', image));
     formData.append('id_card_image', idCardImage);
     formData.append('challenge_id', challengeId);
     formData.append('liveness_token', livenessToken);

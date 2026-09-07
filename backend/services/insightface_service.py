@@ -14,7 +14,17 @@ class FaceObservation:
     pitch_proxy: float
     roll_proxy: float
     detection_score: float
-    eye_aperture_proxy: float
+    left_eye_aperture_proxy: float
+    right_eye_aperture_proxy: float
+    face_width_ratio: float
+    center_offset: float
+    bbox: tuple[float, float, float, float]
+
+    @property
+    def eye_aperture_proxy(self) -> float:
+        """Compatibility average for non-liveness callers."""
+
+        return (self.left_eye_aperture_proxy + self.right_eye_aperture_proxy) / 2.0
 
 class FaceService:
     # 🌟 [เพิ่มใหม่] ค่าคงที่สำหรับกรอง "หน้าปลอม" ออกก่อนนับจำนวนคนในภาพตอนลงทะเบียน
@@ -95,7 +105,7 @@ class FaceService:
             return None
 
     @staticmethod
-    def _observation_from_face(face) -> FaceObservation | None:
+    def _observation_from_face(face, image_width: int) -> FaceObservation | None:
         keypoints = np.asarray(getattr(face, "kps", None), dtype=np.float32)
         if keypoints.shape != (5, 2):
             return None
@@ -118,29 +128,39 @@ class FaceService:
                 return 0.0
             return float((np.linalg.norm(p2 - p6) + np.linalg.norm(p3 - p5)) / (2 * horizontal))
 
-        eye_aperture = (
-            eye_aspect_ratio((36, 37, 38, 39, 40, 41))
-            + eye_aspect_ratio((42, 43, 44, 45, 46, 47))
-        ) / 2.0
-        if eye_aperture <= 0:
+        left_eye_aperture = eye_aspect_ratio((36, 37, 38, 39, 40, 41))
+        right_eye_aperture = eye_aspect_ratio((42, 43, 44, 45, 46, 47))
+        if left_eye_aperture <= 0 or right_eye_aperture <= 0 or image_width <= 0:
             return None
+        x1, _y1, x2, _y2 = (float(value) for value in face.bbox)
+        face_width_ratio = max(0.0, x2 - x1) / image_width
+        center_offset = abs(((x1 + x2) / 2.0) / image_width - 0.5)
         return FaceObservation(
             embedding=np.asarray(face.normed_embedding, dtype=np.float32),
             yaw_proxy=float((nose[0] - face_axis_mid[0]) / eye_distance),
             pitch_proxy=float((nose[1] - eye_mid[1]) / vertical_distance),
             roll_proxy=float((right_eye[1] - left_eye[1]) / eye_distance),
             detection_score=float(face.det_score),
-            eye_aperture_proxy=eye_aperture,
+            left_eye_aperture_proxy=left_eye_aperture,
+            right_eye_aperture_proxy=right_eye_aperture,
+            face_width_ratio=face_width_ratio,
+            center_offset=center_offset,
+            bbox=(x1, float(face.bbox[1]), x2, float(face.bbox[3])),
         )
 
     def extract_strict_face_observation(self, image_bgr: np.ndarray) -> FaceObservation | None:
         """Return one high-confidence face with geometry for server liveness checks."""
 
         try:
-            faces = self._filter_significant_faces(self._detect_faces(image_bgr))
-            if len(faces) != 1 or float(faces[0].det_score) < 0.60:
+            # Liveness fails closed on every confidently detected second face.
+            # Unlike enrollment, a small background face cannot be ignored here.
+            faces = [face for face in self._detect_faces(image_bgr) if float(face.det_score) >= 0.50]
+            # Webcam bridges and phone cameras can lose a little confidence to
+            # compression. Keep the multi-face fail-closed rule, but tolerate
+            # a modest score reduction for the single intended face.
+            if len(faces) != 1 or float(faces[0].det_score) < 0.55:
                 return None
-            return self._observation_from_face(faces[0])
+            return self._observation_from_face(faces[0], image_bgr.shape[1])
         except Exception as exc:
             print(f"FaceObservation Error: {type(exc).__name__}")
             return None

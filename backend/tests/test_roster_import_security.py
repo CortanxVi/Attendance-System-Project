@@ -4,6 +4,8 @@ from pathlib import Path
 import unittest
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from openpyxl import Workbook
+
 
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_KEY", "test-server-key")
@@ -13,14 +15,39 @@ from services.roster_import_service import RosterImportError, parse_roster_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SAMPLE_ROSTER = PROJECT_ROOT / "Source" / "ใบรายชื่อ" / "pythons1 - Copy.xlsx"
+
+
+def official_roster_fixture() -> bytes:
+    """Build the documented two-row-header shape without a developer-local file."""
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "รายชื่อ"
+    sheet["A2"] = "ภาคการศึกษา 1/2569"
+    sheet["A3"] = "วิชา 030513300 Python Programming 3 (3-0)"
+    sheet["A8"] = "รหัส"
+    sheet["A9"] = "นักศึกษา"
+    sheet["B8"] = "ชื่อ -"
+    sheet["B9"] = "สกุล"
+    sheet["C8"] = "กลุ่ม"
+    sheet["C9"] = "เรียน"
+    for index in range(35):
+        admission_year = 62 if index == 0 else (68 if index == 34 else 65)
+        student_id = f"{admission_year:02d}0302162{index + 181:04d}"[-13:]
+        if index == 0:
+            student_id = "6203021620181"
+        sheet.append([student_id, f"นักศึกษา ทดสอบ {index + 1}", "TDET-DE-RA"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return buffer.getvalue()
 
 
 class RosterParserTests(unittest.TestCase):
     def test_reads_official_two_row_header_xlsx(self):
         parsed = parse_roster_file(
-            SAMPLE_ROSTER.read_bytes(),
-            SAMPLE_ROSTER.name,
+            official_roster_fixture(),
+            "official-roster.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         self.assertEqual(parsed.detected_course_code, "030513300")

@@ -1,80 +1,86 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { ArrowLeft, ArrowRight, Camera, Loader2, Settings, ShieldCheck } from 'lucide-react';
+import { Camera, Eye, Loader2, ScanFace, Settings, ShieldCheck } from 'lucide-react';
 import {
-  loadMediapipe,
-  locateFaceMeshAsset,
-  type FaceMeshInstance,
-  type FaceMeshResults,
-} from '../../services/mediapipe';
-import {
+  LIVENESS_TRACKER_LIMITS,
   LivenessTracker,
   type LivenessAction,
   type LivenessEvidence,
-  type LivenessObservation,
+  type LivenessFrameMarker,
 } from '../../utils/liveness';
-
-interface LandmarkPoint {
-  x: number;
-  y: number;
-}
+import {
+  openFaceLandmarkerClient,
+  type FaceLandmarkerClient,
+  type FaceLandmarkerClientEvent,
+} from '../../services/faceLandmarkerRuntime';
 
 export interface LivenessCapture {
   faceImageSrc: string;
-  blinkImageSrc: string;
-  turnImageSrc: string;
+  baselineImageSrc: string;
+  nearImageSrc: string;
+  returnImageSrc: string;
+  blinkClosedImageSrcs: string[];
+  blinkOpenImageSrcs: string[];
   evidence: LivenessEvidence;
 }
 
-function distance(p1: LandmarkPoint, p2: LandmarkPoint): number {
-  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
-}
+type EvidenceFrames = {
+  baseline: string | null;
+  near: string | null;
+  returned: string | null;
+  blinkClosed: string[];
+  blinkOpen: string[];
+  final: string | null;
+};
 
-function eyeAspectRatio(landmarks: LandmarkPoint[], indices: number[]): number {
-  const [p1, p2, p3, p4, p5, p6] = indices.map((index) => landmarks[index]);
-  return (distance(p2, p6) + distance(p3, p5)) / Math.max(2 * distance(p1, p4), 0.0001);
-}
-
-function observationFromResults(results: FaceMeshResults, timestampMs: number): LivenessObservation {
-  const faces = results.multiFaceLandmarks ?? [];
-  const landmarks = faces[0];
-  if (!landmarks) {
-    return { timestampMs, faceCount: 0, leftEar: 0, rightEar: 0, yaw: 0, pitch: 0, faceWidthRatio: 0, centerOffset: 1 };
-  }
-
-  const leftCheek = landmarks[234];
-  const rightCheek = landmarks[454];
-  const nose = landmarks[1];
-  const leftEye = landmarks[33];
-  const rightEye = landmarks[263];
-  const mouth = landmarks[13];
-  const faceWidth = Math.max(Math.abs(rightCheek.x - leftCheek.x), 0.0001);
-  const faceCenterX = (leftCheek.x + rightCheek.x) / 2;
-  const eyeMidY = (leftEye.y + rightEye.y) / 2;
-
+function emptyEvidenceFrames(): EvidenceFrames {
   return {
-    timestampMs,
-    faceCount: faces.length,
-    leftEar: eyeAspectRatio(landmarks, [362, 385, 387, 263, 373, 380]),
-    rightEar: eyeAspectRatio(landmarks, [33, 160, 158, 133, 153, 144]),
-    yaw: (nose.x - faceCenterX) / faceWidth,
-    pitch: (nose.y - eyeMidY) / Math.max(mouth.y - eyeMidY, 0.0001),
-    faceWidthRatio: faceWidth,
-    centerOffset: Math.abs(faceCenterX - 0.5),
+    baseline: null,
+    near: null,
+    returned: null,
+    blinkClosed: [],
+    blinkOpen: [],
+    final: null,
   };
+}
+
+function frameToJpeg(frame: ImageBitmap): string {
+  const maxSide = 640;
+  const scale = Math.min(1, maxSide / Math.max(frame.width, frame.height));
+  const width = Math.max(1, Math.round(frame.width * scale));
+  const height = Math.max(1, Math.round(frame.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) throw new Error('อุปกรณ์นี้ไม่สามารถเก็บภาพหลักฐานได้');
+  context.drawImage(frame, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+function storeCapture(frames: EvidenceFrames, marker: LivenessFrameMarker, image: string): void {
+  if (marker.kind === 'baseline_open') frames.baseline = image;
+  else if (marker.kind === 'near') frames.near = image;
+  else if (marker.kind === 'returned') frames.returned = image;
+  else if (marker.kind === 'final_open') frames.final = image;
+  else if (marker.kind === 'blink_closed') frames.blinkClosed[(marker.blinkIndex ?? 1) - 1] = image;
+  else if (marker.kind === 'blink_open') frames.blinkOpen[(marker.blinkIndex ?? 1) - 1] = image;
 }
 
 export default function LivenessScanner({
   actions,
+  requiredBlinks,
+  promptDelayMs,
   onCaptureSuccess,
 }: {
   actions: LivenessAction[];
+  requiredBlinks: number;
+  promptDelayMs: number;
   onCaptureSuccess: (capture: LivenessCapture) => void;
 }) {
   const webcamRef = useRef<Webcam>(null);
   const callbackRef = useRef(onCaptureSuccess);
-  const turnImageRef = useRef<string | null>(null);
-  const blinkImageRef = useRef<string | null>(null);
+  const evidenceFramesRef = useRef<EvidenceFrames>(emptyEvidenceFrames());
   const finishedRef = useRef(false);
   const [instruction, setInstruction] = useState('กำลังโหลดโมเดลตรวจจับใบหน้า...');
   const [progress, setProgress] = useState(0);
@@ -82,10 +88,8 @@ export default function LivenessScanner({
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [error, setError] = useState('');
-  const actionsKey = actions.join(',');
-  const currentAction = progress >= 1
-    ? undefined
-    : actions[Math.min(Math.floor(progress * actions.length), actions.length - 1)];
+  const [attemptKey, setAttemptKey] = useState(0);
+  const challengeKey = `${actions.join(',')}:${requiredBlinks}:${promptDelayMs}`;
 
   useEffect(() => { callbackRef.current = onCaptureSuccess; }, [onCaptureSuccess]);
 
@@ -106,123 +110,174 @@ export default function LivenessScanner({
   };
 
   useEffect(() => {
-    let faceMesh: FaceMeshInstance | null = null;
     let animationFrame = 0;
+    let timeout = 0;
     let cancelled = false;
+    let workerReady = false;
     let processing = false;
     let lastProcessedAt = 0;
-    const configuredActions = actionsKey.split(',') as LivenessAction[];
-    const tracker = new LivenessTracker(configuredActions);
-    turnImageRef.current = null;
-    blinkImageRef.current = null;
+    let client: FaceLandmarkerClient | null = null;
+    const configuredActions = actions.join(',').split(',') as LivenessAction[];
+    const tracker = new LivenessTracker(configuredActions, requiredBlinks, promptDelayMs);
+    evidenceFramesRef.current = emptyEvidenceFrames();
     finishedRef.current = false;
 
-    const timeout = window.setTimeout(() => {
-      if (!finishedRef.current) setError('ใช้เวลาตรวจสอบนานเกินไป กรุณายกเลิกแล้วเริ่มใหม่');
-    }, 18_000);
+    const fail = (message: string) => {
+      if (cancelled || finishedRef.current) return;
+      finishedRef.current = true;
+      setIsLoading(false);
+      setError(message);
+    };
 
     const processFrame = async (timestamp: number) => {
       if (cancelled) return;
       const video = webcamRef.current?.video;
       if (
-        faceMesh
+        workerReady
         && video
         && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
         && !processing
-        && timestamp - lastProcessedAt >= 66
+        && timestamp - lastProcessedAt >= 50
         && !finishedRef.current
       ) {
         processing = true;
         lastProcessedAt = timestamp;
         try {
-          await faceMesh.send({ image: video });
+          const frame = await createImageBitmap(video);
+          if (cancelled) {
+            frame.close();
+          } else {
+            client?.postFrame(frame, performance.now());
+          }
         } catch {
-          if (!cancelled) setError('ประมวลผลภาพจากกล้องไม่สำเร็จ กรุณาเริ่มใหม่');
-        } finally {
           processing = false;
+          fail('อุปกรณ์นี้ไม่สามารถส่งภาพกล้องไปตรวจสอบได้ กรุณาอัปเดตเบราว์เซอร์');
         }
       }
       animationFrame = requestAnimationFrame(processFrame);
     };
 
-    const initialize = async () => {
+    const handleWorkerMessage = (message: FaceLandmarkerClientEvent) => {
+      if (cancelled) {
+        if (message.type === 'result') message.frame.close();
+        return;
+      }
+      if (message.type === 'error') {
+        processing = false;
+        fail(message.message || 'ประมวลผลภาพจากกล้องไม่สำเร็จ กรุณาเริ่มใหม่');
+        return;
+      }
+
+      processing = false;
+      const { observation, frame } = message;
       try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('เบราว์เซอร์นี้ไม่รองรับการใช้งานกล้อง');
-        const { FaceMesh } = await loadMediapipe();
-        if (cancelled) return;
-        faceMesh = new FaceMesh({ locateFile: locateFaceMeshAsset });
-        faceMesh.setOptions({
-          maxNumFaces: 2,
-          refineLandmarks: true,
-          minDetectionConfidence: 0.65,
-          minTrackingConfidence: 0.65,
-        });
-        faceMesh.onResults((results) => {
-          if (cancelled || finishedRef.current) return;
-          setIsLoading(false);
-          const step = tracker.add(observationFromResults(results, performance.now()));
-          setInstruction(step.instruction);
-          setProgress(step.progress);
-          if (step.captureTurn) {
-            turnImageRef.current = webcamRef.current?.getScreenshot() ?? null;
+        const step = tracker.add(observation);
+        setInstruction(step.instruction);
+        setProgress(step.progress);
+        if (step.captures.length > 0) {
+          const image = frameToJpeg(frame);
+          for (const marker of step.captures) {
+            storeCapture(evidenceFramesRef.current, marker, image);
           }
-          if (step.captureBlink) {
-            blinkImageRef.current = webcamRef.current?.getScreenshot() ?? null;
+        }
+        if (step.failed) {
+          fail(step.instruction);
+          return;
+        }
+        if (step.completed && step.evidence) {
+          const evidenceFrames = evidenceFramesRef.current;
+          if (
+            !evidenceFrames.final
+            || !evidenceFrames.baseline
+            || !evidenceFrames.near
+            || !evidenceFrames.returned
+            || evidenceFrames.blinkClosed.length !== requiredBlinks
+            || evidenceFrames.blinkOpen.length !== requiredBlinks
+            || evidenceFrames.blinkClosed.some((item) => !item)
+            || evidenceFrames.blinkOpen.some((item) => !item)
+          ) {
+            fail('เก็บชุดภาพหลักฐานไม่ครบ กรุณาเริ่มใหม่');
+            return;
           }
-          if (step.completed && step.evidence) {
-            const faceImageSrc = webcamRef.current?.getScreenshot();
-            if (!faceImageSrc || !blinkImageRef.current || !turnImageRef.current) {
-              setError('ไม่สามารถเก็บภาพหลักฐานได้ กรุณาเริ่มใหม่');
-              return;
-            }
-            finishedRef.current = true;
-            window.clearTimeout(timeout);
-            callbackRef.current({
-              faceImageSrc,
-              blinkImageSrc: blinkImageRef.current,
-              turnImageSrc: turnImageRef.current,
-              evidence: step.evidence,
-            });
-          }
-        });
-        animationFrame = requestAnimationFrame(processFrame);
-      } catch (initializationError) {
-        if (cancelled) return;
-        setIsLoading(false);
-        setError(initializationError instanceof Error ? initializationError.message : 'ไม่สามารถเริ่มระบบตรวจจับใบหน้าได้');
+          finishedRef.current = true;
+          window.clearTimeout(timeout);
+          callbackRef.current({
+            faceImageSrc: evidenceFrames.final,
+            baselineImageSrc: evidenceFrames.baseline,
+            nearImageSrc: evidenceFrames.near,
+            returnImageSrc: evidenceFrames.returned,
+            blinkClosedImageSrcs: [...evidenceFrames.blinkClosed],
+            blinkOpenImageSrcs: [...evidenceFrames.blinkOpen],
+            evidence: step.evidence,
+          });
+        }
+      } catch (captureError) {
+        fail(captureError instanceof Error ? captureError.message : 'เก็บภาพหลักฐานไม่สำเร็จ กรุณาเริ่มใหม่');
+      } finally {
+        frame.close();
       }
     };
 
-    void initialize();
+    void openFaceLandmarkerClient(handleWorkerMessage)
+      .then((nextClient) => {
+        if (cancelled) {
+          nextClient.close();
+          return;
+        }
+        client = nextClient;
+        workerReady = true;
+        setIsLoading(false);
+        setInstruction('วางใบหน้าให้อยู่ในกรอบ มองตรงและอยู่นิ่ง');
+        timeout = window.setTimeout(() => {
+          fail('ใช้เวลาตรวจสอบรอบนี้นานเกินไป กรุณากดลองตรวจอีกครั้ง');
+        }, LIVENESS_TRACKER_LIMITS.maxAttemptDurationMs);
+      })
+      .catch(() => fail('เตรียมระบบตรวจจับใบหน้าไม่สำเร็จ กรุณากดลองตรวจอีกครั้ง'));
+    animationFrame = requestAnimationFrame(processFrame);
+
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
       cancelAnimationFrame(animationFrame);
-      faceMesh?.close();
+      client?.close();
     };
-  }, [actionsKey, selectedCameraId]);
+  }, [actions, attemptKey, challengeKey, promptDelayMs, requiredBlinks, selectedCameraId]);
 
   return (
     <div className="relative flex min-h-[clamp(20rem,64dvh,27rem)] w-full flex-col items-center justify-center overflow-hidden rounded-2xl bg-gray-950">
       {isLoading && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 text-white">
-          <Loader2 className="mb-4 animate-spin" size={44} />
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 px-5 text-center text-white">
+          <Loader2 className="mb-4 animate-spin motion-reduce:animate-none" size={44} />
           <p className="font-semibold">กำลังเตรียมระบบตรวจสอบใบหน้า...</p>
+          <p className="mt-1 text-xs text-gray-300">โมเดลทำงานบนอุปกรณ์และไม่บันทึกวิดีโอถาวร</p>
         </div>
       )}
 
       {error && (
-        <div role="alert" className="absolute left-4 right-4 top-16 z-30 rounded-xl bg-red-700 px-4 py-3 text-center text-sm font-semibold text-white">
-          {error}
+        <div role="alert" className="absolute left-4 right-4 top-16 z-30 rounded-xl bg-red-700 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg">
+          <p>{error}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setError('');
+              setProgress(0);
+              setIsLoading(true);
+              setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...');
+              setAttemptKey((current) => current + 1);
+            }}
+            className="mt-3 min-h-11 rounded-lg bg-white px-4 font-bold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            ลองตรวจอีกครั้ง
+          </button>
         </div>
       )}
 
       {cameras.length > 1 && (
-        <label className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg border border-white/20 bg-black/70 px-2 py-1 text-white">
+        <label className="absolute left-3 top-3 z-10 flex min-h-11 items-center gap-2 rounded-lg border border-white/20 bg-black/75 px-3 text-white">
           <Settings className="h-4 w-4" />
           <span className="sr-only">เลือกกล้อง</span>
           <select
-            className="max-w-48 cursor-pointer bg-transparent py-1 text-sm focus:outline-none"
+            className="max-w-48 cursor-pointer bg-transparent py-2 text-sm focus:outline-none"
             value={selectedCameraId}
             onChange={(event) => {
               setIsLoading(true);
@@ -247,29 +302,29 @@ export default function LivenessScanner({
         ref={webcamRef}
         audio={false}
         mirrored={false}
-        screenshotFormat="image/jpeg"
-        screenshotQuality={0.86}
-        forceScreenshotSourceSize
         videoConstraints={videoConstraints}
         onUserMedia={() => { void handleStreamReady(); }}
         onUserMediaError={() => {
           setIsLoading(false);
           setError('เปิดกล้องไม่ได้ กรุณาอนุญาตสิทธิ์กล้องและตรวจสอบว่าไม่มีโปรแกรมอื่นใช้งานอยู่');
         }}
-        className="max-h-[min(35rem,64dvh)] w-full object-cover"
+        className="max-h-[min(35rem,64dvh)] w-full object-contain"
       />
 
+      <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-[55%] w-[62%] -translate-x-1/2 -translate-y-[56%] rounded-[48%] border-4 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.18)]" />
+
       <div className="absolute bottom-5 left-4 right-4 z-10 rounded-2xl bg-white/95 p-4 text-gray-900 shadow-xl backdrop-blur">
-        <div className="mb-3 h-2 overflow-hidden rounded-full bg-gray-200" aria-label={`ความคืบหน้า ${Math.round(progress * 100)}%`}>
-          <div className="h-full rounded-full bg-green-600 transition-[width]" style={{ width: `${Math.max(6, progress * 100)}%` }} />
+        <div className="mb-3 h-2 overflow-hidden rounded-full bg-gray-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="ความคืบหน้าการตรวจสอบ">
+          <div className="h-full rounded-full bg-green-600 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.max(6, progress * 100)}%` }} />
         </div>
         <div className="flex items-center justify-center gap-3 text-center">
-          {currentAction === 'turn_left' ? <ArrowLeft className="shrink-0 text-green-700" />
-            : currentAction === 'turn_right' ? <ArrowRight className="shrink-0 text-green-700" />
-              : progress >= 1 ? <ShieldCheck className="shrink-0 text-green-700" />
+          {progress >= 1 ? <ShieldCheck className="shrink-0 text-green-700" />
+            : progress >= 0.55 ? <Eye className="shrink-0 text-green-700" />
+              : progress >= 0.2 ? <ScanFace className="shrink-0 text-green-700" />
                 : <Camera className="shrink-0 text-green-700" />}
           <span role="status" aria-live="polite" className="font-bold">{instruction}</span>
         </div>
+        <p className="mt-2 text-center text-xs text-gray-500">แต่ละรอบใช้เวลาได้ไม่เกิน 45 วินาที · ต้องเห็นใบหน้าเพียง 1 คน · ห้ามใช้ภาพนิ่งหรือวิดีโอแทนบุคคลจริง</p>
       </div>
     </div>
   );

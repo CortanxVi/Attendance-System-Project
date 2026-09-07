@@ -22,6 +22,8 @@ OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:3001").rstrip("
 OCR_TIMEOUT_SECONDS = float(os.getenv("OCR_TIMEOUT_SECONDS", "42"))
 OCR_SERVICE_TOKEN = os.getenv("OCR_SERVICE_TOKEN", "")
 LIVENESS_SIGNING_KEY = os.getenv("LIVENESS_SIGNING_KEY", "")
+LIVENESS_PAD_THRESHOLD = float(os.getenv("LIVENESS_PAD_THRESHOLD", "0.65"))
+LIVENESS_PAD_CONCURRENCY = int(os.getenv("LIVENESS_PAD_CONCURRENCY", "2"))
 TEMP_ADMIN_PIN_PEPPER = os.getenv("TEMP_ADMIN_PIN_PEPPER", "")
 TEMP_ADMIN_GRANT_SECONDS = int(os.getenv("TEMP_ADMIN_GRANT_SECONDS", "600"))
 TEMP_ADMIN_ENROLLMENT_SECONDS = int(os.getenv("TEMP_ADMIN_ENROLLMENT_SECONDS", "86400"))
@@ -36,10 +38,10 @@ OCR_UPLOAD_REQUEST_MAX_BYTES = int(
     os.getenv("OCR_UPLOAD_REQUEST_MAX_BYTES", str(MAX_IMAGE_BYTES + 1024 * 1024))
 )
 ATTENDANCE_VERIFY_REQUEST_MAX_BYTES = int(
-    os.getenv("ATTENDANCE_VERIFY_REQUEST_MAX_BYTES", str(4 * MAX_IMAGE_BYTES + 2 * 1024 * 1024))
+    os.getenv("ATTENDANCE_VERIFY_REQUEST_MAX_BYTES", str(16 * 1024 * 1024))
 )
 QR_REFRESH_SECONDS = int(os.getenv("QR_REFRESH_SECONDS", "12"))
-QR_CHALLENGE_SECONDS = int(os.getenv("QR_CHALLENGE_SECONDS", "120"))
+QR_CHALLENGE_SECONDS = int(os.getenv("QR_CHALLENGE_SECONDS", "420"))
 SUPPORT_ATTACHMENT_MAX_BYTES = int(
     os.getenv("SUPPORT_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024))
 )
@@ -61,6 +63,8 @@ ROSTER_IMPORT_REQUEST_MAX_BYTES = int(
 
 if not 10 <= QR_REFRESH_SECONDS <= 15:
     raise RuntimeError("QR_REFRESH_SECONDS must be between 10 and 15")
+if not 60 <= QR_CHALLENGE_SECONDS <= 600:
+    raise RuntimeError("QR_CHALLENGE_SECONDS must be between 60 and 600")
 if min(MAX_IMAGE_BYTES, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, MAX_IMAGE_PIXELS) <= 0:
     raise RuntimeError("Image upload limits must be positive integers")
 if not 30 <= OCR_TIMEOUT_SECONDS <= 42:
@@ -68,6 +72,10 @@ if not 30 <= OCR_TIMEOUT_SECONDS <= 42:
 if MAX_IMAGE_WIDTH > 4096 or MAX_IMAGE_HEIGHT > 4096 or MAX_IMAGE_PIXELS > 16_000_000:
     raise RuntimeError(
         "Image upload limits exceed the safe ceiling (4096x4096, 16,000,000 pixels)"
+    )
+if not MAX_IMAGE_BYTES + 1024 * 1024 <= ATTENDANCE_VERIFY_REQUEST_MAX_BYTES <= 20 * 1024 * 1024:
+    raise RuntimeError(
+        "ATTENDANCE_VERIFY_REQUEST_MAX_BYTES must be large enough for one card and at most 20 MiB"
     )
 if not 1 <= SUPPORT_ATTACHMENT_MAX_BYTES <= 10 * 1024 * 1024:
     raise RuntimeError("SUPPORT_ATTACHMENT_MAX_BYTES must be between 1 byte and 10 MiB")
@@ -96,6 +104,10 @@ if (
     raise RuntimeError("OCR_SERVICE_TOKEN must contain at least 32 characters in production")
 if APP_ENV == "production" and len(LIVENESS_SIGNING_KEY) < 32:
     raise RuntimeError("LIVENESS_SIGNING_KEY must contain at least 32 characters in production")
+if not 0.50 <= LIVENESS_PAD_THRESHOLD <= 0.95:
+    raise RuntimeError("LIVENESS_PAD_THRESHOLD must be between 0.50 and 0.95")
+if not 1 <= LIVENESS_PAD_CONCURRENCY <= 4:
+    raise RuntimeError("LIVENESS_PAD_CONCURRENCY must be between 1 and 4")
 if (
     APP_ENV == "production"
     and len(TEMP_ADMIN_PIN_PEPPER) < 32

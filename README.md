@@ -44,15 +44,18 @@ SUPABASE_KEY="[YOUR_SERVICE_ROLE_KEY]"
 OCR_SERVICE_URL="http://127.0.0.1:3001"
 OCR_SERVICE_TOKEN="[RANDOM_INTERNAL_TOKEN]"
 LIVENESS_SIGNING_KEY="[DIFFERENT_RANDOM_SECRET_AT_LEAST_32_CHARS]"
+LIVENESS_PAD_THRESHOLD=0.65
+LIVENESS_PAD_CONCURRENCY=2
 OCR_TIMEOUT_SECONDS=42
 FACE_INFERENCE_CONCURRENCY=2
 MAX_IMAGE_BYTES=8388608
 MAX_IMAGE_WIDTH=4096
 MAX_IMAGE_HEIGHT=4096
 MAX_IMAGE_PIXELS=16000000
+ATTENDANCE_VERIFY_REQUEST_MAX_BYTES=16777216
 ROSTER_IMPORT_REQUEST_MAX_BYTES=6291456
 QR_REFRESH_SECONDS=12
-QR_CHALLENGE_SECONDS=120
+QR_CHALLENGE_SECONDS=420
 CORS_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
 TEMP_ADMIN_PIN_PEPPER="[RANDOM_SECRET_AT_LEAST_32_CHARS]"
 TEMP_ADMIN_GRANT_SECONDS=600
@@ -347,7 +350,7 @@ curl -fsS http://127.0.0.1:5173/ >/dev/null && echo "Frontend OK"
 
 1. Admin สร้างคำเชิญบัญชีอาจารย์ก่อนล็อกอินครั้งแรก บัญชีอาจารย์ที่ไม่มี invite จะถูกปฏิเสธ
 2. อาจารย์สร้างรายวิชา เปิดหน้าจัดการรายชื่อ และนำเข้าไฟล์ `.xlsx` หรือ `.csv` โดยตรวจตัวอย่างก่อนยืนยัน จากนั้นเปิดคาบและหน้า Dynamic QR
-3. นักศึกษาสแกน QR ที่กำลังแสดงอยู่ ถ่ายบัตร และทำ liveness ตามลำดับสุ่ม “กะพริบตา + หันซ้าย/ขวา” (รูปบัตร JPEG/PNG จะถูกหมุนตามข้อมูลภาพและย่ออัตโนมัติไม่เกิน 1920×1920 px โดยไม่ตัดภาพ ก่อนส่งให้ Light OCR)
+3. นักศึกษาสแกน QR ที่กำลังแสดงอยู่ ถ่ายบัตร และทำ liveness v2 ตามลำดับ “วางหน้าในกรอบ → เข้าใกล้ → กลับกรอบ → รอคำสั่งสุ่ม → กระพริบตา 1–2 ครั้ง” (รูปบัตร JPEG/PNG จะถูกหมุนตามข้อมูลภาพและย่ออัตโนมัติไม่เกิน 1920×1920 px โดยไม่ตัดภาพ ก่อนส่งให้ Light OCR)
 4. ตรวจว่าหน้าจออาจารย์แสดงชื่อและวิธี `Face + OCR` ทันที
 5. ทดสอบ NFC จากหน้าอาจารย์และตรวจว่าชื่อพร้อมวิธี `NFC` ปรากฏทันที
 
@@ -361,16 +364,29 @@ node --env-file=.env scripts/test-ocr.mjs /absolute/path/to/student-card.jpg 123
 ## Dynamic QR และการแจ้งเตือน
 
 - QR token หมุนทุก 12 วินาทีโดยค่าเริ่มต้น และตั้งได้เฉพาะช่วง 10–15 วินาทีผ่าน `QR_REFRESH_SECONDS`
-- นักศึกษาต้องสแกน QR ล่าสุดก่อนเสมอ; server ออก challenge ผูกกับบัญชี ใช้ได้ครั้งเดียวและหมดอายุใน 120 วินาทีโดยค่าเริ่มต้น (`QR_CHALLENGE_SECONDS`)
-- การเช็คชื่อแบบใบหน้าต้องผ่านพร้อมกันทั้ง challenge ที่ลงลายเซ็น, Light OCR จากภาพบัตร, ใบหน้าที่ลงทะเบียน และภาพสามสถานะ “หลับตา/หันหน้า/มองตรง”; backend คำนวณการปิดตา ทิศการหันหน้า และยืนยันว่าเป็นบุคคลเดียวกันเอง ไม่เชื่อผลผ่านจาก browser เพียงอย่างเดียว
+- นักศึกษาต้องสแกน QR ล่าสุดก่อนเสมอ; server ออก challenge ผูกกับบัญชี ใช้ได้ครั้งเดียวและลอง liveness ซ้ำได้ภายใน 7 นาทีโดยค่าเริ่มต้น (`QR_CHALLENGE_SECONDS=420`) แต่ QR ที่หน้าห้องยังหมุนทุก 10–15 วินาทีตามเดิม
+- การเปิดกล้องแต่ละรอบจำกัดที่ 45 วินาทีเพื่อไม่ยึดกล้อง/CPU นานเกินไป เมื่อไม่ผ่านสามารถกด “ลองตรวจอีกครั้ง” ได้โดยไม่ต้องสแกน QR ใหม่ตราบใดที่ challenge 7 นาทียังไม่หมดอายุ
+- การเช็คชื่อแบบใบหน้าต้องผ่านพร้อมกันทั้ง challenge v2 ที่ลงลายเซ็น, Light OCR จากภาพบัตร, ใบหน้าที่ลงทะเบียน และชุดเฟรม “เริ่มต้น/เข้าใกล้/กลับกรอบ/ตาปิด/ตาเปิด/มองตรง”; backend คำนวณการเปลี่ยนขนาดหน้า ตาซ้าย–ขวา ความต่อเนื่อง บุคคลเดียวกัน และ passive PAD ใหม่เอง ไม่เชื่อผลผ่านจาก browser เพียงอย่างเดียว
 - หาก OCR หรือการบันทึกฐานข้อมูลขัดข้องชั่วคราว challenge จะยังไม่ถูกใช้; ระบบ consume challenge พร้อมสร้าง attendance record ใน PostgreSQL transaction เดียวเท่านั้น
 - ระหว่างรอคิว OCR/ใบหน้า backend จะต่ออายุ processing lease ทุก 20 วินาที เพื่อกันการส่งคำขอซ้ำแย่งงานและไม่ให้คำขอปกติถูกตัดกลางคัน
 - NFC ใช้ได้เฉพาะอาจารย์เจ้าของคาบหรือ admin และจะแจ้งชื่อ/วิธีผ่าน Supabase Realtime ทันที
 - รูป JPEG/PNG ถูกจำกัดทั้งขนาดไฟล์ มิติ และจำนวนพิกเซลก่อน decode เพื่อป้องกัน compressed-image resource exhaustion
 - กล้องหน้า กล้องหลัง และ webcam เลือกได้จากหน้าจอ liveness โดยมี browser เป็นเจ้าของ stream เพียงตัวเดียว; โทรศัพท์ที่เชื่อมผ่านเครือข่ายต้องเปิด frontend ผ่าน HTTPS เพราะ browser ไม่อนุญาตกล้องบน HTTP ที่ไม่ใช่ localhost
-- การตรวจภาพสามสถานะลดการใช้ภาพนิ่งตรงเพียงภาพเดียวและแก้กรณีผงกหัวผ่าน แต่ยังไม่ใช่ระบบ presentation-attack detection ที่ผ่านมาตรฐาน ISO/IEC 30107; ก่อนใช้ในงานที่มีความเสี่ยงสูงควรเพิ่มโมเดล anti-spoof ที่ผ่านการประเมินกับกล้อง/สภาพแสงจริง
+- ระบบใช้ Face Landmarker ใน Web Worker, baseline ดวงตาแยกซ้าย/ขวา, challenge จำนวนกระพริบ/เวลารอที่ server ลงนาม, ตรวจเฟรมซ้ำ และ MiniFAS passive PAD แบบ local 3 เฟรม เพื่อลดภาพนิ่ง ภาพพิมพ์ และการเล่นซ้ำจากหน้าจอ แต่ยังไม่ใช่การรับรอง ISO/IEC 30107 และไม่มีระบบ RGB webcam ใดรับประกันการกัน replay/deepfake ได้ 100%; ต้องทดสอบ threshold กับกล้องและสภาพแสงจริงก่อน production
+- หน้าเช็คชื่อจะ preload, compile และ warm-up Face Landmarker เพียงครั้งเดียวก่อนเปิดปุ่มสแกน QR; โมเดลและ module-WASM ใช้ Cache First ที่ผูก cache version กับ SDK/model เพื่อให้การเปิดครั้งถัดไปเร็วขึ้น โดยไม่ cache `/api/**`
+- `LIVENESS_PAD_THRESHOLD` กำหนดความเข้มของ passive PAD (0.50–0.95; ค่าเริ่มต้น 0.65) และ `LIVENESS_PAD_CONCURRENCY` จำกัดงานโมเดลพร้อมกัน (1–4; แนะนำ 2 สำหรับ i3/8 GB)
 - นักศึกษาจากโดเมนนักศึกษาสมัครได้ตามรหัส 13 หลัก ส่วนอาจารย์และ admin ต้องมีคำเชิญที่ยังไม่ถูกใช้ก่อนล็อกอินครั้งแรก
 - CSV/Excel export จะแปลงค่าที่ขึ้นต้นแบบสูตรให้เป็นข้อความก่อนสร้างไฟล์
+
+### จุดปรับค่า Liveness
+
+- `backend/.env`: ปรับเวลาสิทธิ์รวมด้วย `QR_CHALLENGE_SECONDS=420`; ต้อง restart backend หลังแก้ ค่าอนุญาตอยู่ระหว่าง 60–600 วินาที ส่วน `QR_REFRESH_SECONDS` เป็นเวลาหมุน QR 10–15 วินาทีและเป็นคนละค่า
+- `frontend/src/utils/liveness.ts`: object `LIVENESS_TRACKER_LIMITS` รวมจำนวนเฟรมปรับเทียบ, FPS ต่ำสุด, เวลาต่อรอบ, ความคลาดเคลื่อนตำแหน่ง/มุม/ขนาดหน้า และเกณฑ์ตาปิด–เปิดของ browser
+- `frontend/src/features/student/LivenessScanner.tsx`: ใช้ `maxAttemptDurationMs` กำหนด timeout กล้องต่อรอบและมีปุ่มเริ่มรอบใหม่
+- `backend/services/liveness_service.py`: ตรวจเวลา/FPS/ลำดับเหตุการณ์จาก signed evidence โดยไม่เชื่อผล browser เพียงอย่างเดียว
+- `backend/services/liveness_frame_service.py`: ตรวจ geometry, ตาซ้าย–ขวา, คนเดิม และเฟรมซ้ำจากภาพจริงที่ส่งมา
+- `backend/services/insightface_service.py`: เกณฑ์ตรวจพบใบหน้าเดี่ยวของ liveness; ไม่ควรลดโดยไม่ทดสอบ face swap และภาพคนอื่น
+- `backend/.env` ค่า `LIVENESS_PAD_THRESHOLD=0.65`: เกณฑ์โมเดลกันภาพพิมพ์/หน้าจอ ไม่ได้ลดในการปรับครั้งนี้ และไม่ควรเปลี่ยนจากความรู้สึก ต้องวัด false accept/false reject จากชุดกล้องจริงก่อน
 
 ## สิทธิ์ผู้ดูแลชั่วคราว Teacher → Admin
 

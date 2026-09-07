@@ -18,5 +18,8 @@
     "@arcships/light-ocr": "0.5.7",
     "express": "^4.21.2",
     "multer": "^2.2.0"
+  },
+  "overrides": {
+    "qs": "6.16.0"
   }
 }

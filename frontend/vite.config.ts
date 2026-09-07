@@ -45,12 +45,28 @@ export default defineConfig({
         // the browser still caches them normally after their first on-demand load.
         globIgnores: ['**/xlsx-*.js', '**/pdfmake-*.js'],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        runtimeCaching: [
+          {
+            // Download the local face model before QR scanning, then reuse it
+            // across launches without ever caching attendance API responses.
+            urlPattern: ({ url }) => (
+              url.pathname.includes('/models/face_landmarker.task')
+              || url.pathname.includes('/mediapipe/wasm/')
+            ),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'face-landmarker-tasks-vision-1.0.1-64184e22',
+              cacheableResponse: { statuses: [0, 200] },
+              expiration: {
+                maxEntries: 8,
+                maxAgeSeconds: 30 * 24 * 60 * 60,
+              },
+            },
+          },
+        ],
       },
     }),
   ],
-  optimizeDeps: {
-    exclude: ['@mediapipe/face_mesh']
-  },
   build: {
     // pdfmake is an intentionally lazy, user-triggered export engine. Its size does
     // not affect the initial route and is kept visible in the build size report.
@@ -63,5 +79,7 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    host: true,
+    port: 5173,
   },
 })
