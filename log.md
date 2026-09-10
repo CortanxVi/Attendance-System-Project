@@ -841,3 +841,40 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Close all tabs for the Production site, unregister its service worker or clear that site's cached data, reopen it, and sign in again so the current bundle controls the page.
 - If a fresh private window still fails, capture the failing request's `Access-Control-Request-Headers`, response status, and response content type without exposing the Authorization value; those fields will identify whether the request reached FastAPI or was intercepted at the tunnel edge.
 - Replace the free development tunnel with a stable Production ingress to remove dependence on provider-specific browser interstitial behavior.
+
+## 2026-09-10 — End-to-End Deployment Runbook Summary
+
+- **Status:** Current deployment workflow, incident fixes, release promotion, hosting operations, and remaining Production gaps were consolidated for user handoff.
+- **Actor:** Codex primary agent.
+- **Objective:** Provide a repeatable start-to-finish deployment procedure covering local build verification, Docker Backend/OCR staging, public ingress, Supabase Google OAuth, Vercel Preview and Production, CORS repair, PWA cache recovery, monitoring, and rollback.
+
+### Files and components changed
+
+- Appended this documentation handoff record to `log.md` only.
+- No application source, environment file, container, tunnel, Supabase setting, database object, Git branch, or hosting configuration was changed.
+
+### Implementation rationale
+
+- The handoff distinguishes Vite build-time variables from Backend runtime variables and separates the accepted `demo3.1` Preview workflow from the `main` Production promotion path.
+- It also distinguishes the currently public workstation/ngrok staging runtime from a durable Production backend, so temporary reachability is not mistaken for 24/7 hosting readiness.
+
+### Security and privacy impact
+
+- The runbook uses placeholders for secrets, retains exact-origin CORS, loopback-only published service ports, private OCR networking, server-side token validation, and restricted Supabase redirect guidance.
+- No secret, token, email address, student record, private URL, image, or biometric data was written to this log.
+
+### Database and deployment impact
+
+- No Supabase Auth, schema, row, RLS policy, Storage object, migration, Vercel deployment, Docker runtime, or public endpoint was changed.
+- Current health and cross-origin preflight were rechecked read-only before preparing the handoff.
+
+### Verification performed
+
+- Confirmed the local Backend and OCR containers are healthy, Backend readiness reports database/OCR/face dependencies ready, and the public Production-origin preflight returns HTTP 200 with the exact CORS origin and required ngrok bypass header allowance.
+- Re-read the repository deployment guides, Docker Compose file, Vercel SPA configuration, environment templates, release verification script, release-bundle script, and Production preflight validator.
+- Reviewed current official Vercel Git/environment, Supabase redirect/Google OAuth, Docker Compose health dependency, and ngrok lifecycle documentation; no applicable hosted Supabase Auth change alters this deployment procedure.
+
+### Remaining risks and handoff work
+
+- The Docker Compose stack currently in use is explicitly Staging and the public API depends on a powered-on development workstation plus a running ngrok agent.
+- A durable final Production backend still requires an always-on host, stable reviewed HTTPS ingress, separate Production secrets/data, monitoring, backup/restore, load tests, and closure of the previously recorded migration and biometric-model licensing gates.
