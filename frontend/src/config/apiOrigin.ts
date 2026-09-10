@@ -1,4 +1,5 @@
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const NGROK_FREE_HOST_SUFFIXES = ['.ngrok-free.app', '.ngrok-free.dev'];
 
 /**
  * Normalize the optional public FastAPI origin used by split deployments.
@@ -36,4 +37,21 @@ export function normalizeApiOrigin(rawValue: string | undefined, production: boo
   }
 
   return parsed.origin;
+}
+
+/**
+ * Free ngrok browser traffic may receive an interstitial HTML page unless the
+ * documented bypass header is present. Scope the header strictly to ngrok's
+ * free development hostnames so it is never sent to a normal API origin.
+ */
+export function needsNgrokBrowserWarningBypass(apiOrigin: string): boolean {
+  if (!apiOrigin) return false;
+
+  try {
+    const parsed = new URL(apiOrigin);
+    return parsed.protocol === 'https:'
+      && NGROK_FREE_HOST_SUFFIXES.some((suffix) => parsed.hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
 }

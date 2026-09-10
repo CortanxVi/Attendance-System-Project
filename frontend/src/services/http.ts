@@ -1,10 +1,14 @@
 import axios from 'axios';
-import { normalizeApiOrigin } from '../config/apiOrigin';
+import {
+  needsNgrokBrowserWarningBypass,
+  normalizeApiOrigin,
+} from '../config/apiOrigin';
 
 const apiOrigin = normalizeApiOrigin(
   import.meta.env.VITE_API_ORIGIN,
   import.meta.env.PROD,
 );
+const bypassNgrokBrowserWarning = needsNgrokBrowserWarningBypass(apiOrigin);
 
 // Keep relative /api paths for local/reverse-proxy deployments. A cloud-hosted
 // frontend may instead send them directly to the Mini PC's public HTTPS origin.
@@ -35,6 +39,9 @@ export function installAuthInterceptor() {
   axios.interceptors.request.use((config) => {
     if (!config.url?.startsWith('/api/')) return config;
 
+    if (bypassNgrokBrowserWarning) {
+      config.headers.set('ngrok-skip-browser-warning', '1');
+    }
     if (authAccessToken) {
       config.headers.set('Authorization', `Bearer ${authAccessToken}`);
     }

@@ -1,0 +1,86 @@
+name: attendance-demo31-staging
+
+services:
+  ocr:
+    build:
+      context: ../../ocr-service
+      dockerfile: Dockerfile
+    env_file:
+      - ../../ocr-service/.env
+    environment:
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      PORT: 3001
+      OCR_INCLUDE_RAW_TEXT: "false"
+    expose:
+      - "3001"
+    init: true
+    restart: unless-stopped
+    mem_limit: ${OCR_MEMORY_LIMIT:-2g}
+    cpus: ${OCR_CPU_LIMIT:-2.0}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+    networks:
+      - private
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    env_file:
+      - ../../backend/.env
+    environment:
+      APP_ENV: staging
+      APP_VERSION: demo3.1-docker-staging
+      OCR_SERVICE_URL: http://ocr:3001
+      INSIGHTFACE_MODEL_ROOT: /models/insightface
+      CORS_ORIGINS: ${STAGING_FRONTEND_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      TRUSTED_HOSTS: ${STAGING_TRUSTED_HOSTS:-127.0.0.1,localhost}
+      FACE_INFERENCE_CONCURRENCY: ${FACE_INFERENCE_CONCURRENCY:-2}
+      LIVENESS_PAD_CONCURRENCY: ${LIVENESS_PAD_CONCURRENCY:-2}
+    depends_on:
+      ocr:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ${INSIGHTFACE_MODEL_ROOT_HOST:?Set INSIGHTFACE_MODEL_ROOT_HOST in deployment/docker/.env}
+        target: /models/insightface
+        read_only: true
+    init: true
+    restart: unless-stopped
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-4g}
+    cpus: ${BACKEND_CPU_LIMIT:-3.0}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+    networks:
+      - private
+
+networks:
+  private:
+    driver: bridge

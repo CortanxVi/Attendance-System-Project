@@ -135,13 +135,20 @@ SUPABASE_ERROR_MESSAGES = {
     'PGRST116': 'ไม่พบข้อมูลในฐานข้อมูล',
 }
 
-# เปิด CORS เพื่อให้ Frontend (localhost) ยิงหาหลังบ้านได้
+# Allow only configured Frontend origins and the explicit headers required by
+# browser API clients. The ngrok header bypasses the Free-tier HTML interstitial
+# and is harmless when it reaches FastAPI.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Admin-Grant"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Admin-Grant",
+        "ngrok-skip-browser-warning",
+    ],
 )
 
 app.include_router(admin_router)
