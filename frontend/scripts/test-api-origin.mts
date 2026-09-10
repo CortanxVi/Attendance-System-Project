@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { normalizeApiOrigin } from '../src/config/apiOrigin.ts';
+import {
+  needsNgrokBrowserWarningBypass,
+  normalizeApiOrigin,
+} from '../src/config/apiOrigin.ts';
 
 assert.equal(normalizeApiOrigin(undefined, true), '');
 assert.equal(normalizeApiOrigin('', true), '');
@@ -16,4 +19,10 @@ assert.throws(() => normalizeApiOrigin('https://api.example.ac.th?token=x', true
 assert.throws(() => normalizeApiOrigin('https://user:pass@api.example.ac.th', true), /origin/);
 assert.throws(() => normalizeApiOrigin('javascript:alert(1)', true), /origin|HTTP/);
 
-console.log('API origin policy: same-origin fallback and HTTPS split deployment pass.');
+assert.equal(needsNgrokBrowserWarningBypass('https://example.ngrok-free.app'), true);
+assert.equal(needsNgrokBrowserWarningBypass('https://example.ngrok-free.dev'), true);
+assert.equal(needsNgrokBrowserWarningBypass('http://example.ngrok-free.dev'), false);
+assert.equal(needsNgrokBrowserWarningBypass('https://api.example.org'), false);
+assert.equal(needsNgrokBrowserWarningBypass(''), false);
+
+console.log('API origin policy: HTTPS split deployment and scoped ngrok bypass pass.');

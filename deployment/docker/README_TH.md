@@ -118,6 +118,11 @@ VITE_API_ORIGIN=https://random-name.ngrok-free.app
 
 จากนั้น redeploy Frontend Preview เพราะค่า `VITE_*` ถูกฝังตอน build
 
+Frontend จะส่ง `ngrok-skip-browser-warning: 1` เฉพาะเมื่อ `VITE_API_ORIGIN`
+เป็น hostname `*.ngrok-free.app` หรือ `*.ngrok-free.dev` เพื่อข้ามหน้า HTML
+warning ของ ngrok Free ก่อนที่ request จะถึง FastAPI โดย Backend อนุญาต header
+นี้ใน CORS preflight แล้ว ห้ามตั้ง header นี้ให้ API origin อื่นโดยไม่จำเป็น
+
 ข้อสำคัญ:
 
 - ใช้ exact Frontend origin ใน CORS ห้ามใช้ `*`

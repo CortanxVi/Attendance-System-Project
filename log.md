@@ -549,3 +549,130 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Use a stable/reserved tunnel hostname when possible. A random hostname changes across ngrok sessions and requires Backend Trusted Host plus Frontend rebuild updates.
 - The current local Backend environment is a development-origin configuration reused by the Staging container. Before Internet exposure, add independent Staging liveness and temporary-admin secrets and verify that the connected Supabase project is the approved Staging project rather than Production.
 - Run authenticated real-device role, QR, OCR, face, Liveness, NFC, upload, export, restart, burst, and soak tests before any Production promotion.
+
+## 2026-09-10 — Vercel Preview Profile-Load CORS Repair
+
+- **Status:** Local Docker Staging configuration repaired and the public API preflight verified. The user must retry the existing authenticated browser session to complete the end-to-end profile check.
+- **Actor:** Codex primary agent.
+- **Objective:** Diagnose and correct the condition where Google OAuth returned successfully to the current Vercel Preview but the Frontend could not load `/api/v1/auth/me`.
+
+### Files and components changed
+
+- Updated the ignored workstation-only `deployment/docker/.env` CORS allowlist from the obsolete generated Vercel Preview origin to the current stable Vercel Preview origin. Local Vite origins and the existing ngrok Trusted Host entry were preserved.
+- Recreated only the Docker Staging Backend service; the healthy OCR service and all application source files were left unchanged.
+- Appended this operational record to `log.md`; no secret or private deployment URL is recorded here.
+
+### Implementation rationale
+
+- Sanitized ngrok request inspection showed repeated `OPTIONS /api/v1/auth/me` requests from the current Frontend origin returning HTTP 400 before an authenticated GET could be sent. A request from the obsolete Preview origin returned HTTP 200, isolating the fault to the exact-origin CORS allowlist rather than OAuth, JWT handling, the profile endpoint, or service readiness.
+- Exact origins remain preferable to wildcard CORS because the browser sends an Authorization header and the Backend is exposed through a public HTTPS tunnel.
+
+### Security and privacy impact
+
+- The change grants browser API access only to the current exact Vercel Preview origin plus the existing loopback development origins. The obsolete cloud Preview origin is no longer allowed.
+- Trusted Host enforcement remains active for the current tunnel hostname. No wildcard origin/host, credential, access token, student record, profile response, email address, private URL, or biometric value was added to source control or this log.
+- Backend authentication still validates each Bearer token against Supabase Auth and does not trust Frontend session state or user-editable metadata for authorization.
+
+### Database and deployment impact
+
+- No Supabase Auth setting, database schema, row, RLS policy, Storage object, migration, Vercel setting, or Frontend bundle was changed.
+- The local Docker Staging Backend was recreated with the corrected environment and returned to healthy status. This is a workstation runtime change, not a Production deployment.
+
+### Verification performed
+
+- The Backend container reached Docker `healthy`; local `/health/live` and `/health/ready` both returned HTTP 200.
+- A public HTTPS CORS preflight from the current Vercel Preview origin returned HTTP 200 and the exact `Access-Control-Allow-Origin`, allowed methods, and Authorization header.
+- An unauthenticated public GET to `/api/v1/auth/me` returned the expected HTTP 401 with both the exact CORS allow-origin header and Bearer challenge, proving that requests now pass Host/CORS middleware and reach authentication.
+- A preflight from the obsolete Preview origin returned HTTP 400 as intended.
+
+### Remaining risks and handoff work
+
+- Retry the current browser session and confirm an authenticated `GET /api/v1/auth/me` returns HTTP 200 and routes to the correct role dashboard. If it returns HTTP 401, compare the JWT issuer with the Backend Supabase project without logging the token. If it returns HTTP 403, verify the account uses an approved KMUTNB email domain. If it returns HTTP 503, inspect the sanitized Supabase profile lookup error and migration state.
+- The free ngrok hostname is temporary. If it changes, update the local Trusted Host, Vercel Preview `VITE_API_ORIGIN`, recreate Backend, and redeploy Frontend. Prefer a reserved tunnel hostname for repeatable Staging tests.
+
+## 2026-09-10 — Staging Tunnel CORS Availability Recovery
+
+- **Status:** The current Vercel Preview-to-ngrok-to-FastAPI CORS path is online and verified. No application source or database change was required.
+- **Actor:** Codex primary agent.
+- **Objective:** Resolve the browser report that `/api/v1/auth/me` lacked `Access-Control-Allow-Origin` after the previously configured public tunnel URL stopped serving the Backend response.
+
+### Files and components changed
+
+- No Frontend, Backend, Docker, Supabase, Vercel, or runtime environment value was changed. A user-started ngrok process was discovered forwarding the currently assigned public endpoint to loopback FastAPI port 8000.
+- Appended this diagnostic and operational verification record to `log.md` without recording the public tunnel URL, tokens, or user data.
+
+### Implementation rationale
+
+- Before the tunnel was available, the public endpoint returned an ngrok-edge response rather than a FastAPI response, so the browser correctly reported that the response had no application CORS header.
+- Once the ngrok process was online, the same endpoint reached Uvicorn. The existing exact-origin Docker Staging CORS and Trusted Host settings were already correct, so widening CORS or changing application code would have reduced security without addressing the availability fault.
+
+### Security and privacy impact
+
+- Exact-origin CORS, Authorization-header preflight support, loopback-only FastAPI binding, Trusted Host enforcement, and the private OCR network remain unchanged.
+- No wildcard origin, bypass header, access token, Supabase secret, profile response, email address, student record, private URL, image, or biometric value was introduced or logged.
+
+### Database and deployment impact
+
+- No Supabase Auth setting, schema, row, RLS policy, Storage object, migration, or Vercel deployment was changed.
+- The local Backend and OCR containers remained healthy. The public Staging path depends on the ngrok process continuing to run on the development workstation.
+
+### Verification performed
+
+- Confirmed the ngrok agent is running and forwards its assigned HTTPS endpoint to `http://localhost:8000`.
+- Public `/health/live` returned HTTP 200 from Uvicorn.
+- An `OPTIONS /api/v1/auth/me` request from the exact current Vercel Preview origin returned HTTP 200 with the exact `Access-Control-Allow-Origin`, credential allowance, required methods, and Authorization header allowance.
+- An unauthenticated GET reached FastAPI and returned the expected HTTP 401 with the same exact CORS allow-origin header and Bearer challenge, proving that the edge, tunnel, Trusted Host, CORS, routing, and authentication boundary are reachable.
+- Docker Backend remained healthy; no applicable Supabase Auth/JWT breaking change was found in the current changelog scan.
+
+### Remaining risks and handoff work
+
+- Reload the deployed Frontend and retry with its existing Supabase session, then confirm the authenticated GET returns HTTP 200. A subsequent HTTP 401 indicates a missing/stale token or Supabase-project mismatch; HTTP 403 indicates the account domain/profile authorization path; HTTP 503 indicates profile schema or Supabase availability.
+- Keep the ngrok terminal/process running throughout testing. If its assigned hostname changes, update the Docker Trusted Host and Vercel Preview API origin, recreate Backend, and redeploy the Frontend before retesting.
+
+## 2026-09-10 — ngrok Free Browser Interstitial CORS Fix
+
+- **Status:** Source and local Docker Staging runtime fixed and verified; branch deployment is ready to be pushed for a new Vercel Preview build.
+- **Actor:** Codex primary agent.
+- **Objective:** Fix the repeated browser-only CORS failure on `/api/v1/auth/me` after ordinary command-line preflight checks appeared healthy.
+
+### Files and components changed
+
+- Updated `frontend/src/config/apiOrigin.ts` with a narrowly scoped detector for HTTPS origins under ngrok Free development hostname suffixes.
+- Updated `frontend/src/services/http.ts` so relative application API requests add `ngrok-skip-browser-warning: 1` only when the configured API origin is an ngrok Free development hostname.
+- Expanded `frontend/scripts/test-api-origin.mts` to cover both supported ngrok Free suffixes and reject HTTP, unrelated HTTPS, and empty origins.
+- Updated `backend/main.py` to allow the explicit ngrok warning-bypass header in CORS preflight requests.
+- Updated `deployment/docker/README_TH.md` to explain the ngrok Free interstitial behavior and the deliberately scoped bypass.
+- Rebuilt and recreated the local Docker Staging Backend image; OCR was not recreated.
+
+### Implementation rationale
+
+- Reproduction with a standard Chrome User-Agent returned HTTP 200 HTML from the ngrok Free warning interstitial without the application's CORS headers. The same request with the documented bypass header reached FastAPI and returned the expected JSON authentication response.
+- Adding the header alone initially caused FastAPI CORS to reject the expanded preflight header set. The Backend allow-header list therefore had to be updated in the same change.
+- The bypass is derived from the normalized API origin and is not sent to ordinary institutional, Production, Supabase, or third-party origins.
+
+### Security and privacy impact
+
+- Exact Frontend-origin CORS, credential handling, Trusted Host enforcement, loopback-only FastAPI binding, and private OCR networking remain enabled. No wildcard CORS rule was introduced.
+- The bypass header contains only the constant value `1`; it is not a credential and does not weaken Backend Bearer-token validation. Authenticated routes still validate the Supabase access token server-side.
+- No access token, Supabase secret, profile response, email address, student record, public/private deployment URL, image, or biometric value was added to the log or source.
+
+### Database and deployment impact
+
+- No Supabase Auth setting, schema, row, RLS policy, Storage object, or migration was changed. The current Supabase changelog contains no applicable hosted Auth/JWT breaking change for this failure.
+- The local Backend container was rebuilt and returned to healthy status. The Frontend source change requires a new Vercel Preview build before browsers receive the header.
+- This workaround is limited to ngrok Free Staging. A stable Production API domain should not rely on the ngrok interstitial bypass.
+
+### Verification performed
+
+- Frontend API-origin policy tests passed under bundled Node.js 24, including scoped ngrok detection; Frontend ESLint passed.
+- TypeScript and Vite Production build completed with 1,902 transformed modules; PWA generation completed with 66 precache entries. The emitted JavaScript contains the bypass header once.
+- Backend operational middleware tests passed (2 tests); Python bytecode compilation, Compose configuration validation, and `git diff --check` passed.
+- Rebuilt/recreated Backend reached Docker `healthy` while remaining bound only to loopback port 8000.
+- Public browser-equivalent preflight requesting both Authorization and the ngrok bypass header returned HTTP 200 with the exact Vercel Preview allow-origin and both requested headers allowed.
+- A browser-equivalent GET with the bypass header reached FastAPI and returned the expected HTTP 401 JSON response with Bearer challenge and exact CORS header when intentionally sent without a token. Without the bypass header, the same browser-equivalent request reproduced ngrok's HTTP 200 HTML interstitial.
+
+### Remaining risks and handoff work
+
+- Push the reviewed `demo3.1` commit, wait for Vercel Preview to rebuild, then hard-refresh or use an incognito window and confirm an authenticated `/api/v1/auth/me` returns HTTP 200.
+- Keep the ngrok process running. If the assigned hostname changes, update the Docker Trusted Host and Vercel Preview API origin, recreate Backend, and redeploy Frontend.
+- For final Production, replace ngrok Free with a stable reviewed HTTPS ingress and omit this provider-specific bypass by configuring a non-ngrok API origin.
