@@ -1,0 +1,35 @@
+[Unit]
+Description=KMUTNB Attendance FastAPI backend
+After=network-online.target km-attendance-ocr.service
+Wants=network-online.target km-attendance-ocr.service
+
+[Service]
+Type=simple
+User=kmattendance
+Group=kmattendance
+WorkingDirectory=/opt/km-attendance/current/backend
+EnvironmentFile=/etc/km-attendance/backend.env
+ExecStartPre=/opt/km-attendance/current/scripts/verify_face_models.sh
+ExecStart=/opt/km-attendance/current/backend/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1 --limit-concurrency 80 --backlog 128 --timeout-keep-alive 10 --timeout-graceful-shutdown 30 --no-access-log
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=120
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/km-attendance
+UMask=0077
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

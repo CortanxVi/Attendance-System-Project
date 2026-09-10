@@ -23,6 +23,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 .venv
+.venv-windows
 venv/
 ENV/
 env/
@@ -62,6 +63,7 @@ Thumbs.db
 
 # Misc
 .cache/
+.certs/
 *.bak
 *.tmp
 

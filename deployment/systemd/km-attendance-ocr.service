@@ -1,0 +1,35 @@
+[Unit]
+Description=KMUTNB Attendance Light OCR service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kmattendance
+Group=kmattendance
+WorkingDirectory=/opt/km-attendance/current/ocr-service
+EnvironmentFile=/etc/km-attendance/ocr.env
+ExecStartPre=/usr/bin/node -e "const [major,minor]=process.versions.node.split('.').map(Number);process.exit(major===24||(major===22&&minor>=12)?0:1)"
+ExecStart=/usr/bin/node /opt/km-attendance/current/ocr-service/ocr-server.js
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=90
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/km-attendance
+UMask=0077
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

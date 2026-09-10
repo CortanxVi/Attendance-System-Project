@@ -1,0 +1,25 @@
+{
+  "name": "ocr-service",
+  "version": "1.0.0",
+  "description": "OCR Microservice",
+  "main": "ocr-server.js",
+  "type": "module",
+  "engines": {
+    "node": "^22.0.0 || ^24.0.0"
+  },
+  "scripts": {
+    "start": "node ocr-server.js",
+    "doctor": "light-ocr doctor --json",
+    "test:security": "node scripts/test-security.mjs",
+    "test:ocr": "node scripts/test-ocr.mjs",
+    "test:concurrency": "node scripts/test-concurrency.mjs"
+  },
+  "dependencies": {
+    "@arcships/light-ocr": "0.5.7",
+    "express": "^4.21.2",
+    "multer": "2.3.0"
+  },
+  "overrides": {
+    "qs": "6.16.0"
+  }
+}
