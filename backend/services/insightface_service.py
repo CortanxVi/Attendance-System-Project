@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import os
+from pathlib import Path
 import threading
 
 import numpy as np
@@ -37,7 +38,15 @@ class FaceService:
 
     def __init__(self):
         print("Loading InsightFace Model...")
-        self.app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
+        model_root = Path(
+            os.getenv("INSIGHTFACE_MODEL_ROOT", "~/.insightface")
+        ).expanduser().resolve()
+        self.app = FaceAnalysis(
+            name='buffalo_s',
+            root=str(model_root),
+            allowed_modules=['detection', 'recognition', 'landmark_3d_68'],
+            providers=['CPUExecutionProvider'],
+        )
         self.app.prepare(ctx_id=0, det_size=(640, 640))
         inference_concurrency = max(1, min(int(os.getenv("FACE_INFERENCE_CONCURRENCY", "2")), 4))
         self._inference_slots = threading.BoundedSemaphore(inference_concurrency)

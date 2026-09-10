@@ -193,6 +193,25 @@ class LivenessApiContractTests(unittest.TestCase):
         self.assertNotIn("liveness_turn_image", properties)
         self.assertNotIn("liveness_blink_image", properties)
 
+    def test_student_face_enrollment_contract_accepts_server_verified_frame_set(self):
+        schema = app.openapi()
+        request_schema = schema["paths"]["/api/v1/enrollment/register-face"]["post"]["requestBody"]["content"][
+            "multipart/form-data"
+        ]["schema"]
+        reference = request_schema["$ref"].rsplit("/", 1)[-1]
+        properties = schema["components"]["schemas"][reference]["properties"]
+        for name in (
+            "enrollment_challenge_id",
+            "liveness_token",
+            "liveness_evidence",
+            "liveness_baseline_image",
+            "liveness_near_image",
+            "liveness_return_image",
+            "liveness_blink_closed_images",
+            "liveness_blink_open_images",
+        ):
+            self.assertIn(name, properties)
+
 
 class OcrFairUseTests(unittest.TestCase):
     def test_standalone_ocr_limit_is_per_authenticated_user(self):

@@ -2,6 +2,16 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { readFileSync } from 'node:fs'
+
+const mobileHttpsEnabled = process.env.DEV_MOBILE_HTTPS === '1'
+const backendPort = process.env.DEV_BACKEND_PORT || '8000'
+const mobileHttps = mobileHttpsEnabled
+  ? {
+      cert: readFileSync(process.env.DEV_HTTPS_CERT || ''),
+      key: readFileSync(process.env.DEV_HTTPS_KEY || ''),
+    }
+  : undefined
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -73,13 +83,22 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
   },
   server: {
+    // The ordinary launcher stays local. start_mobile_test.sh opts in to a
+    // trusted LAN HTTPS origin so iOS/Android may use camera APIs while API and
+    // OCR ports remain loopback-only behind this development proxy.
+    https: mobileHttps,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: `http://127.0.0.1:${backendPort}`,
+        changeOrigin: true,
+      },
+      '/health': {
+        target: `http://127.0.0.1:${backendPort}`,
         changeOrigin: true,
       },
     },
-    host: true,
+    host: mobileHttpsEnabled ? '0.0.0.0' : '127.0.0.1',
     port: 5173,
+    strictPort: true,
   },
 })

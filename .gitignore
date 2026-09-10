@@ -63,6 +63,7 @@ Thumbs.db
 
 # Misc
 .cache/
+.certs/
 *.bak
 *.tmp
 

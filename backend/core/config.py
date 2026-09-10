@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+import re
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -24,12 +26,16 @@ OCR_SERVICE_TOKEN = os.getenv("OCR_SERVICE_TOKEN", "")
 LIVENESS_SIGNING_KEY = os.getenv("LIVENESS_SIGNING_KEY", "")
 LIVENESS_PAD_THRESHOLD = float(os.getenv("LIVENESS_PAD_THRESHOLD", "0.65"))
 LIVENESS_PAD_CONCURRENCY = int(os.getenv("LIVENESS_PAD_CONCURRENCY", "2"))
+FACE_ENROLLMENT_CHALLENGE_SECONDS = int(
+    os.getenv("FACE_ENROLLMENT_CHALLENGE_SECONDS", "180")
+)
 TEMP_ADMIN_PIN_PEPPER = os.getenv("TEMP_ADMIN_PIN_PEPPER", "")
 TEMP_ADMIN_GRANT_SECONDS = int(os.getenv("TEMP_ADMIN_GRANT_SECONDS", "600"))
 TEMP_ADMIN_ENROLLMENT_SECONDS = int(os.getenv("TEMP_ADMIN_ENROLLMENT_SECONDS", "86400"))
 TEMP_ADMIN_MAX_PIN_ATTEMPTS = int(os.getenv("TEMP_ADMIN_MAX_PIN_ATTEMPTS", "5"))
 TEMP_ADMIN_LOCK_SECONDS = int(os.getenv("TEMP_ADMIN_LOCK_SECONDS", "900"))
 APP_ENV = os.getenv("APP_ENV", "development").lower()
+APP_VERSION = os.getenv("APP_VERSION", "development")
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
 MAX_IMAGE_WIDTH = int(os.getenv("MAX_IMAGE_WIDTH", "4096"))
 MAX_IMAGE_HEIGHT = int(os.getenv("MAX_IMAGE_HEIGHT", "4096"))
@@ -108,6 +114,8 @@ if not 0.50 <= LIVENESS_PAD_THRESHOLD <= 0.95:
     raise RuntimeError("LIVENESS_PAD_THRESHOLD must be between 0.50 and 0.95")
 if not 1 <= LIVENESS_PAD_CONCURRENCY <= 4:
     raise RuntimeError("LIVENESS_PAD_CONCURRENCY must be between 1 and 4")
+if not 90 <= FACE_ENROLLMENT_CHALLENGE_SECONDS <= 300:
+    raise RuntimeError("FACE_ENROLLMENT_CHALLENGE_SECONDS must be between 90 and 300")
 if (
     APP_ENV == "production"
     and len(TEMP_ADMIN_PIN_PEPPER) < 32
@@ -122,9 +130,40 @@ CORS_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+TRUSTED_HOSTS = [
+    host.strip().lower()
+    for host in os.getenv("TRUSTED_HOSTS", "127.0.0.1,localhost").split(",")
+    if host.strip()
+]
+
+
+def _is_exact_https_origin(value: str) -> bool:
+    parsed = urlparse(value)
+    try:
+        _ = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and parsed.path == ""
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 if APP_ENV == "production" and (
     not CORS_ORIGINS
     or "*" in CORS_ORIGINS
-    or any(not origin.startswith("https://") for origin in CORS_ORIGINS)
+    or any(not _is_exact_https_origin(origin) for origin in CORS_ORIGINS)
 ):
     raise RuntimeError("Production CORS_ORIGINS must contain explicit HTTPS origins only")
+if APP_ENV == "production" and (
+    not TRUSTED_HOSTS
+    or "*" in TRUSTED_HOSTS
+    or any(not re.fullmatch(r"[A-Za-z0-9.-]+", host) for host in TRUSTED_HOSTS)
+):
+    raise RuntimeError("Production TRUSTED_HOSTS must contain explicit hostnames only")

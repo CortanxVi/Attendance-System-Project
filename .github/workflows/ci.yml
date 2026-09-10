@@ -1,0 +1,82 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [demo3.1]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run test:card-image
+        working-directory: frontend
+      - run: npm run test:security
+        working-directory: frontend
+      - run: npm run test:liveness
+        working-directory: frontend
+      - run: npm run test:face-runtime
+        working-directory: frontend
+      - run: npm run test:api-origin
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npm audit --audit-level=moderate
+        working-directory: frontend
+
+  ocr:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: ocr-service/package-lock.json
+      - run: npm ci
+        working-directory: ocr-service
+      - run: npm run test:security
+        working-directory: ocr-service
+      - run: npm run doctor
+        working-directory: ocr-service
+      - run: npm audit --audit-level=moderate
+        working-directory: ocr-service
+
+  backend:
+    runs-on: ubuntu-24.04
+    env:
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_KEY: unit-test-server-key
+      OCR_SERVICE_TOKEN: unit-test-key-with-at-least-thirty-two-characters
+      LIVENESS_SIGNING_KEY: another-unit-test-key-with-at-least-thirty-two-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r backend/requirement.txt
+      - name: Cache InsightFace model package
+        uses: actions/cache@v4
+        with:
+          path: ~/.insightface/models/buffalo_s
+          key: buffalo-s-${{ runner.os }}-v1
+      - run: python -m unittest discover -s tests
+        working-directory: backend
+      - run: python -m pip check
+        working-directory: backend
+      - run: git diff --check

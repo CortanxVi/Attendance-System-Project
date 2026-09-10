@@ -1,4 +1,14 @@
 import axios from 'axios';
+import { normalizeApiOrigin } from '../config/apiOrigin';
+
+const apiOrigin = normalizeApiOrigin(
+  import.meta.env.VITE_API_ORIGIN,
+  import.meta.env.PROD,
+);
+
+// Keep relative /api paths for local/reverse-proxy deployments. A cloud-hosted
+// frontend may instead send them directly to the Mini PC's public HTTPS origin.
+if (apiOrigin) axios.defaults.baseURL = apiOrigin;
 
 let interceptorInstalled = false;
 let temporaryAdminGrantToken: string | null = null;

@@ -11,6 +11,8 @@ from PIL import Image, ImageOps
 from fastapi import Depends, FastAPI, File, UploadFile, Form, HTTPException, status, APIRouter
 from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from typing import Annotated
 from enum import Enum
@@ -23,19 +25,33 @@ from core.authorization import (
     require_owned_session,
 )
 from core.config import (
+    APP_ENV,
+    APP_VERSION,
     CORS_ORIGINS,
+    OCR_SERVICE_TOKEN,
+    OCR_SERVICE_URL,
     QR_CHALLENGE_SECONDS,
     QR_REFRESH_SECONDS,
     TEMP_ADMIN_ENROLLMENT_SECONDS,
     TEMP_ADMIN_GRANT_SECONDS,
+    TRUSTED_HOSTS,
     supabase_db as supabase,
 )
 from core.security import AuthenticatedUser, get_current_user, require_roles
 from core.request_limits import SupportUploadLimitMiddleware
+from core.operational import OperationalHeadersMiddleware
 from services.light_ocr_service import extract_student_id, read_validated_image, student_card_ocr_limiter
 from services.insightface_service import face_service
 from services.liveness_service import create_liveness_challenge, verify_liveness_submission
 from services.liveness_frame_service import verify_liveness_frames
+from services.face_enrollment_service import (
+    claim_face_enrollment_challenge,
+    finalize_face_enrollment,
+    issue_face_enrollment_challenge,
+    load_face_enrollment_challenge,
+    release_face_enrollment_challenge,
+    renew_face_enrollment_challenge,
+)
 from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
 
 # นำเข้า Router สำหรับ Admin
@@ -94,12 +110,20 @@ class CourseUpdateRequest(BaseModel):
     semester: int
     year: int
 
-app = FastAPI(title="KMUTNB Face Recognition API")
+app = FastAPI(
+    title="KMUTNB Face Recognition API",
+    version=APP_VERSION,
+    docs_url=None if APP_ENV == "production" else "/docs",
+    redoc_url=None if APP_ENV == "production" else "/redoc",
+    openapi_url=None if APP_ENV == "production" else "/openapi.json",
+)
 router = APIRouter()
 
 # This runs before FastAPI parses multipart bodies, preventing oversized
 # support attachments and roster files from being spooled to disk first.
 app.add_middleware(SupportUploadLimitMiddleware)
+app.add_middleware(OperationalHeadersMiddleware, production=APP_ENV == "production")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 
 # เกณฑ์คะแนนความเหมือนใบหน้า (0.45 - 0.50 ถือว่าแม่นยำและปลอดภัยสูงสำหรับ CPU)
 FACE_THRESHOLD = 0.45
@@ -126,6 +150,43 @@ app.include_router(teacher_router)
 app.include_router(temporary_admin_router)
 app.include_router(support_router)
 app.include_router(course_membership_router)
+
+
+@app.get("/health/live", include_in_schema=False)
+def health_live():
+    return {"status": "ok", "service": "attendance-backend"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready():
+    unavailable: list[str] = []
+    try:
+        await asyncio.wait_for(
+            run_in_threadpool(
+                lambda: supabase.table("profiles").select("id").limit(1).execute()
+            ),
+            timeout=3.0,
+        )
+    except Exception:
+        unavailable.append("database")
+
+    try:
+        import httpx
+
+        headers = {"X-OCR-Service-Token": OCR_SERVICE_TOKEN} if OCR_SERVICE_TOKEN else {}
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"{OCR_SERVICE_URL}/health", headers=headers)
+        if response.status_code != 200 or response.json().get("engine") != "ready":
+            unavailable.append("ocr")
+    except Exception:
+        unavailable.append("ocr")
+
+    if unavailable:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unavailable", "dependencies": unavailable},
+        )
+    return {"status": "ready", "dependencies": {"database": "ok", "ocr": "ok", "face": "ok"}}
 
 
 @app.get("/api/v1/auth/me")
@@ -416,54 +477,208 @@ async def keep_face_attendance_claim_alive(
             logger.warning("Face attendance challenge lease could not be renewed")
             return
 
+
+async def keep_face_enrollment_claim_alive(
+    challenge_id: str,
+    user_id: str,
+    claim_token: str,
+) -> None:
+    while True:
+        await asyncio.sleep(20)
+        try:
+            renewed = await run_in_threadpool(
+                renew_face_enrollment_challenge,
+                challenge_id,
+                user_id,
+                claim_token,
+            )
+        except Exception:
+            logger.exception("Face enrollment challenge lease renewal failed")
+            return
+        if not renewed:
+            logger.warning("Face enrollment challenge lease could not be renewed")
+            return
+
+@app.post("/api/v1/enrollment/liveness-challenge")
+async def create_face_enrollment_liveness_challenge(
+    student_card_image: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(require_roles("student")),
+):
+    if not current_user.student_id:
+        raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
+    try:
+        student_card_ocr_limiter.check(current_user.id)
+        card_upload = await read_validated_image(student_card_image, "ภาพบัตรนักศึกษา")
+        extracted_student_id = await extract_student_id(card_upload)
+        if extracted_student_id != current_user.student_id:
+            raise HTTPException(status_code=403, detail="รหัสบนบัตรไม่ตรงกับบัญชีที่เข้าสู่ระบบ")
+        challenge_id, expires_at, liveness = await run_in_threadpool(
+            issue_face_enrollment_challenge,
+            current_user.id,
+            current_user.student_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Face enrollment challenge creation failed")
+        raise HTTPException(
+            status_code=503,
+            detail="เตรียม Liveness สำหรับลงทะเบียนใบหน้าไม่สำเร็จ กรุณาตรวจสอบ migration และลองใหม่",
+        ) from exc
+    return {
+        "challenge_id": challenge_id,
+        "student_id": current_user.student_id,
+        "challenge_expires_at": expires_at.isoformat(),
+        "challenge_ttl_seconds": int((expires_at - datetime.now(timezone.utc)).total_seconds()),
+        "liveness_token": liveness.token,
+        "liveness_actions": list(liveness.actions),
+        "liveness_required_blinks": liveness.required_blinks,
+        "liveness_prompt_delay_ms": liveness.prompt_delay_ms,
+    }
+
+
 @app.post("/api/v1/enrollment/register-face")
 async def register_face(
     student_id: str = Form(...),
-    face_image: UploadFile = File(...),
+    face_image: UploadFile | None = File(None),
+    enrollment_challenge_id: str | None = Form(None),
+    liveness_token: str | None = Form(None),
+    liveness_evidence: str | None = Form(None),
+    liveness_baseline_image: UploadFile | None = File(None),
+    liveness_near_image: UploadFile | None = File(None),
+    liveness_return_image: UploadFile | None = File(None),
+    liveness_blink_closed_images: list[UploadFile] | None = File(None),
+    liveness_blink_open_images: list[UploadFile] | None = File(None),
     current_user: AuthenticatedUser = Depends(require_roles("student", "admin")),
 ):
+    processing_claim_token: str | None = None
+    claim_renewal_task: asyncio.Task[None] | None = None
     try:
         target_student_id = student_id.strip()
+        if not re.fullmatch(r"\d{13}", target_student_id):
+            raise HTTPException(status_code=422, detail="รหัสนักศึกษาต้องเป็นตัวเลข 13 หลัก")
         if current_user.role == "student":
             if not current_user.student_id:
                 raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
             if target_student_id != current_user.student_id:
                 raise HTTPException(status_code=403, detail="ลงทะเบียนใบหน้าได้เฉพาะบัญชีของตนเอง")
 
-        face_upload = await read_validated_image(face_image, "ภาพใบหน้า")
-        img_selfie = await run_in_threadpool(prepare_face_image, face_upload.content)
-        if img_selfie is None:
-            raise HTTPException(status_code=400, detail="ไฟล์ภาพใบหน้าเสียหรืออ่านไม่ได้")
+            required_values = (
+                enrollment_challenge_id,
+                liveness_token,
+                liveness_evidence,
+                face_image,
+                liveness_baseline_image,
+                liveness_near_image,
+                liveness_return_image,
+            )
+            if any(value is None for value in required_values):
+                raise HTTPException(status_code=422, detail="ต้องผ่าน Liveness ก่อนลงทะเบียนใบหน้า")
 
-        # 🌟 [แก้ไข] ย่อขนาดภาพก่อนส่งเข้าโมเดล เหมือนกับที่ endpoint verify ทำอยู่แล้ว
-        # เหตุผล: เดิม endpoint นี้ไม่ได้ย่อขนาดภาพเลย ทำให้ภาพความละเอียดสูงมากจากกล้องมือถือ
-        # (เช่น 3000x4000 พิกเซลขึ้นไป) ถูกส่งเข้าโมเดลตรงๆ นอกจากจะช้าลงโดยไม่จำเป็นแล้ว ภาพที่มี
-        # รายละเอียดพื้นหลังเยอะๆ ยังเพิ่มโอกาสที่โมเดลจะตรวจจับจุดที่ไม่ใช่ใบหน้าจริงผิดพลาดเป็น
-        # "คนที่ 2" ได้ง่ายขึ้นด้วย การย่อขนาดให้เท่ากับฝั่ง verify ช่วยให้พฤติกรรมของทั้งสอง endpoint
-        # สอดคล้องกัน และลดปัญหานี้ลง
-        # 2. ส่งภาพไปให้ Service ประมวลผลและเช็คกฎเกณฑ์
-        embedding_list, error_msg = await run_in_threadpool(
-            face_service.extract_face_for_registration, img_selfie
-        )
-        
-        # ถ้าติดเงื่อนไข (ไม่เจอหน้า/หน้าซ้อน) ให้เตะออกทันที
-        if error_msg:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
-        
-        # 3. อัปเดต Vector ใบหน้าลงตาราง profiles โดยผูกกับ student_id (ที่เป็น Text ตามโครงสร้างจริง)
-        response = await run_in_threadpool(
-            lambda: supabase.table('profiles').update({
-                'face_registered': True,
-                'face_embedding': embedding_list
-            }).eq('student_id', target_student_id).execute()
-        )
-        
-        # หากค้นหาเลข 13 หลักในตารางโปรไฟล์แล้วไม่เจอใครเลย
-        if len(response.data) == 0:
-             raise HTTPException(
-                 status_code=status.HTTP_404_NOT_FOUND, 
-                 detail=f"ไม่พบข้อมูลรหัสนักศึกษา {target_student_id} ในระบบ กรุณาติดต่อผู้ดูแลระบบ"
-             )
+            closed_uploads = liveness_blink_closed_images or []
+            open_uploads = liveness_blink_open_images or []
+            await run_in_threadpool(
+                load_face_enrollment_challenge,
+                enrollment_challenge_id,
+                current_user.id,
+                target_student_id,
+            )
+            verified_liveness = verify_liveness_submission(
+                liveness_token,
+                liveness_evidence,
+                enrollment_challenge_id,
+                current_user.id,
+            )
+            if (
+                len(closed_uploads) != verified_liveness.required_blinks
+                or len(open_uploads) != verified_liveness.required_blinks
+            ):
+                raise HTTPException(status_code=422, detail="จำนวนภาพกระพริบตาไม่ตรงกับ challenge")
+
+            processing_claim_token = str(uuid.uuid4())
+            await run_in_threadpool(
+                claim_face_enrollment_challenge,
+                enrollment_challenge_id,
+                current_user.id,
+                processing_claim_token,
+            )
+            claim_renewal_task = asyncio.create_task(
+                keep_face_enrollment_claim_alive(
+                    enrollment_challenge_id,
+                    current_user.id,
+                    processing_claim_token,
+                )
+            )
+
+            upload_tasks = [
+                read_validated_image(face_image, "ภาพใบหน้าสุดท้าย"),
+                read_validated_image(liveness_baseline_image, "ภาพปรับเทียบใบหน้า"),
+                read_validated_image(liveness_near_image, "ภาพขณะเข้าใกล้กล้อง"),
+                read_validated_image(liveness_return_image, "ภาพหลังกลับเข้ากรอบ"),
+            ]
+            upload_tasks.extend(
+                read_validated_image(upload, f"ภาพหลับตาครั้งที่ {index}")
+                for index, upload in enumerate(closed_uploads, start=1)
+            )
+            upload_tasks.extend(
+                read_validated_image(upload, f"ภาพลืมตาครั้งที่ {index}")
+                for index, upload in enumerate(open_uploads, start=1)
+            )
+            validated_uploads = await asyncio.gather(*upload_tasks)
+            prepared_images = await asyncio.gather(*(
+                run_in_threadpool(prepare_face_image, upload.content)
+                for upload in validated_uploads
+            ))
+            if any(image is None for image in prepared_images):
+                raise HTTPException(status_code=400, detail="ไฟล์ภาพ Liveness เสียหรืออ่านไม่ได้")
+
+            img_final, img_baseline, img_near, img_return = prepared_images[:4]
+            img_closed = prepared_images[4:4 + verified_liveness.required_blinks]
+            img_open = prepared_images[4 + verified_liveness.required_blinks:]
+            verified_frames = await run_in_threadpool(
+                verify_liveness_frames,
+                img_baseline,
+                img_near,
+                img_return,
+                img_closed,
+                img_open,
+                img_final,
+                verified_liveness.required_blinks,
+            )
+            await run_in_threadpool(
+                finalize_face_enrollment,
+                enrollment_challenge_id,
+                current_user.id,
+                target_student_id,
+                verified_frames.final_embedding.astype(float).tolist(),
+                processing_claim_token,
+            )
+            processing_claim_token = None
+        else:
+            if current_user.temporary_admin:
+                raise HTTPException(status_code=403, detail="การเปลี่ยนข้อมูลใบหน้าต้องใช้ผู้ดูแลระบบถาวร")
+            if face_image is None:
+                raise HTTPException(status_code=422, detail="กรุณาแนบภาพใบหน้าสำหรับการลงทะเบียนโดยผู้ดูแล")
+            face_upload = await read_validated_image(face_image, "ภาพใบหน้า")
+            img_selfie = await run_in_threadpool(prepare_face_image, face_upload.content)
+            if img_selfie is None:
+                raise HTTPException(status_code=400, detail="ไฟล์ภาพใบหน้าเสียหรืออ่านไม่ได้")
+            embedding_list, error_msg = await run_in_threadpool(
+                face_service.extract_face_for_registration, img_selfie
+            )
+            if error_msg:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
+            response = await run_in_threadpool(
+                lambda: supabase.table("profiles").update({
+                    "face_registered": True,
+                    "face_embedding": embedding_list,
+                }).eq("student_id", target_student_id).execute()
+            )
+            if not response.data:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"ไม่พบข้อมูลรหัสนักศึกษา {target_student_id} ในระบบ กรุณาติดต่อผู้ดูแลระบบ",
+                )
 
         return {
             "success": True,
@@ -471,13 +686,31 @@ async def register_face(
             "message": f"ลงทะเบียนใบหน้าของรหัสนักศึกษา {target_student_id} สำเร็จ"
         }
         
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        logger.exception("Face enrollment failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="เกิดข้อผิดพลาดภายในระบบ"
-        )
+            detail="เกิดข้อผิดพลาดภายในระบบ",
+        ) from exc
+    finally:
+        if claim_renewal_task:
+            claim_renewal_task.cancel()
+            try:
+                await claim_renewal_task
+            except asyncio.CancelledError:
+                pass
+        if processing_claim_token and enrollment_challenge_id:
+            try:
+                await run_in_threadpool(
+                    release_face_enrollment_challenge,
+                    enrollment_challenge_id,
+                    current_user.id,
+                    processing_claim_token,
+                )
+            except Exception:
+                logger.exception("Face enrollment challenge release failed")
 
 @app.post("/api/v1/attendance/verify")
 async def verify_FaceReg_OCR_attendance(

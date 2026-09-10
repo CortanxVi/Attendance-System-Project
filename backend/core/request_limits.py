@@ -59,6 +59,22 @@ def _is_attendance_verify(scope: dict) -> bool:
     )
 
 
+def _is_face_enrollment(scope: dict) -> bool:
+    return (
+        scope.get("type") == "http"
+        and scope.get("method") == "POST"
+        and scope.get("path", "").rstrip("/") == "/api/v1/enrollment/register-face"
+    )
+
+
+def _is_face_enrollment_challenge(scope: dict) -> bool:
+    return (
+        scope.get("type") == "http"
+        and scope.get("method") == "POST"
+        and scope.get("path", "").rstrip("/") == "/api/v1/enrollment/liveness-challenge"
+    )
+
+
 class SupportUploadLimitMiddleware:
     """Reject oversized multipart bodies before Starlette spools files."""
 
@@ -81,16 +97,18 @@ class SupportUploadLimitMiddleware:
         roster_import = _is_roster_import(scope)
         student_card_ocr = _is_student_card_ocr(scope)
         attendance_verify = _is_attendance_verify(scope)
-        if not any((support_upload, roster_import, student_card_ocr, attendance_verify)):
+        face_enrollment = _is_face_enrollment(scope)
+        face_enrollment_challenge = _is_face_enrollment_challenge(scope)
+        if not any((support_upload, roster_import, student_card_ocr, attendance_verify, face_enrollment, face_enrollment_challenge)):
             await self.app(scope, receive, send)
             return
         if support_upload:
             active_limit = self.max_bytes
         elif roster_import:
             active_limit = self.roster_max_bytes
-        elif student_card_ocr:
+        elif student_card_ocr or face_enrollment_challenge:
             active_limit = self.ocr_max_bytes
-        else:
+        elif attendance_verify or face_enrollment:
             active_limit = self.attendance_max_bytes
 
         headers = {

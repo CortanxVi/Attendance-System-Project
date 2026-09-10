@@ -25,7 +25,33 @@ export interface VerifyResponse {
   detail?: string; // กรณีเกิด Error จาก FastAPI
 }
 
+export interface EnrollmentLivenessChallenge {
+  challenge_id: string;
+  student_id: string;
+  challenge_expires_at: string;
+  challenge_ttl_seconds: number;
+  liveness_token: string;
+  liveness_actions: ('move_closer' | 'blink')[];
+  liveness_required_blinks: number;
+  liveness_prompt_delay_ms: number;
+}
+
 export const faceService = {
+  createEnrollmentLivenessChallenge: async (studentCardImage: File): Promise<EnrollmentLivenessChallenge> => {
+    const formData = new FormData();
+    formData.append('student_card_image', studentCardImage);
+    try {
+      const response = await axios.post<EnrollmentLivenessChallenge>(
+        `${API_BASE_URL}/enrollment/liveness-challenge`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 46_000 },
+      );
+      return response.data;
+    } catch (error: unknown) {
+      throw new Error(apiErrorMessage(error, 'ไม่สามารถสร้างสิทธิ์ Liveness สำหรับลงทะเบียนได้'), { cause: error });
+    }
+  },
+
   // ฟังก์ชันยิง API ลงทะเบียนใบหน้า
   registerFace: async (studentId: string, faceImage: File): Promise<RegisterResponse> => {
     const formData = new FormData();
@@ -45,6 +71,43 @@ export const faceService = {
       return response.data;
     } catch (error: unknown) {
       throw new Error(apiErrorMessage(error, 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้'), { cause: error });
+    }
+  },
+
+  registerFaceWithLiveness: async (
+    studentId: string,
+    challengeId: string,
+    livenessToken: string,
+    capture: {
+      faceImage: File;
+      baselineImage: File;
+      nearImage: File;
+      returnImage: File;
+      blinkClosedImages: File[];
+      blinkOpenImages: File[];
+      evidence: LivenessEvidence;
+    },
+  ): Promise<RegisterResponse> => {
+    const formData = new FormData();
+    formData.append('student_id', studentId);
+    formData.append('enrollment_challenge_id', challengeId);
+    formData.append('liveness_token', livenessToken);
+    formData.append('liveness_evidence', JSON.stringify(capture.evidence));
+    formData.append('face_image', capture.faceImage);
+    formData.append('liveness_baseline_image', capture.baselineImage);
+    formData.append('liveness_near_image', capture.nearImage);
+    formData.append('liveness_return_image', capture.returnImage);
+    capture.blinkClosedImages.forEach((image) => formData.append('liveness_blink_closed_images', image));
+    capture.blinkOpenImages.forEach((image) => formData.append('liveness_blink_open_images', image));
+    try {
+      const response = await axios.post<RegisterResponse>(
+        `${API_BASE_URL}/enrollment/register-face`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 },
+      );
+      return response.data;
+    } catch (error: unknown) {
+      throw new Error(apiErrorMessage(error, 'ลงทะเบียนใบหน้าด้วย Liveness ไม่สำเร็จ'), { cause: error });
     }
   },
 

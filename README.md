@@ -99,8 +99,10 @@ npm install
 ```ini
 VITE_SUPABASE_URL="https://[YOUR_PROJECT_ID].supabase.co"
 VITE_SUPABASE_ANON_KEY="[YOUR_ANON_KEY]"
-VITE_API_URL="http://localhost:8000"
 ```
+
+ไม่ต้องตั้ง `VITE_API_URL`: frontend ใช้ path แบบ same-origin `/api/v1` ผ่าน Vite proxy
+ใน Development และ Nginx ใน Production เพื่อให้การทดสอบบนมือถือไม่ติด mixed content
 
 ### คำสั่งรันระบบ (รันบนพอร์ต 5173)
 ```bash
@@ -205,6 +207,45 @@ OCR_SERVICE_TOKEN="[ค่าเดียวกับ service]" npm run test:con
 
 คำสั่งต้องได้ HTTP 200 ครบ 30 งานและเวลาสูงสุดไม่เกิน 45 วินาที เครื่อง production
 ต้องมีทรัพยากรอย่างน้อยเท่ากับเครื่องที่ใช้ผ่านคำสั่งนี้ก่อนเปิดให้ใช้งานจริง
+
+---
+
+## ทดสอบ Frontend บนโทรศัพท์ โดยให้ Backend อยู่บนเครื่องพัฒนา
+
+การเปิดเว็บบนโทรศัพท์ต้องใช้ HTTPS เพราะ Safari/Chrome ไม่อนุญาต Camera API บน LAN HTTP ธรรมดา
+
+คู่มือสำหรับนำระบบไปใช้งานจริง:
+
+- `docs/USER_GUIDE_TH.md` — คู่มือผู้ใช้แยกตามบทบาท
+- `docs/DEPLOYMENT_GUIDE_TH.md` — คู่มือ Ubuntu Server, Supabase Staging, release bundle, atomic deployment และ rollback
+- `docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md` — คู่มือ Frontend บน Vercel/Static Cloud และ Backend แบบ API-only บน Mini PC
+
+```bash
+chmod +x start_mobile_test.sh scripts/*.sh
+./start_mobile_test.sh
+```
+
+คำสั่งจะตรวจหา private LAN IP, สร้าง Development CA/Certificate ไว้ใต้ `.certs/mobile-test`, เปิด Frontend แบบ HTTPS ให้เครื่องอื่นใน LAN เข้าถึง และยังคง FastAPI กับ Light OCR ไว้บน `127.0.0.1` เท่านั้น
+
+ให้ติดตั้งเฉพาะ `.certs/mobile-test/mobile-test-ca.crt` บนโทรศัพท์และเปิด Full Trust สำหรับการทดสอบ ห้ามส่งไฟล์ `.key` ไปยังอุปกรณ์อื่น จากนั้นเพิ่ม URL ที่คำสั่งแสดง เช่น `https://192.168.1.20:5173` เข้า Supabase Auth Redirect URLs ชั่วคราว เมื่อทดสอบเสร็จให้ลบ Redirect URL และ Development CA ออกจากโทรศัพท์
+
+ถ้าตรวจ LAN IP ผิด สามารถระบุเองได้:
+
+```bash
+MOBILE_TEST_HOST=192.168.1.20 ./start_mobile_test.sh
+```
+
+รายละเอียดการทดสอบ Staging, Production preflight, Nginx, systemd และ rollback อยู่ใน `deployment/README.md`
+
+## ตรวจความพร้อมก่อน Release
+
+```bash
+scripts/verify_release.sh
+scripts/check_supabase_release.sh
+backend/.venv/bin/python scripts/production_preflight.py
+```
+
+`check_supabase_release.sh` เป็นการตรวจเท่านั้นและไม่ apply migration ส่วน `production_preflight.py` จะรายงานเฉพาะชื่อค่าที่ขาดหรือไม่ปลอดภัยโดยไม่แสดง secret ออกทางหน้าจอ
 
 ---
 

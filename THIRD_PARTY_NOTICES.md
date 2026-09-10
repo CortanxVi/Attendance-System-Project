@@ -17,3 +17,12 @@
 - License stated by the source repository: Apache License 2.0.
 
 The passive PAD model is a security signal, not a guarantee or an ISO/IEC 30107 certification. Its threshold must be evaluated with the production cameras, lighting, and target population before rollout.
+
+## InsightFace buffalo_s
+
+- Runtime code: `insightface` 1.0.1
+- Required pretrained artifacts: `1k3d68.onnx`, `det_500m.onnx`, and `w600k_mbf.onnx`
+- Integrity manifest: `backend/models/insightface-buffalo-s.sha256`
+- The upstream project states that its code is MIT licensed, while its supplied training data and pretrained models are limited to non-commercial research unless a separate model license is obtained.
+
+The project owner must confirm and document that the intended attendance deployment is covered by the pretrained-model terms, or obtain an appropriate license/replacement model before a full production release. Technical test success does not resolve this licensing requirement.

@@ -11,6 +11,7 @@
     "test:security": "node --experimental-strip-types scripts/test-spreadsheet-security.mjs",
     "test:liveness": "node --experimental-strip-types scripts/test-liveness.mts",
     "test:face-runtime": "node scripts/test-face-runtime.mjs",
+    "test:api-origin": "node --experimental-strip-types scripts/test-api-origin.mts",
     "preview": "vite preview"
   },
   "dependencies": {

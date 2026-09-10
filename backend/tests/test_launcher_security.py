@@ -74,6 +74,53 @@ class LauncherSecurityTests(unittest.TestCase):
         self.assertIn("@arcships/light-ocr-win32-arm64", ocr_lock)
         self.assertIn("@rollup/rollup-win32-x64-msvc", frontend_lock)
 
+    def test_production_deployment_is_atomic_and_requires_release_gates(self):
+        installer = (PROJECT_ROOT / "scripts" / "install_production_release.sh").read_text(encoding="utf-8")
+        rollback = (PROJECT_ROOT / "scripts" / "rollback_production_release.sh").read_text(encoding="utf-8")
+        nginx = (PROJECT_ROOT / "deployment" / "nginx" / "attendance.conf.example").read_text(encoding="utf-8")
+        api_only_nginx = (PROJECT_ROOT / "deployment" / "nginx" / "attendance-api-only.conf.example").read_text(encoding="utf-8")
+        backend_unit = (PROJECT_ROOT / "deployment" / "systemd" / "km-attendance-backend.service").read_text(encoding="utf-8")
+        ocr_unit = (PROJECT_ROOT / "deployment" / "systemd" / "km-attendance-ocr.service").read_text(encoding="utf-8")
+        health_timer = (PROJECT_ROOT / "deployment" / "systemd" / "km-attendance-healthcheck.timer").read_text(encoding="utf-8")
+
+        self.assertIn("--confirm-database-ready", installer)
+        self.assertIn("--confirm-model-license", installer)
+        self.assertIn("source_state", installer)
+        self.assertIn("sha256sum --check", installer)
+        self.assertIn("production_preflight.py", installer)
+        self.assertIn("previous_release", installer)
+        self.assertIn("/opt/km-attendance/current", installer)
+        self.assertIn("/opt/km-attendance/current", rollback)
+        self.assertIn("root /opt/km-attendance/current/frontend/dist", nginx)
+        self.assertNotIn('add_header Cache-Control "no-store"', nginx)
+        self.assertIn("127.0.0.1:8000", nginx)
+        self.assertIn("--api-only", installer)
+        self.assertIn("--frontend-origin", installer)
+        self.assertIn("attendance-api-only.conf.example", installer)
+        self.assertIn("127.0.0.1:8000", api_only_nginx)
+        self.assertNotIn("frontend/dist", api_only_nginx)
+        self.assertIn("return 404", api_only_nginx)
+        self.assertIn("/opt/km-attendance/current/backend", backend_unit)
+        self.assertIn("--workers 1", backend_unit)
+        self.assertIn("/opt/km-attendance/current/ocr-service", ocr_unit)
+        self.assertIn("HOST=127.0.0.1", (PROJECT_ROOT / "deployment" / "ocr.env.example").read_text(encoding="utf-8"))
+        self.assertIn("OnUnitActiveSec=1min", health_timer)
+
+    def test_thai_user_and_deployment_guides_exist(self):
+        user_guide = (PROJECT_ROOT / "docs" / "USER_GUIDE_TH.md").read_text(encoding="utf-8")
+        deploy_guide = (PROJECT_ROOT / "docs" / "DEPLOYMENT_GUIDE_TH.md").read_text(encoding="utf-8")
+        hybrid_guide = (PROJECT_ROOT / "docs" / "HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md").read_text(encoding="utf-8")
+
+        self.assertIn("คู่มือสำหรับนักศึกษา", user_guide)
+        self.assertIn("คู่มือสำหรับอาจารย์", user_guide)
+        self.assertIn("ผู้ดูแลระบบถาวร", user_guide)
+        self.assertIn("Supabase Staging", deploy_guide)
+        self.assertIn("install_production_release.sh", deploy_guide)
+        self.assertIn("rollback_production_release.sh", deploy_guide)
+        self.assertIn("VITE_API_ORIGIN", hybrid_guide)
+        self.assertIn("--api-only", hybrid_guide)
+        self.assertIn("CORS_ORIGINS", hybrid_guide)
+
 
 if __name__ == "__main__":
     unittest.main()

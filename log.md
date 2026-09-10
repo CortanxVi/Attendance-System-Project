@@ -307,3 +307,192 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Reconcile the final three Supabase migration-history entries and rerun database lint and the Security/Performance Advisors before deployment.
 - Build a reproducible production service and reverse-proxy setup, then run full staging E2E, 30/40-user burst tests, one- to two-hour soak tests, restart/recovery tests, Supabase role-policy tests, and backup/restore drills on hardware matching the target server.
 - Review, commit, and tag the current working tree only after the changes and generated model artifacts have been independently reviewed and all release evidence is attached to the release checklist.
+
+## 2026-09-08 — Mobile Development/Staging Harness, Secure Face Enrollment, and Production Readiness Tooling
+
+- **Status:** Implementation and local automated verification completed. Physical-device authenticated QA, the staging database migration, target-host capacity testing, and production operator actions remain pending.
+- **Actor:** Codex primary agent.
+- **Objective:** Let the frontend be tested securely from phones on the same trusted LAN while FastAPI and Light OCR remain on the development computer; close the unsafe still-image student enrollment path; add reproducible health, deployment, CI, and release checks; and prepare the repository for unit, integration, burst, and staging validation.
+
+### Implementation and rationale
+
+- Added a development-only HTTPS mobile launcher. It creates a private local development CA and a short-lived server certificate containing the selected LAN host, exposes only Vite over HTTPS, and keeps FastAPI and Light OCR bound to loopback behind the Vite proxy. Port validation, Node.js version validation, dependency/environment checks, child-process monitoring, and coordinated shutdown are included.
+- Added a mobile smoke test that verifies the HTTPS page, local Face Landmarker artifact, backend liveness endpoint, and dependency readiness endpoint through the same origin used by the phone. Generated certificates and private keys are excluded from version control.
+- Changed normal Vite development binding back to loopback by default. LAN binding and certificate loading occur only when the dedicated launcher opts in. Backend requests deliberately remain relative `/api/v1` paths so mobile testing and production do not rely on an insecure or device-local backend URL.
+- Added request-correlation and defensive API response headers without recording query strings, payloads, tokens, OCR text, student data, or biometric material. Production disables interactive API documentation and requires explicit trusted hosts and HTTPS CORS origins.
+- Added separate liveness and readiness health endpoints. Readiness checks the hosted database and the authenticated loopback OCR health service with bounded timeouts and returns only generic dependency states.
+- Replaced student self-enrollment by a single still image with an account-bound, student-card-verified, signed Liveness v2 flow. The backend now recomputes movement, bilateral blinking, face continuity, duplicate-frame resistance, and passive PAD before storing the embedding from the verified final frame. The browser sends selected evidence frames, not a complete video stream.
+- Added a local Supabase migration for a service-role-only face-enrollment challenge table and claim, renew, release, and atomic finalize RPCs. Challenges are short-lived, single-use, tied to the authenticated profile and student identifier, and protected by RLS plus revoked public/anonymous/authenticated grants. A processing lease is renewed while expensive verification is queued so concurrent classroom traffic cannot silently steal an active claim.
+- Students cannot replace an already-registered face through self-service. Temporary administrators cannot write face embeddings. The existing permanent-administrator path remains as an explicitly supervised override. Malformed student identifiers are rejected before image/model work.
+- Removed the unused legacy `frontend/src/components/Enrollment.tsx` still-image component so it cannot accidentally be wired back into the student route.
+- Added multipart request-size enforcement for both enrollment endpoints before framework parsing/spooling, while retaining existing decoded image dimension, pixel-count, MIME/signature, and per-file limits.
+- Restricted InsightFace initialization to the detection, recognition, and required landmark modules. Added pinned SHA-256 hashes and an offline verification script for the three required model files, plus a third-party notice that separates code licensing from pretrained-model licensing.
+- Added example production environments, hardened one-worker systemd services for the 8 GB target host, an Nginx TLS/static/API reverse-proxy template, a deployment/rollback runbook, a configuration preflight that never prints secret values, a read-only Supabase release-check helper, and a consolidated release-verification script.
+- Added GitHub Actions jobs for the backend, frontend, and OCR service. Added a repository-root `.nvmrc`; release verification now fails early with a clear message unless Node.js 22.12+ or 24 is active. The Codex premium UI audit is portable and optional when its local tool is unavailable.
+- Updated `README.md`, `DESIGN.md`, and `UX-CONTRACT.md` with the mobile test workflow, same-origin API rule, secure enrollment behavior, deployment gates, and operational responsibilities.
+
+### Files and components changed
+
+- Mobile staging and verification: `.gitignore`, `.nvmrc`, `start_mobile_test.sh`, `scripts/setup_mobile_test_certificate.sh`, `scripts/smoke_mobile_test.sh`, `scripts/verify_release.sh`, `scripts/production_preflight.py`, `scripts/check_supabase_release.sh`, and `scripts/verify_face_models.sh`.
+- Backend runtime and security: `backend/main.py`, `backend/core/config.py`, `backend/core/request_limits.py`, `backend/core/operational.py`, `backend/services/face_enrollment_service.py`, `backend/services/insightface_service.py`, `backend/.env.example`, and `backend/models/insightface-buffalo-s.sha256`.
+- Frontend enrollment and configuration: `frontend/src/features/student/StudentRegister.tsx`, `frontend/src/services/api.ts`, `frontend/vite.config.ts`, `frontend/.env.local.example`, and removal of `frontend/src/components/Enrollment.tsx`.
+- Database: `supabase/migrations/20260907164433_secure_face_enrollment_liveness.sql`; the Supabase CLI local version marker was refreshed during the read-only linked-project check and then restored to its recorded version, leaving only its trailing-newline metadata changed.
+- Deployment and automation: `.github/workflows/ci.yml` and the new `deployment` environment, systemd, Nginx, and runbook templates.
+- Documentation and notices: `README.md`, `DESIGN.md`, `UX-CONTRACT.md`, and `THIRD_PARTY_NOTICES.md`.
+- Tests: `backend/tests/test_face_enrollment_security.py`, `backend/tests/test_operational_security.py`, and the updated liveness OpenAPI contract checks.
+
+### Security and privacy impact
+
+- FastAPI, Light OCR, Supabase server credentials, the development CA private key, face model files, OCR text, and biometric evidence are not exposed directly to the LAN client. Only the phone-trusted Vite HTTPS origin is reachable during local mobile QA.
+- Student card OCR must match the authenticated profile before a face-enrollment challenge is issued. A challenge cannot be replayed after successful consumption or concurrently finalized with a different claim token.
+- Face images remain transient request data; the change stores only the existing 512-dimensional face embedding and does not add permanent attendance-photo storage.
+- Operational logging is intentionally metadata-only. No secret, token, private URL, student record, OCR result, raw biometric image, or embedding was added to this log.
+- Residual biometric risk remains: RGB webcam liveness is a layered deterrent, not a guarantee against every sophisticated presentation/deepfake attack and not an ISO/IEC 30107 certification.
+
+### Database and deployment impact
+
+- The new face-enrollment migration is local only and has **not** been pushed to the linked Supabase project. Student self-enrollment will require that migration in staging.
+- The linked local/remote migration histories still differ at the three previously identified late migration positions. A database lint attempt could not authenticate. Those histories must be compared and reconciled with the approved database password before applying the new migration; no blind history repair or database push was performed.
+- Production templates are not installed services. Operators must supply independent secrets, exact domain/project values, a trusted TLS certificate, model files, permissions, monitoring, backup/restore procedures, and rollback artifacts.
+- Supabase dashboard actions remain pending, including leaked-password protection or disabling password auth, exact production redirect/Site URLs, MFA/provider review, SSL/network restrictions, SMTP if applicable, and backup/PITR decisions.
+- InsightFace model checksums pass, but the upstream pretrained-model commercial/production license must be confirmed and documented before release.
+
+### Verification performed
+
+- Dedicated LAN HTTPS launch succeeded on isolated ports: Light OCR initialized, FastAPI remained on loopback, Vite served HTTPS to the LAN, and the mobile smoke test passed the frontend, local model, liveness, database, and OCR readiness checks. Test services were shut down cleanly without stopping the user's existing local services.
+- The consolidated release verification completed successfully using Node.js 22.23.2: backend tests, Python dependency consistency, frontend lint, card-image tests, spreadsheet-export security, Liveness v2 tests, face-runtime contract, production build, frontend dependency audit, OCR isolation test, Light OCR doctor, OCR dependency audit, model checksums, strict premium UI audit, and `git diff --check` all passed.
+- Final backend discovery passed **85 tests**. The focused face-enrollment security suite passed **7 tests**, including legacy still-image rejection, temporary-admin rejection, malformed identifier rejection, backend-only atomic migration checks, lease renewal binding, vector serialization, and non-finite embedding rejection. Python package consistency reported no broken requirements.
+- Frontend liveness simulation continued to accept normal and variable-FPS genuine sequences while rejecting static images, nod-only movement, unilateral wink, and face-loss sequences. The production build transformed 1,901 modules and generated the PWA successfully. Frontend and OCR dependency audits reported zero vulnerabilities at the configured threshold.
+- Light OCR reported native runtime status `ok` on Linux with the small PP-OCRv6 model tier. A privacy-safe 30-request concurrent burst against an isolated OCR process completed **30/30** successfully in **1,948 ms wall time**, with **988 ms p50**, **1,868 ms p95**, and **1,931 ms maximum** latency. This small synthetic image validates queue behavior, not full-resolution target-hardware capacity.
+- The production preflight was intentionally exercised against the current development configuration and correctly rejected development mode, missing/separated production secrets, localhost origins/hosts, development OCR mode, and an insecure legacy API URL without exposing any configured values.
+
+### Remaining risks and handoff work
+
+- Install the development CA on a dedicated test phone, add only the exact temporary HTTPS origin to Supabase Auth Redirect URLs, apply the reviewed migration to a reconciled staging database, and execute the authenticated Google login, profile, course join, QR, face enrollment, attendance, NFC, support attachment/preview, roster import, and role-boundary matrix on real devices.
+- Re-test intermittent straight-ahead blink detection on the agreed device/browser/lighting matrix. Preserve the current server-side PAD and identity controls until measured genuine/attack data supports a threshold change.
+- Run 30- and 40-user full-resolution OCR plus complete attendance-pipeline burst tests, a one- to two-hour soak, restart/recovery, and memory/CPU measurements on the Intel Core i3 target host. The synthetic burst on the development computer is not a production capacity guarantee.
+- Run database lint and Supabase security/performance advisors after the migration is applied, then run explicit anonymous/student/teacher/temporary-admin/permanent-admin/service-role integration tests.
+- Test backup restoration and rollback, configure external monitoring and log rotation, independently review the change set, run CI on the remote repository, and create an immutable release/tag only after the staging evidence is accepted.
+
+## 2026-09-08 — Atomic Deployment Packaging and Thai Operations/User Guides
+
+- **Status:** Repository-side deployment implementation completed and verified with a disposable Staging bundle. No production host, DNS, TLS, Supabase migration, Git push, or live service was mutated because the required target details and database release gates are not yet available.
+- **Actor:** Codex primary agent.
+- **Objective:** Convert the production templates into a reproducible, guarded release process for Ubuntu Server 24.04, close remaining reverse-proxy/service-hardening gaps, add internal health monitoring, and provide complete Thai usage and deployment instructions.
+
+### Implementation and rationale
+
+- Aligned Nginx, systemd, deployment, and rollback around immutable release directories under `/opt/km-attendance/releases` plus one atomic `/opt/km-attendance/current` symlink. This removes the prior mismatch where service files used fixed component paths while the rollback text expected a current-release symlink.
+- Added `scripts/build_release_bundle.sh`. It requires absolute paths, rejects output inside the source repository, rejects dirty worktrees for Production, permits explicitly marked dirty Staging builds, runs the full release verification, builds the frontend in a clean temporary copy, excludes environment/private/build/dependency files, creates release metadata, rejects symlinks, and verifies a SHA-256 manifest.
+- Added `scripts/install_production_release.sh`. It validates the bundle, clean source state, release ID, domain, Supabase project reference, Node version, TLS files, environment files, database approval, model-license approval, checksums, production preflight, and Nginx syntax. It installs dependencies into the immutable release, switches the symlink only after validation, waits for readiness, and restores the previous application symlink automatically if the new release fails.
+- Added `scripts/rollback_production_release.sh`. It requires an exact release ID, rejects unexpected symlinks, validates checksums, switches atomically, restarts services, waits for readiness, and restores the prior symlink when the rollback target is unhealthy.
+- Added a one-minute internal readiness timer and service plus `scripts/healthcheck_production.sh`. It checks loopback readiness only and writes a simple pass/failure event to the system journal; an external alert destination remains an operator choice.
+- Updated systemd services to execute from the current-release symlink, keep one FastAPI worker on the 8 GB target, verify the pre-provisioned face models before Backend startup, require Node.js 22.12+/24 before OCR startup, and add kernel/device/privilege restrictions compatible with CPU/WASM inference.
+- Updated Nginx to serve the immutable current release, hide the version, disable TLS session tickets, enable a bounded TLS session cache, and reuse the upstream HTTP connection. Removed the location-level `add_header` that would suppress inherited HSTS and other server headers.
+- Added Backend `Cache-Control: no-store` on every API response so authenticated/API content is not cached by browsers or intermediaries while static model/PWA assets retain explicit cache behavior.
+- Expanded production preflight with release-version matching, strict HTTPS Supabase/CORS URL parsing, loopback-only OCR URL validation, strict trusted-host syntax, rejection of ignored `VITE_API_URL`, rejection of server credential names in the frontend environment, public/private secret inequality, and secret-file permission checks.
+- Added `docs/USER_GUIDE_TH.md` for student, teacher, temporary-admin, and permanent-admin workflows, including profiles, course codes, roster import, face enrollment, Liveness, Dynamic QR, NFC, requests, reports, troubleshooting, and privacy practices.
+- Added `docs/DEPLOYMENT_GUIDE_TH.md` covering architecture, prerequisites, Supabase Staging reconciliation, environment permissions, offline model provisioning, bundle creation, atomic installation, acceptance testing, monitoring, and rollback.
+- Added deployment regression tests that assert the release gates, atomic paths, loopback bindings, one-worker constraint, health timer, inherited security-header behavior, and presence of both Thai guides.
+
+### Files and components changed
+
+- Release automation: `scripts/build_release_bundle.sh`, `scripts/install_production_release.sh`, `scripts/rollback_production_release.sh`, `scripts/healthcheck_production.sh`, and `scripts/production_preflight.py`.
+- Service/reverse proxy templates: `deployment/systemd/km-attendance-backend.service`, `deployment/systemd/km-attendance-ocr.service`, `deployment/systemd/km-attendance-healthcheck.service`, `deployment/systemd/km-attendance-healthcheck.timer`, and `deployment/nginx/attendance.conf.example`.
+- Runtime security: `backend/core/operational.py` and `backend/tests/test_operational_security.py`.
+- Regression coverage: `backend/tests/test_launcher_security.py`.
+- Documentation: `docs/USER_GUIDE_TH.md`, `docs/DEPLOYMENT_GUIDE_TH.md`, `deployment/README.md`, and `README.md`.
+
+### Security and privacy impact
+
+- Production installation now fails closed when a bundle is dirty, altered, contains symlinks, has an invalid target identifier, lacks approved database/model gates, lacks TLS, exposes server credential names to the frontend, uses non-loopback OCR, has unsafe environment permissions, or fails readiness.
+- The bundle includes no `.env`, TLS key/PEM, development CA, Git history, Python virtual environment, Node modules, test data, or raw private configuration. Frontend environment values remain public by design and appear only in the compiled static bundle.
+- API responses are non-cacheable. Health monitoring uses only generic readiness state and does not send tokens, OCR output, biometric evidence, student records, or query strings.
+- No secret value, access token, database password, project URL, student identifier, face embedding, biometric sample, or private test artifact was added to this log.
+
+### Database and deployment impact
+
+- Reviewed current official Supabase deployment, environment-management, migration, redirect-URL, and production-checklist guidance. Current guidance continues to recommend separate Staging/Production projects, exact Production redirect URLs, load testing in Staging, RLS/security advisor review, and migration deployment through a controlled CI/CD flow. The current breaking-change list does not require an application change for this hosted architecture; Node.js 22 is already selected after the Supabase JavaScript ecosystem dropped Node.js 20 support.
+- No linked Supabase schema or migration history was changed. The existing three-position migration mismatch and the unapplied secure face-enrollment migration remain release blockers. The installer requires an explicit database-ready attestation and never runs `db push` or `migration repair` automatically.
+- No live server was installed. The active development host does not match the target Mini PC and does not have Nginx installed. The generated installer is intended to run only on the designated Ubuntu Server after DNS, TLS, environment files, model files, and staging acceptance evidence are available.
+- Production deployment still requires the actual hostname, Supabase Staging/Production selection, approved database access, SSH/console access to the target host, trusted TLS certificate, model-license decision, and external monitoring/alert destination.
+
+### Verification performed
+
+- Full release verification passed from the latest source with **87 Backend tests**, Python dependency consistency, frontend lint, card-image checks, spreadsheet security checks, Liveness v2 tests, face-runtime contract, TypeScript production build, PWA generation, frontend/OCR dependency audits, OCR isolation, Light OCR doctor, three face-model checksums, strict premium UI audit, and `git diff --check`.
+- Focused deployment/operational tests passed **10 tests**. Shell syntax validation passed for every deployment script; Python bytecode compilation passed for the expanded preflight.
+- systemd unit verification parsed all service/timer definitions without syntax errors. It reported only the expected missing `/opt/km-attendance/current` executable paths because the development machine has not installed a release.
+- Negative preflight testing correctly rejected placeholder credentials, a mismatched release version, and world-readable example environment files without printing any configured value.
+- Built a disposable Staging bundle from the current dirty worktree with Node.js 22.23.2. The script ran all checks, rebuilt 1,901 frontend modules, generated the PWA, produced the minimal runtime package, and marked it `dirty-staging-build`.
+- Independently rescanned the bundle: checksums passed; no `.env`, key, PEM, symbolic link, legacy requirement copy, Windows launcher, or OCR test script was present. The disposable bundle was moved to the desktop trash after verification.
+- Nginx runtime validation could not run on the development host because Nginx is not installed. The Production installer always runs `nginx -t` on the target and restores the prior configuration if validation fails.
+
+### Remaining risks and handoff work
+
+- Provide the deployment hostname, indicate whether the first target is Staging or Production, and provide an approved SSH/console path to the Ubuntu Server. Do not send passwords or service keys in chat; place them directly in root-owned `/etc/km-attendance` environment files on the target.
+- Reconcile and apply Supabase migrations to a separate Staging project, run database lint and both advisors, and complete the role matrix plus real-device acceptance checklist before declaring the database ready.
+- Confirm the InsightFace pretrained-model license and place the pinned model files on the target before using the model-license attestation flag.
+- Commit and independently review the current working tree before creating a clean Production bundle. The current source remains intentionally uncommitted and can only create a Staging-marked bundle.
+- Install/validate Nginx and TLS on the actual host, run 30/40-user full-resolution attendance load plus soak/restart/restore tests, connect health timer failures to an external alert channel, and verify the application rollback and database compensating-migration procedure before opening unrestricted Production traffic.
+
+## 2026-09-10 — Hybrid Cloud Frontend and Mini PC API-Only Deployment
+
+- **Status:** Repository-side hybrid deployment support and Thai deployment documentation completed and verified. No Vercel project, DNS record, TLS certificate, router/firewall, Supabase project, migration history, production database, or Mini PC service was changed because no live deployment target or credentials were supplied.
+- **Actor:** Codex primary agent.
+- **Objective:** Allow the Vite/PWA frontend to run on Vercel or another static cloud while FastAPI, Light OCR, and InsightFace remain on the agreed Ubuntu Server Mini PC; provide a detailed, security-conscious operating guide and preserve the existing same-origin development/deployment mode.
+
+### Implementation and rationale
+
+- Added an optional `VITE_API_ORIGIN` frontend setting. An empty value preserves the existing relative `/api` flow through the Vite development proxy or same-origin Nginx. A configured value makes the shared Axios client send API requests directly to the Mini PC's public origin, avoiding Vercel proxying of OCR and Liveness multipart evidence.
+- Added a centralized API-origin policy that permits only HTTP(S), requires HTTPS in Production, permits explicit HTTP only on loopback during development, rejects credentials/path/query/fragment input, and normalizes a harmless trailing slash. The existing authorization interceptor still attaches Supabase access and temporary-admin grant tokens only to `/api/` requests.
+- Extended production preflight with split-deployment flags and cross-checks. It now validates an exact HTTPS API origin, requires its hostname in `TRUSTED_HOSTS`, requires the exact Frontend origin in `CORS_ORIGINS`, rejects malformed/out-of-range ports, and continues to reject legacy `VITE_API_URL` and frontend server credentials without printing values.
+- Hardened Backend Production startup so CORS entries must be exact HTTPS origins and Trusted Host entries must be explicit hostname syntax. This makes unsafe path-bearing, credential-bearing, wildcard, or malformed origin configuration fail closed even if the operator bypasses the release preflight.
+- Added an API-only Nginx template for the Mini PC. It exposes only `/api/` and generic liveness health, keeps readiness loopback-only, forwards solely to `127.0.0.1:8000`, retains request/body/connection limits and security headers, and returns 404 for all unrelated paths. It never serves the bundled frontend.
+- Added `--api-only --frontend-origin <exact HTTPS origin>` to the atomic installer. In this mode the installer selects the API-only Nginx template and requires the Backend CORS, Trusted Host, and compiled Frontend API origin to agree before activating the release. The existing combined same-origin installation path is unchanged.
+- Added a Vercel configuration template with Vite SPA fallback and browser security headers. Its CSP contains deliberate hostname/project placeholders so the operator must replace them with the exact API and Supabase endpoints before committing/deploying it.
+- Added a comprehensive Thai hybrid-deployment guide covering architecture, environment boundaries, Vercel Dashboard/CLI deployment, Supabase Auth redirects, Google OAuth callback responsibilities, API-only Mini PC installation, TLS/firewall/CORS tests, acceptance tests, 30/40-user capacity verification, rollback, alternate static hosts, CGNAT options, and the privacy trade-off of Cloudflare Tunnel.
+- Updated repository and deployment indexes plus the existing Ubuntu deployment guide to route operators to the hybrid guide.
+- Added a frontend API-origin contract test and included it in local release verification and GitHub Actions.
+- During release verification, the npm advisory database newly reported four Multer multipart-upload issues, including High-severity denial-of-service conditions affecting the installed 2.2.0 release. Updated and exactly pinned the direct OCR dependency to Multer 2.3.0, regenerated the lockfile, and re-ran the OCR isolation/doctor/audit and complete release gate successfully.
+
+### Files and components changed
+
+- Frontend runtime/configuration: `frontend/src/config/apiOrigin.ts`, `frontend/src/services/http.ts`, `frontend/.env.local.example`, and `deployment/frontend.env.production.example`.
+- Frontend verification: `frontend/scripts/test-api-origin.mts`, `frontend/package.json`, `scripts/verify_release.sh`, and `.github/workflows/ci.yml`.
+- Backend configuration/release validation: `backend/core/config.py`, `scripts/production_preflight.py`, and `backend/tests/test_launcher_security.py`.
+- Mini PC/Vercel deployment: `deployment/nginx/attendance-api-only.conf.example`, `deployment/vercel/vercel.json.example`, and `scripts/install_production_release.sh`.
+- Documentation: `docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md`, `docs/DEPLOYMENT_GUIDE_TH.md`, `deployment/README.md`, and `README.md`.
+- OCR supply-chain remediation: `ocr-service/package.json` and `ocr-service/package-lock.json`.
+
+### Security and privacy impact
+
+- Browser uploads for student-card OCR and Liveness are designed to travel directly over HTTPS to the Mini PC API rather than through Vercel. Vercel receives static-site requests but does not become the application API proxy in the documented design. Supabase still receives the Auth/Database/Storage/Realtime traffic defined by the application.
+- Only the Supabase publishable/legacy anon key, Supabase public URL, and public API origin may be placed in Vite/Vercel variables. Service-role/server keys, OCR tokens, Liveness signing keys, PIN peppers, student records, and biometric values remain server-only.
+- The guide requires exact Production CORS and OAuth redirects, TLS without browser bypass, no public FastAPI/OCR ports, stable Staging domains, CSP customization, and direct inspection that Bearer tokens are not sent to unrelated origins.
+- The API-only edge retains body, connection, and request-rate controls. A Cloudflare Tunnel is presented only as an approved alternative because biometric evidence would transit a further processor and client-IP/rate-limit behavior requires a separate privacy and trusted-proxy review.
+- The Multer update closes the currently reported crafted multipart field, aborted-upload descriptor leak, async file-filter size bypass, and oversized array-index advisories in the OCR upload layer.
+- No access token, service key, private URL, student record, OCR result, raw image, face embedding, or other personal data was written to this log or documentation.
+
+### Database and deployment impact
+
+- No schema, data, RLS policy, Supabase Auth setting, Storage object, or migration history was changed. Current official Supabase guidance was rechecked: use separate Staging/Production environments, use exact Production redirect URLs, run Security/Performance Advisors, and deploy reviewed migrations through a controlled workflow.
+- The prior three-position local/remote Supabase migration-history mismatch and unapplied secure face-enrollment migration remain Production blockers. The hybrid installer does not push, repair, or otherwise mutate the database.
+- No live Vercel/Cloudflare project or Mini PC was deployed. Production still requires real Frontend/API hostnames, DNS/TLS, Mini PC access, root-owned environment files, approved database state, model-license approval, a clean reviewed Git revision, and monitoring/backup/rollback ownership.
+- The target Mini PC must continue with one FastAPI worker initially. Thirty/forty-user support remains conditional on full-resolution WAN-path load and soak testing on the i3-7100T/8 GB target; cloud-hosting the static frontend does not remove API inference or uplink bottlenecks.
+
+### Verification performed
+
+- Complete `scripts/verify_release.sh` passed with Node.js 22.23.2: three pinned face-model checksums, **87 Backend tests**, Python dependency consistency, Frontend lint, card-image sizing, spreadsheet security, Liveness v2, face-runtime preload, new API-origin policy test, TypeScript/Vite/PWA Production build, Frontend dependency audit, OCR environment isolation, Light OCR doctor, OCR dependency audit, strict frontend premium audit, and `git diff --check`.
+- Frontend Production build transformed **1,902 modules** and generated the PWA successfully. Both Frontend and OCR npm audits ended with **0 vulnerabilities** at the configured threshold after the Multer update.
+- Focused deployment/operational verification passed **10 tests**. Shell syntax validation passed for the installer/release scripts, and Python bytecode compilation passed for Backend configuration and the expanded Production preflight.
+- Light OCR 0.5.7 doctor reported the small PP-OCRv6 bundle and native Linux runtime ready after Multer 2.3.0 installation. OCR isolation tests continued to pass.
+- Reviewed current official Vercel Vite/SPA, environment-variable, rewrite, and CLI deployment documentation; current Supabase changelog, redirect-URL, environment-management, and Production-checklist documentation; and current Cloudflare Tunnel connectivity documentation. The documented Node 22 requirement already addresses Supabase JavaScript clients ending Node 20 support.
+
+### Remaining risks and handoff work
+
+- Replace every Vercel CSP/API/Supabase placeholder, add and commit the deployment-specific `frontend/vercel.json`, and run a Vercel Preview against a separate Staging API/Supabase project before Production promotion.
+- Reconcile Supabase migration history, apply the reviewed face-enrollment migration in Staging, run database lint and both advisors, and complete anonymous/student/teacher/temporary-admin/permanent-admin/service-role tests.
+- Confirm whether the Mini PC has a public IP or is behind CGNAT. Obtain institutional privacy/security approval before routing biometric uploads through any tunnel/CDN provider.
+- Provision the actual API hostname, trusted certificate, firewall/router policy, root-owned environment files, pinned model files, UPS, external alerting, and backup/restore process, then run the documented CORS/OAuth/TLS/device matrix.
+- Run 30/40-user full-resolution attendance bursts and a one- to two-hour soak across the real Internet uplink. Record CPU, RAM, upload bandwidth, queue time, p95 latency, error rate, restart recovery, and rollback evidence before declaring Production capacity.
+- The current repository worktree contains the existing uncommitted project changes. Independent review and a clean commit are still required before the release builder will create a Production-marked bundle.

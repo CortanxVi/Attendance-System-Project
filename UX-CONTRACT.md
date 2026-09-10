@@ -126,6 +126,7 @@
 
 - Permission UI strategy: irrelevant role routes hidden; server authorization is authoritative; direct forbidden action receives 403
 - Student registration status actions: face-registration action is shown only while `face_registered` is false; NFC registration remains teacher-assisted and shows guidance only while `nfc_registered` is false
+- Student face self-enrollment: OCR must first bind the card number to the authenticated profile, then a short-lived signed and account-bound challenge drives protocol-v2 liveness. The backend recomputes movement, bilateral blink, person continuity, frame continuity, and passive PAD before atomically storing the final verified embedding and consuming the challenge. A student cannot overwrite an existing embedding; only a permanent administrator may use the supervised override flow.
 - Disabled-state explanation: visible constraints near disabled check-in controls
 - Account provisioning: student-domain accounts require a 13-digit student ID; teacher/admin accounts require an unclaimed admin invitation before first login
 - Attendance scope: check-in only; liveness/card images are transient request data and are not retained as permanent attendance photos
