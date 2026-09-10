@@ -798,3 +798,46 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 
 - An authenticated repository owner must push local `main` to `origin`; Vercel should then build the configured Production branch automatically.
 - After the Vercel deployment is ready, verify the Production page, OAuth return, authenticated profile request, and one normal application workflow while the workstation Backend and tunnel remain online.
+
+## 2026-09-10 — Production CORS Incident Revalidation
+
+- **Status:** Live Backend and current Production bundle are correctly configured; remaining failure is isolated to a stale browser/PWA client using the pre-fix JavaScript bundle.
+- **Actor:** Codex primary agent.
+- **Objective:** Revalidate the reported missing `Access-Control-Allow-Origin` response on the Production profile request after the Preview-to-Production promotion.
+
+### Files and components changed
+
+- Appended this diagnostic record to `log.md` only.
+- No Frontend source, Backend source, ignored runtime environment, Supabase setting, ngrok configuration, or database component required modification.
+
+### Implementation rationale
+
+- A standard browser request without the ngrok bypass header is intercepted at the ngrok edge and receives an HTML warning response before FastAPI can add CORS headers.
+- The currently published Production JavaScript contains both the current API origin and the scoped ngrok bypass header logic. The current Backend also permits the exact Production origin and bypass header.
+- Sanitized local tunnel inspection showed older Production preflights requesting only Authorization, while the current bundle's preflight requests Authorization plus the ngrok bypass header. This distinguishes a stale PWA client from a current server configuration error.
+
+### Security and privacy impact
+
+- Exact-origin CORS, credential-aware requests, Trusted Host enforcement, loopback Backend binding, and JWT validation remain unchanged.
+- No wildcard origin, authentication bypass, secret, raw authorization value, email address, profile payload, student record, private URL, image, or biometric data was introduced or logged.
+
+### Database and deployment impact
+
+- No Supabase Auth configuration, schema, row, RLS policy, Storage object, migration, or deployment setting was changed.
+- No new Vercel deployment or Docker recreation is required for the validated server-side configuration. A stale client must activate the already published service worker and hashed application bundle.
+
+### Verification performed
+
+- Confirmed local `main` and remote `main` point to the same promoted revision.
+- Confirmed Backend and OCR containers are healthy and the active tunnel forwards to the loopback Backend.
+- Confirmed the running Backend allowlist contains both exact Preview and Production origins.
+- Browser-equivalent Production preflight requesting Authorization and the ngrok bypass header returned HTTP 200 with the exact allow-origin response.
+- Browser-equivalent Production GET with the bypass header reached FastAPI and returned the expected JSON authentication boundary plus exact CORS headers; the same request without the bypass reproduced the ngrok HTML interstitial.
+- Confirmed the current Production HTML references the newest hashed JavaScript bundle and that bundle contains the scoped bypass logic and current API origin.
+- Reviewed the current Supabase Auth session documentation and changelog; no applicable hosted Auth breaking change explains this transport-level failure.
+
+### Remaining risks and handoff work
+
+- Close all tabs for the Production site, unregister its service worker or clear that site's cached data, reopen it, and sign in again so the current bundle controls the page.
+- If a fresh private window still fails, capture the failing request's `Access-Control-Request-Headers`, response status, and response content type without exposing the Authorization value; those fields will identify whether the request reached FastAPI or was intercepted at the tunnel edge.
+- Replace the free development tunnel with a stable Production ingress to remove dependence on provider-specific browser interstitial behavior.
