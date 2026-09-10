@@ -676,3 +676,86 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Push the reviewed `demo3.1` commit, wait for Vercel Preview to rebuild, then hard-refresh or use an incognito window and confirm an authenticated `/api/v1/auth/me` returns HTTP 200.
 - Keep the ngrok process running. If the assigned hostname changes, update the Docker Trusted Host and Vercel Preview API origin, recreate Backend, and redeploy Frontend.
 - For final Production, replace ngrok Free with a stable reviewed HTTPS ingress and omit this provider-specific bypass by configuring a non-ngrok API origin.
+
+## 2026-09-10 — Preview/Production CORS Origin Separation
+
+- **Status:** Docker Staging CORS corrected and verified for the branch Preview origin; the Production frontend origin is intentionally no longer accepted by the Staging API.
+- **Actor:** Codex primary agent.
+- **Objective:** Resolve repeated browser preflight failures after the active test site changed from the Production Vercel origin to the branch-specific `demo3.1` Preview origin.
+
+### Files and components changed
+
+- Updated the ignored workstation-only `deployment/docker/.env` so `STAGING_FRONTEND_ORIGINS` contains the exact branch Preview origin plus the two existing loopback development origins, replacing the Production Vercel origin.
+- Recreated only the Docker Staging Backend service to load the corrected environment. Application source, OCR, Supabase, and Vercel configuration were not modified.
+- Appended this record to `log.md` without recording the public Preview or tunnel URL.
+
+### Implementation rationale
+
+- Sanitized ngrok inspection showed the newly deployed Preview bundle requesting both Authorization and the ngrok warning-bypass header, proving the prior Frontend fix was deployed. Every Preview preflight returned HTTP 400 while Production-origin preflights returned HTTP 200.
+- The running Backend environment still named the Production origin. Replacing it with the exact Preview origin restores the intended `demo3.1` Staging boundary and prevents the Production frontend from calling the workstation Staging API.
+
+### Security and privacy impact
+
+- CORS remains exact-origin and credential-aware; no wildcard was added. Production-to-Staging cross-environment access was removed.
+- Trusted Host validation, loopback-only FastAPI binding, private OCR networking, ngrok warning-bypass scoping, and server-side Supabase JWT validation remain unchanged.
+- No credential, access token, email address, profile response, student record, private URL, image, or biometric value was written to source control or this log.
+
+### Database and deployment impact
+
+- No Supabase Auth setting, database schema, row, RLS policy, Storage object, migration, Frontend bundle, or Vercel deployment was changed.
+- The local Docker Staging Backend was recreated and returned to healthy status. The change is specific to the development workstation's ignored runtime configuration.
+
+### Verification performed
+
+- Public preflight from the exact `demo3.1` Preview origin requesting Authorization plus the ngrok bypass header returned HTTP 200 with the exact `Access-Control-Allow-Origin` value.
+- The same preflight from the Production Vercel origin returned HTTP 400 with no allow-origin header, confirming cross-environment isolation.
+- A browser-equivalent GET from the Preview origin with the ngrok bypass header reached FastAPI and returned the expected HTTP 401 JSON response with the exact CORS header when intentionally sent without a Bearer token.
+- Docker Backend returned to `healthy` after recreation.
+
+### Remaining risks and handoff work
+
+- Hard-refresh or use an incognito Preview session, then confirm the authenticated GET reaches `/api/v1/auth/me` and returns HTTP 200. Status 401, 403, or 503 after a successful preflight is an Auth/profile/database issue rather than CORS.
+- Add the exact branch Preview URL to Supabase Auth Redirect URLs while retaining the official Production Site URL; otherwise OAuth may still fall back to Production after Google login.
+- Keep ngrok running. If its hostname changes, update the Staging Trusted Host and Vercel Preview API origin, recreate Backend, and redeploy Frontend.
+
+## 2026-09-10 — Production Frontend Promotion Readiness
+
+- **Status:** Release candidate verified; the workstation API now accepts the exact Preview and Production frontend origins during the cutover.
+- **Actor:** Codex primary agent.
+- **Objective:** Prepare the accepted `demo3.1` Preview revision for promotion through the repository Production branch without reintroducing browser CORS failures.
+
+### Files and components changed
+
+- Updated the ignored workstation-only Docker environment so the Backend permits both exact Vercel Preview and Production origins during the release transition.
+- Recreated only the local Docker Staging Backend service to load the revised origin allowlist.
+- No application source, Supabase configuration, database object, or tracked deployment manifest was changed by this preparation step.
+
+### Implementation rationale
+
+- The repository Production branch was behind the accepted Preview branch by three commits, including SPA routing and the scoped ngrok browser-warning bypass.
+- Promoting the Frontend before allowing its exact Production origin at the Backend would cause the new live application to fail during CORS preflight. Retaining the exact Preview origin allows post-release comparison without enabling wildcard access.
+- The currently deployed Production Frontend bundle already references the intended workstation API endpoint, so the Vercel Production API-origin variable is present; the newer Frontend build is still required for the scoped ngrok bypass behavior.
+
+### Security and privacy impact
+
+- CORS remains limited to explicitly named HTTPS deployments and local development origins; wildcard origin matching was not enabled.
+- Trusted Host validation, loopback-only Backend binding, private OCR networking, credential-aware CORS, and server-side access-token validation remain unchanged.
+- No secret, token, email address, profile response, student record, biometric data, or deployment URL was written to this log.
+
+### Database and deployment impact
+
+- No Supabase Auth, database schema, row, RLS policy, Storage object, or migration was changed.
+- The local Backend container returned to healthy status and is reachable through the active tunnel. This remains a workstation-hosted Staging runtime, not an always-available Production-grade backend.
+- The Frontend release still requires the accepted Preview commit to reach the configured Vercel Production branch and a successful Vercel build.
+
+### Verification performed
+
+- Production-origin preflight through the public tunnel returned HTTP 200 with the exact `Access-Control-Allow-Origin`, credential allowance, required methods, Authorization header, and scoped ngrok bypass header.
+- The complete release verification passed under Node.js 24: 87 Backend tests, Python dependency checks, Frontend lint and contract/security tests, Vite/PWA Production build, zero npm audit findings for Frontend and OCR, OCR runtime diagnostics, face-model integrity checks, strict Frontend quality audit, and `git diff --check`.
+- The Backend and OCR containers are healthy after the Backend recreation.
+
+### Remaining risks and handoff work
+
+- Push or merge the accepted Preview branch into the configured Production branch, wait for the Vercel Production deployment, then verify the live page, Google OAuth return, authenticated profile load, and an application workflow.
+- The computer, Docker daemon, Backend container, OCR container, and ngrok agent must all be running for the public API to work. A powered-off computer cannot serve requests.
+- Configure ngrok and Docker for boot-time startup if this workstation will remain the temporary ingress. For durable Production availability, migrate the API to an always-on host with a stable reviewed HTTPS domain and monitoring.
