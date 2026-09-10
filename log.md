@@ -496,3 +496,56 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Provision the actual API hostname, trusted certificate, firewall/router policy, root-owned environment files, pinned model files, UPS, external alerting, and backup/restore process, then run the documented CORS/OAuth/TLS/device matrix.
 - Run 30/40-user full-resolution attendance bursts and a one- to two-hour soak across the real Internet uplink. Record CPU, RAM, upload bandwidth, queue time, p95 latency, error rate, restart recovery, and rollback evidence before declaring Production capacity.
 - The current repository worktree contains the existing uncommitted project changes. Independent review and a clean commit are still required before the release builder will create a Production-marked bundle.
+
+## 2026-09-10 — Docker Staging Runtime on the Development Workstation
+
+- **Status:** Local Docker Staging implementation completed and running. No public tunnel, Frontend cloud deployment, DNS, Supabase migration, or Production data was changed.
+- **Actor:** Codex primary agent.
+- **Objective:** Provide a repeatable pre-Production environment for branch `demo3.1` in which FastAPI and Light OCR run as isolated Docker services on the development workstation, while remaining ready for a Vercel/Netlify Preview Frontend through an explicitly configured HTTPS tunnel.
+
+### Files and components changed
+
+- Added `backend/Dockerfile` with a Python 3.12 multi-stage CPU runtime, a non-root service user, one Uvicorn worker, required OpenCV runtime libraries, and a liveness health check.
+- Added `backend/.dockerignore` so local environments, tests, alternate requirement snapshots, bytecode, and secrets are excluded from the image context.
+- Added `ocr-service/Dockerfile` with Node.js 22 on Debian Trixie, a non-root service user, production-only dependencies, and a native-engine health check.
+- Added `ocr-service/.dockerignore` so the local environment, host `node_modules`, tests, and logs are excluded from the image context.
+- Added `deployment/docker/compose.staging.yml`, a non-secret machine configuration template, an ignored local machine configuration, and `deployment/docker/README_TH.md` with build, local test, ngrok, Preview environment, shutdown, and acceptance instructions.
+
+### Implementation rationale
+
+- FastAPI is published only on `127.0.0.1:8000`; Light OCR is exposed only to the private Compose network. A future ngrok process can provide the HTTPS boundary required by a cloud-hosted Preview without exposing the OCR service or binding Docker directly to the LAN.
+- Backend and OCR retain separate environment files so Supabase server credentials are never injected into the OCR container. Compose overrides only runtime topology and Staging origin/host settings.
+- The host's pinned InsightFace model directory is bind-mounted read-only. Model artifacts are not copied into the image or repository.
+- Conservative CPU and memory ceilings reflect the four-core, approximately 8-GB development workstation. The FastAPI worker count remains one to avoid duplicating face models.
+- The initial OCR image used Debian Bookworm and failed safely because the verified Light OCR addon requires `GLIBC_2.38`; switching only the OCR base to Debian Trixie supplied a compatible glibc and the native runtime then initialized successfully.
+
+### Security and privacy impact
+
+- Both application containers drop Linux capabilities and enable `no-new-privileges`; both application processes run as non-root users.
+- Neither built image contains its source `.env` file. OCR receives no Supabase configuration, OCR raw-text output remains disabled, untrusted HTTP Host values are rejected, and the current CORS allowlist contains only local development origins.
+- No public tunnel was opened because an exact Frontend Preview origin is not yet available. Before opening one, the operator must add the exact Preview origin and assigned tunnel hostname to the ignored Docker configuration and recreate Backend.
+- No secret value, access token, database record, OCR output, image, face embedding, or personal identifier was written to Dockerfiles, documentation, Git, or this log.
+
+### Database and deployment impact
+
+- The containers use the already configured Supabase environment; no schema, row, RLS policy, Auth setting, Storage object, or migration history was mutated.
+- The local Staging stack is currently running as Compose project `attendance-demo31-staging`. FastAPI is available only at loopback port 8000, and OCR has no published host port.
+- This setup is intentionally Staging, not the final Production release. Production still requires separate secrets, reviewed Supabase migrations, stable DNS/TLS, monitoring, backup/restore, tested rollback, and the existing release gates.
+
+### Verification performed
+
+- Docker Engine 29.5.3 and Docker Compose 5.1.4 were detected on the workstation.
+- Compose configuration validation passed; both service images built successfully. The resulting local images were approximately 1.52 GB for Backend and 554 MB for OCR.
+- All three pinned `buffalo_s` model files passed their repository SHA-256 checks before startup.
+- The OCR container initialized Light OCR 0.5.7 with the Linux x64 native runtime and reported native status `ok`; its production dependency installation reported zero vulnerabilities.
+- The Backend loaded the expected detection, recognition, and 3D-landmark ONNX models through `CPUExecutionProvider` and started one Uvicorn worker.
+- Both containers reached Docker `healthy`. `/health/live` returned HTTP 200, and `/health/ready` returned HTTP 200 with database, OCR, and face dependencies ready.
+- A local CORS preflight returned the exact allowed origin, an untrusted Host request returned HTTP 400, Python dependency consistency passed, and direct checks confirmed that neither runtime image contains `/app/.env`.
+- Docker Compose configuration parsing and `git diff --check` passed.
+
+### Remaining risks and handoff work
+
+- Deploy the Frontend Preview, put its exact HTTPS origin in `STAGING_FRONTEND_ORIGINS`, start ngrok, add the assigned ngrok hostname to `STAGING_TRUSTED_HOSTS`, recreate Backend, set the Preview `VITE_API_ORIGIN`, and redeploy the Preview build.
+- Use a stable/reserved tunnel hostname when possible. A random hostname changes across ngrok sessions and requires Backend Trusted Host plus Frontend rebuild updates.
+- The current local Backend environment is a development-origin configuration reused by the Staging container. Before Internet exposure, add independent Staging liveness and temporary-admin secrets and verify that the connected Supabase project is the approved Staging project rather than Production.
+- Run authenticated real-device role, QR, OCR, face, Liveness, NFC, upload, export, restart, burst, and soak tests before any Production promotion.

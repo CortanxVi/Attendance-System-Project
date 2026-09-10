@@ -1,0 +1,8 @@
+.env
+.venv
+.venv-windows
+__pycache__
+*.py[cod]
+tests
+req_clean.txt
+req_fixed*.txt
