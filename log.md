@@ -759,3 +759,42 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Push or merge the accepted Preview branch into the configured Production branch, wait for the Vercel Production deployment, then verify the live page, Google OAuth return, authenticated profile load, and an application workflow.
 - The computer, Docker daemon, Backend container, OCR container, and ngrok agent must all be running for the public API to work. A powered-off computer cannot serve requests.
 - Configure ngrok and Docker for boot-time startup if this workstation will remain the temporary ingress. For durable Production availability, migrate the API to an always-on host with a stable reviewed HTTPS domain and monitoring.
+
+## 2026-09-10 — Production Branch Merge and Remote Authentication Blocker
+
+- **Status:** Local Production merge completed; remote publication is blocked only by missing GitHub credentials in the Codex shell.
+- **Actor:** Codex primary agent.
+- **Objective:** Promote the verified `demo3.1` release candidate into the repository branch tracked by Vercel Production.
+
+### Files and components changed
+
+- Committed the accumulated deployment verification records on `demo3.1`.
+- Merged `demo3.1` into the local `main` branch with a dedicated non-fast-forward Production promotion commit.
+- No additional runtime code, secret, Supabase setting, database object, or workstation service was changed during the merge.
+
+### Implementation rationale
+
+- Keeping `demo3.1` as the Preview branch and `main` as the Production branch preserves the reviewed promotion workflow and matches the connected hosting provider's branch model.
+- A merge commit gives the release a clear audit and rollback boundary while retaining the tested Preview history.
+
+### Security and privacy impact
+
+- The merge contains the previously verified exact-origin CORS rules and narrowly scoped ngrok interstitial bypass; it does not add wildcard cross-origin access.
+- No credential was generated, requested, persisted, or printed. The failed HTTPS push stopped before remote mutation because no interactive GitHub credential was available.
+- No token, user data, private URL, student record, image, or biometric value was added to this log.
+
+### Database and deployment impact
+
+- No Supabase Auth, database schema, row, RLS policy, Storage object, or migration was changed.
+- The local `main` branch now contains the accepted Preview revision, but Vercel Production has not rebuilt because the remote `main` branch has not yet received the merge.
+
+### Verification performed
+
+- Fetched the latest remote refs immediately before merging and confirmed the local Production branch started from the current remote Production tip.
+- The merge completed without conflicts and the worktree remained clean before this log append.
+- The GitHub HTTPS push was attempted and failed with a missing-credentials error; no partial remote update occurred.
+
+### Remaining risks and handoff work
+
+- An authenticated repository owner must push local `main` to `origin`; Vercel should then build the configured Production branch automatically.
+- After the Vercel deployment is ready, verify the Production page, OAuth return, authenticated profile request, and one normal application workflow while the workstation Backend and tunnel remain online.
