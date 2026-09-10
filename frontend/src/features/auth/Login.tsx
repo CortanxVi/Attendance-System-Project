@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
+import { apiErrorMessage } from '../../services/apiError';
 
 export default function Login() {
   const [loading, setLoading] = useState<boolean>(false);
@@ -18,21 +19,21 @@ export default function Login() {
           queryParams: {
             prompt: 'select_account',
           },
-          // หลังล็อกอินสำเร็จให้เด้งกลับมาที่หน้าเว็บหลักของเรา
+          // หลังล็อกอินสำเร็จให้เด้งกลับมาที่หน้าเว็บหลัก
           redirectTo: window.location.origin,
         },
       });
 
       if (error) throw error;
-    } catch (error: any) {
-      setErrorMessage(error.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อกับ Google');
+    } catch (error: unknown) {
+      setErrorMessage(apiErrorMessage(error, 'เกิดข้อผิดพลาดในการเชื่อมต่อกับ Google'));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4">
+    <div className="flex min-h-svh flex-col items-center justify-center bg-gray-50 px-4 py-6">
       <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-2xl shadow-xl border border-gray-100 text-center">
         <div>
           {/* ส่วนหัวข้อและโลโก้จำลอง */}

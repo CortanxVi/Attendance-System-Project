@@ -1,7 +1,6 @@
 // src/components/layout/StudentLayout.tsx
-import React from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Home, History, User } from 'lucide-react'; // ใช้ไอคอนจาก lucide-react
+import { BookOpen, Home, History, User } from 'lucide-react'; // ใช้ไอคอนจาก lucide-react
 
 export default function StudentLayout() {
   const navigate = useNavigate();
@@ -10,34 +9,39 @@ export default function StudentLayout() {
   const navItems = [
     { name: 'หน้าหลัก', path: '/student', icon: Home },
     { name: 'ประวัติ', path: '/student/history', icon: History },
+    { name: 'รายวิชา', path: '/student/courses', icon: BookOpen },
     { name: 'โปรไฟล์', path: '/student/profile', icon: User },
   ];
 
   return (
-    // จำกัดความกว้างสูงสุดเพื่อให้ดูเหมือนแอปมือถือแม้เปิดบน PC
-    <div className="min-h-screen bg-gray-50 flex justify-center">
-      <div className="w-full max-w-md bg-white min-h-screen shadow-lg flex flex-col relative">
+    // Mobile-only shell: ใช้ความสูง visual viewport และให้ main เป็น scroll owner เพียงจุดเดียว
+    <div className="student-app-viewport">
+      <div className="student-app-shell">
         
         {/* พื้นที่สำหรับแสดงเนื้อหาหน้าต่างๆ (เช่น กล้อง, ประวัติ) */}
-        <main className="flex-1 overflow-y-auto pb-20">
+        <main id="student-scroll-region" className="student-content-scroll" tabIndex={-1}>
           <Outlet /> 
         </main>
 
         {/* แถบเมนูด้านล่าง (Bottom Navigation) */}
-        <nav className="absolute bottom-0 w-full bg-white border-t border-gray-200 flex justify-around p-3 z-50 rounded-t-xl shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+        <nav aria-label="เมนูหลักของนักศึกษา" className="student-bottom-nav z-50 flex w-full justify-around border-t border-gray-200 bg-white shadow-[0_-4px_10px_-4px_rgba(15,23,42,0.12)]">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const isActive = item.path === '/student/profile'
+              ? ['/student/profile', '/student/register', '/student/requests'].includes(location.pathname)
+              : location.pathname === item.path;
             return (
               <button
+                type="button"
                 key={item.name}
                 onClick={() => navigate(item.path)}
-                className={`flex flex-col items-center p-2 rounded-lg transition-colors cursor-pointer ${
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex min-h-14 min-w-0 flex-1 cursor-pointer flex-col items-center justify-center rounded-xl px-1.5 py-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 ${
                   isActive ? 'text-orange-500' : 'text-gray-400 hover:text-gray-600'
                 }`}
               >
-                <Icon size={24} className={isActive ? 'mb-1' : 'mb-1 opacity-80'} />
-                <span className="text-[10px] font-medium">{item.name}</span>
+                <Icon aria-hidden="true" size={22} className={isActive ? 'mb-1' : 'mb-1 opacity-80'} />
+                <span className="max-w-full truncate text-[11px] font-semibold leading-none">{item.name}</span>
               </button>
             );
           })}

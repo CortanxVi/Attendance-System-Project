@@ -1,0 +1,146 @@
+import { useCallback, useState, useEffect, useRef } from 'react';
+import { X, CreditCard } from 'lucide-react';
+import axios from 'axios';
+import { useNotification } from '../../components/notifications/notificationContext';
+import { apiErrorMessage } from '../../services/apiError';
+
+interface NFCManagerProps {
+  defaultCourseCode: string;
+  activeSessionId: string;
+  onClose: () => void;
+}
+
+interface NfcCheckIn { student_id: string; full_name?: string; status?: string }
+
+export default function NFCManager({ defaultCourseCode, activeSessionId, onClose }: NFCManagerProps) {
+  const { notify } = useNotification();
+  const [scanUid, setScanUid] = useState('');
+  const [statusMessage, setStatusMessage] = useState({ text: '🔴 กำลังรอการสแกนบัตร...', type: 'info' });
+  const [latestCheckIns, setLatestCheckIns] = useState<NfcCheckIn[]>([]);
+  const rfidInputRef = useRef<HTMLInputElement>(null); // เก็บการเรียกใช้ DOM Element
+
+  const focusInput = useCallback(() => {
+    rfidInputRef.current?.focus();
+  }, []);
+
+  // บังคับให้ Cursor โฟกัสที่ช่อง Input ตลอดเวลาเพื่อรอรับค่าจากเครื่องสแกน
+  useEffect(() => {
+    focusInput();
+    const interval = setInterval(focusInput, 1000);
+    return () => clearInterval(interval);
+  }, [focusInput]);
+
+  // ฟังก์ชันจังหวะที่เครื่องสแกนยิงรหัส UID เข้ามา (กด Enter อัตโนมัติ)
+  const handleCardScanned = async (e: React.FormEvent) => {
+    e.preventDefault(); // ป้องกัน form reload หน้าเพจ กำกับไว้เพื่อให้ React จัดการเอง
+    const currentUid = scanUid.trim();
+    if (!currentUid) return;
+
+    if (currentUid.length !== 10) {
+      setStatusMessage({ text: '❌ รหัสบัตรไม่ถูกต้อง (ต้องมี 10 หลัก)', type: 'error' });
+      setScanUid('');
+      return;
+    }
+
+    try {
+      setStatusMessage({ text: '⌛ กำลังตรวจสอบข้อมูลบัตร...', type: 'loading' });
+      
+      // 🌟 ยิง API ไปที่หลังบ้านเพื่อทำการเช็คชื่อด้วย NFC UID
+      const response = await axios.post('/api/v1/nfc/checkin', {
+        nfc_uid: currentUid,
+        session_id: activeSessionId
+      });
+
+      if (response.data.status === 'success') {
+        const receiveInfo = response.data.student_info as NfcCheckIn;
+        setStatusMessage({ 
+          text: `✅ เช็คชื่อสำเร็จ: รหัสนักศึกษา ${receiveInfo.student_id} (${response.data.status})`, 
+          type: 'success' 
+        });
+        notify(`${receiveInfo.full_name || receiveInfo.student_id} เช็คชื่อสำเร็จด้วยวิธีแตะบัตร NFC`, 'success');
+        
+        // เพิ่มรายชื่อนักศึกษาที่เพิ่งสแกนเข้าไปในรายการแสดงผลหน้าจอ
+        setLatestCheckIns(prev => [receiveInfo, ...prev].slice(0, 5));
+      }
+    } catch (error: unknown) {
+      setStatusMessage({ 
+        text: `❌ ${apiErrorMessage(error, 'เกิดข้อผิดพลาดในการเช็คชื่อ')}`,
+        type: 'error' 
+      });
+    } finally {
+      setScanUid(''); // เคลียร์ช่องอินพุตเพื่อรอรับบัตรใบถัดไปทันที
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-2 backdrop-blur-sm sm:p-4">
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-xl flex-col overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
+        
+        {/* ส่วนหัว */}
+        <div className="flex items-start justify-between gap-3 border-b border-gray-100 bg-gray-50 p-4 sm:items-center sm:p-6">
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold text-gray-900 sm:text-xl">🎛️ โหมดเครื่องสแกนบัตร NFC</h3>
+            <p className="text-sm text-gray-500 mt-0.5">วิชา: <span className="font-semibold text-blue-600">{defaultCourseCode}</span></p>
+          </div>
+          <button type="button" aria-label="ปิดโหมดเครื่องสแกนบัตร NFC" onClick={onClose} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
+            <X size={24} />
+          </button>
+        </div>
+
+        {/* ส่วนเนื้อหาหลัก */}
+        <div className="flex min-h-0 flex-1 flex-col items-center space-y-5 overflow-y-auto p-4 sm:space-y-6 sm:p-8">
+          
+          {/* แอนิเมชันไอคอนรอสแกน */}
+          <div className={`p-6 rounded-full bg-blue-50 text-blue-600 animate-pulse`}>
+            <CreditCard size={64} />
+          </div>
+
+          <div className="text-center">
+            <h4 className="text-lg font-bold text-gray-800">กรุณานำบัตรนักศึกษาแตะที่เครื่องสแกน</h4>
+            <p className="text-sm text-gray-400 mt-1">ระบบกำลังเปิดรับข้อมูลอย่างต่อเนื่อง...</p>
+          </div>
+
+          {/* ซ่อนช่องรับค่า Input นี้ไว้เบื้องหลัง (แต่โฟกัสไว้) เพื่อรับค่าจากเครื่องสแกนคีย์บอร์ดจำลอง */}
+          <form onSubmit={handleCardScanned} noValidate className="opacity-0 absolute"> {/* opacity-0 absolute Hidden Auto-focus Input ซ่อนกล่องข้อความ */ }
+            <input
+              ref={rfidInputRef}
+              type="text"
+              value={scanUid}
+              onChange={(e) => setScanUid(e.target.value)}
+              placeholder="NFC Waiting..."
+              autoComplete="off"
+            />
+          </form>
+
+          {/* กล่องข้อความแจ้งสถานะการแตะบัตรล่าสุด */}
+          <div className={`w-full p-4 rounded-2xl text-center font-semibold text-sm transition-all border ${
+            statusMessage.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' :
+            statusMessage.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
+            statusMessage.type === 'loading' ? 'bg-yellow-50 border-yellow-200 text-yellow-700' :
+            'bg-slate-50 border-slate-200 text-slate-600'
+          }`}>
+            {statusMessage.text}
+          </div>
+
+          {/* สรุปรายชื่อผู้เข้าเรียนล่าสุด 5 คน (Real-time Feedback บนจอ) */}
+          {latestCheckIns.length > 0 && (
+            <div className="w-full pt-4 border-t border-gray-100">
+              <h5 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">ผู้ที่เพิ่งสแกนล่าสุด</h5>
+              <div className="space-y-2">
+                {latestCheckIns.map((student, idx) => (
+                  <div key={idx} className="flex justify-between items-center bg-gray-50 p-3 rounded-xl border border-gray-100">
+                    <span className="font-medium text-gray-800">{student.student_id}</span>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-green-100 text-green-700 uppercase">
+                      {student.status || 'Present'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
