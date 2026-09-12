@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { ClipboardList, Clock } from "lucide-react";
+import { ClipboardList, Clock, Search, X } from "lucide-react";
 
 interface AuditLog {
   id: string;
@@ -15,6 +15,7 @@ interface AuditLog {
 export default function SystemLogs() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -70,6 +71,19 @@ export default function SystemLogs() {
     );
   };
 
+  const filteredLogs = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("th-TH");
+    if (!normalized) return logs;
+    return logs.filter((log) => [
+      log.action,
+      log.target_type,
+      log.target_id,
+      log.profiles?.full_name,
+      typeof log.details === "string" ? log.details : JSON.stringify(log.details ?? {}),
+      formatDate(log.created_at),
+    ].some((value) => value?.toLocaleLowerCase("th-TH").includes(normalized)));
+  }, [logs, query]);
+
   return (
     <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
       <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
@@ -83,6 +97,13 @@ export default function SystemLogs() {
         >
           รีเฟรชข้อมูล
         </button>
+      </div>
+
+      <div className="relative mb-5 max-w-xl">
+        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={19} />
+        <label htmlFor="admin-log-search" className="sr-only">ค้นหาประวัติการใช้งานระบบ</label>
+        <input id="admin-log-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหาผู้ดำเนินการ การกระทำ หรือเป้าหมาย" className="min-h-11 w-full rounded-xl border border-slate-300 bg-white py-2 pl-10 pr-11 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" />
+        {query && <button type="button" onClick={() => setQuery("")} aria-label="ล้างคำค้นหา" className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-red-300"><X size={17} /></button>}
       </div>
 
       {loading ? (
@@ -110,7 +131,7 @@ export default function SystemLogs() {
               </tr>
             </thead>
             <tbody className="text-sm text-gray-700">
-              {logs.map((log) => (
+              {filteredLogs.map((log) => (
                 <tr
                   key={log.id}
                   className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
@@ -140,10 +161,10 @@ export default function SystemLogs() {
                   </td>
                 </tr>
               ))}
-              {logs.length === 0 && (
+              {filteredLogs.length === 0 && (
                 <tr>
                   <td colSpan={5} className="text-center py-8 text-gray-500">
-                    ยังไม่มีประวัติการทำงานของแอดมิน
+                    {logs.length ? "ไม่พบ Log ที่ตรงกับคำค้นหา" : "ยังไม่มีประวัติการทำงานของแอดมิน"}
                   </td>
                 </tr>
               )}

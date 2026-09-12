@@ -1,10 +1,14 @@
 // src/components/layout/StudentLayout.tsx
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { BookOpen, Home, History, User } from 'lucide-react'; // ใช้ไอคอนจาก lucide-react
+import AppBackButton from '../navigation/AppBackButton';
+import PullToRefreshIndicator from './PullToRefreshIndicator';
+import { usePullToRefresh } from './usePullToRefresh';
 
 export default function StudentLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { containerRef, pullDistance, refreshing, threshold } = usePullToRefresh<HTMLElement>();
 
   const navItems = [
     { name: 'หน้าหลัก', path: '/student', icon: Home },
@@ -12,14 +16,26 @@ export default function StudentLayout() {
     { name: 'รายวิชา', path: '/student/courses', icon: BookOpen },
     { name: 'โปรไฟล์', path: '/student/profile', icon: User },
   ];
+  const currentPageName = location.pathname.startsWith('/student/history/')
+    ? 'รายละเอียดรายวิชา'
+    : location.pathname === '/student/register'
+      ? 'ลงทะเบียนใบหน้า'
+      : location.pathname === '/student/requests'
+        ? 'คำร้องถึงอาจารย์'
+        : navItems.find((item) => item.path === location.pathname)?.name || 'ระบบนักศึกษา';
 
   return (
     // Mobile-only shell: ใช้ความสูง visual viewport และให้ main เป็น scroll owner เพียงจุดเดียว
     <div className="student-app-viewport">
       <div className="student-app-shell">
+        <header className="student-top-bar">
+          <AppBackButton fallbackPath="/student" />
+          <h1 className="min-w-0 flex-1 truncate pr-11 text-center text-sm font-bold text-slate-800">{currentPageName}</h1>
+        </header>
         
         {/* พื้นที่สำหรับแสดงเนื้อหาหน้าต่างๆ (เช่น กล้อง, ประวัติ) */}
-        <main id="student-scroll-region" className="student-content-scroll" tabIndex={-1}>
+        <main ref={containerRef} id="student-scroll-region" className="student-content-scroll" tabIndex={-1}>
+          <PullToRefreshIndicator distance={pullDistance} refreshing={refreshing} threshold={threshold} />
           <Outlet /> 
         </main>
 

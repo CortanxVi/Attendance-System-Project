@@ -3,7 +3,6 @@ import axios from 'axios';
 import { Scanner, type IDetectedBarcode } from '@yudiel/react-qr-scanner';
 import { CheckCircle, XCircle, Camera } from 'lucide-react';
 import { apiErrorMessage } from '../../services/apiError';
-import type { LivenessAction } from '../../utils/liveness';
 
 // 🌟 ข้อมูลที่ต้องส่งกลับไปให้ StudentHome หลังสแกน QR ผ่าน (เปลี่ยนจากเดิมที่ส่งแค่ชื่อวิชาเป็น string เฉยๆ)
 export interface VerifiedSessionInfo {
@@ -14,9 +13,8 @@ export interface VerifiedSessionInfo {
   challengeExpiresAt: string;
   challengeTtlSeconds: number;
   livenessToken: string;
-  livenessActions: LivenessAction[];
-  livenessRequiredBlinks: number;
-  livenessPromptDelayMs: number;
+  livenessMode: 'passive';
+  livenessSampleCount: 3;
 }
 
 export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info: VerifiedSessionInfo) => void }) {
@@ -65,9 +63,8 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
         challenge_ttl_seconds,
         liveness_protocol_version,
         liveness_token,
-        liveness_actions,
-        liveness_required_blinks,
-        liveness_prompt_delay_ms,
+        liveness_mode,
+        liveness_sample_count,
       } = res.data;
       if (
         typeof challenge_id !== 'string'
@@ -75,16 +72,10 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
         || !Number.isInteger(challenge_ttl_seconds)
         || challenge_ttl_seconds < 60
         || challenge_ttl_seconds > 600
-        || liveness_protocol_version !== 2
+        || liveness_protocol_version !== 3
         || typeof liveness_token !== 'string'
-        || !Array.isArray(liveness_actions)
-        || liveness_actions.length !== 2
-        || liveness_actions[0] !== 'move_closer'
-        || liveness_actions[1] !== 'blink'
-        || ![1, 2].includes(liveness_required_blinks)
-        || !Number.isInteger(liveness_prompt_delay_ms)
-        || liveness_prompt_delay_ms < 400
-        || liveness_prompt_delay_ms > 1_000
+        || liveness_mode !== 'passive'
+        || liveness_sample_count !== 3
       ) {
         throw new Error('ข้อมูล challenge สำหรับตรวจสอบใบหน้าไม่ครบ');
       }
@@ -101,9 +92,8 @@ export default function QRScanner({ onVerifySuccess }: { onVerifySuccess: (info:
           challengeExpiresAt: challenge_expires_at,
           challengeTtlSeconds: challenge_ttl_seconds,
           livenessToken: liveness_token,
-          livenessActions: liveness_actions as LivenessAction[],
-          livenessRequiredBlinks: liveness_required_blinks,
-          livenessPromptDelayMs: liveness_prompt_delay_ms,
+          livenessMode: liveness_mode,
+          livenessSampleCount: liveness_sample_count,
         });
       }, 1500); // ดีเลย์ให้เห็นเครื่องหมายถูก 1.5 วินาที แล้วค่อยเปลี่ยนหน้า
 

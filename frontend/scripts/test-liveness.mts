@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { LivenessTracker, type LivenessObservation } from '../src/utils/liveness.ts';
 
 function observation(timestampMs: number, overrides: Partial<LivenessObservation> = {}): LivenessObservation {
@@ -179,4 +180,16 @@ for (let frame = 1; frame <= 9; frame += 1) {
 const resetStep = faceLoss.add(observation(timestamp + 600));
 assert.equal(resetStep.progress, 0.10);
 
-console.log('Liveness v2 tracker: normal and variable-FPS cameras pass; static, nod, wink, and face loss do not.');
+const scannerSource = readFileSync(new URL('../src/features/student/LivenessScanner.tsx', import.meta.url), 'utf8');
+const attendanceSource = readFileSync(new URL('../src/features/student/StudentHome.tsx', import.meta.url), 'utf8');
+const apiSource = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
+
+assert.match(scannerSource, /mirrored=\{mirrorPreview\}/);
+assert.match(scannerSource, /passiveImageSrcs/);
+assert.doesNotMatch(scannerSource, /actions=\{/);
+assert.doesNotMatch(attendanceSource, /idCardImage|id_card_image/);
+assert.doesNotMatch(apiSource, /formData\.append\(['"]id_card_image/);
+
+console.log(
+  'Passive scanner contract passes (three frames, mirrored front preview, no attendance card upload); legacy active tracker regressions also pass.',
+);

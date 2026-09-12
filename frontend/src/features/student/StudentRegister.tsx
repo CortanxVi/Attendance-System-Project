@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Camera, CheckCircle, Loader2, RotateCw, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Camera, CheckCircle, ImageUp, Loader2, RotateCw, ShieldCheck } from 'lucide-react';
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import { base64ToFile, prepareStudentCardImage } from '../../utils/imageUtils';
 import { faceService, type EnrollmentLivenessChallenge } from '../../services/api';
@@ -41,6 +41,9 @@ export default function StudentRegister() {
     setErrorMsg('');
     try {
       const nextChallenge = await faceService.createEnrollmentLivenessChallenge(card);
+      if (nextChallenge.liveness_protocol_version !== 3 || nextChallenge.liveness_mode !== 'passive' || nextChallenge.liveness_sample_count !== 3) {
+        throw new Error('Backend ยังไม่รองรับ Passive Liveness รุ่นปัจจุบัน กรุณาอัปเดต Backend');
+      }
       setStudentId(nextChallenge.student_id);
       setChallenge(nextChallenge);
       setPhase('liveness');
@@ -81,16 +84,7 @@ export default function StudentRegister() {
         challenge.challenge_id,
         challenge.liveness_token,
         {
-          faceImage: base64ToFile(capture.faceImageSrc, 'enrollment_final.jpg'),
-          baselineImage: base64ToFile(capture.baselineImageSrc, 'enrollment_baseline.jpg'),
-          nearImage: base64ToFile(capture.nearImageSrc, 'enrollment_near.jpg'),
-          returnImage: base64ToFile(capture.returnImageSrc, 'enrollment_return.jpg'),
-          blinkClosedImages: capture.blinkClosedImageSrcs.map((image, index) => (
-            base64ToFile(image, `enrollment_blink_closed_${index + 1}.jpg`)
-          )),
-          blinkOpenImages: capture.blinkOpenImageSrcs.map((image, index) => (
-            base64ToFile(image, `enrollment_blink_open_${index + 1}.jpg`)
-          )),
+          passiveImages: capture.passiveImageSrcs.map((image, index) => base64ToFile(image, `enrollment_passive_${index + 1}.jpg`)) as [File, File, File],
           evidence: capture.evidence,
         },
       );
@@ -109,7 +103,7 @@ export default function StudentRegister() {
     <main className="mx-3 my-3 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm min-[390px]:mx-4 min-[390px]:p-5">
       <header className="mb-6 text-center">
         <h1 className="text-2xl font-bold text-gray-800">ลงทะเบียนใบหน้า</h1>
-        <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วทำ Liveness กับบุคคลจริงก่อนบันทึกใบหน้า</p>
+        <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าแบบ Passive ก่อนบันทึก</p>
       </header>
 
       {errorMsg && (
@@ -149,11 +143,10 @@ export default function StudentRegister() {
             <p id="registration-card-help" className="mt-1 text-sm text-gray-500">รองรับ JPEG/PNG ระบบจะตรวจว่ารหัสบนบัตรตรงกับบัญชี</p>
           </div>
 
-          <label className={`relative flex min-h-36 w-full flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-4 focus-within:ring-2 focus-within:ring-orange-600 ${ocrLoading ? 'cursor-wait border-gray-300 bg-gray-50' : 'cursor-pointer border-orange-300 bg-orange-50 hover:bg-orange-100'}`}>
-            {ocrLoading ? <Loader2 className="animate-spin text-orange-600" size={32} aria-hidden="true" /> : <Camera className="text-orange-600" size={32} aria-hidden="true" />}
-            <span role="status" className="font-semibold text-orange-800">{ocrLoading ? 'กำลังตรวจบัตรด้วย Light OCR...' : 'ถ่ายรูปบัตร / เลือกไฟล์ภาพ'}</span>
-            <input type="file" accept="image/jpeg,image/png" capture="environment" onChange={handleIdCardUpload} disabled={ocrLoading} aria-describedby="registration-card-help registration-error" aria-invalid={Boolean(errorMsg)} className="sr-only" />
-          </label>
+          {ocrLoading ? <div role="status" className="flex min-h-28 items-center justify-center gap-3 rounded-xl border border-orange-200 bg-orange-50 text-sm font-semibold text-orange-800"><Loader2 className="animate-spin" />กำลังตรวจบัตรด้วย Light OCR...</div> : <div className="grid grid-cols-2 gap-3">
+            <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-orange-300 bg-orange-50 p-3 text-center text-sm font-bold text-orange-800 hover:bg-orange-100 focus-within:ring-2 focus-within:ring-orange-500"><Camera aria-hidden="true" /><span>ถ่ายรูปบัตร</span><input type="file" accept="image/jpeg,image/png" capture="environment" onChange={handleIdCardUpload} aria-describedby="registration-card-help registration-error" className="sr-only" /></label>
+            <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white p-3 text-center text-sm font-bold text-slate-700 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-orange-500"><ImageUp aria-hidden="true" /><span>เลือกรูปจากเครื่อง</span><input type="file" accept="image/jpeg,image/png" onChange={handleIdCardUpload} aria-describedby="registration-card-help registration-error" className="sr-only" /></label>
+          </div>}
         </section>
       )}
 
@@ -163,20 +156,15 @@ export default function StudentRegister() {
             <span className="flex items-center gap-2 font-semibold"><CheckCircle size={18} aria-hidden="true" />ยืนยันรหัส {studentId} แล้ว</span>
             <span className="text-xs">สิทธิ์ถึง {new Date(challenge.challenge_expires_at).toLocaleTimeString('th-TH')}</span>
           </div>
-          <h2 className="text-center text-lg font-bold text-gray-800">2. ตรวจ Liveness ก่อนบันทึกใบหน้า</h2>
-          <LivenessScanner
-            actions={challenge.liveness_actions}
-            requiredBlinks={challenge.liveness_required_blinks}
-            promptDelayMs={challenge.liveness_prompt_delay_ms}
-            onCaptureSuccess={(capture) => void handleLivenessCapture(capture)}
-          />
+          <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าแบบ Passive</h2>
+          <LivenessScanner onCaptureSuccess={(capture) => void handleLivenessCapture(capture)} />
         </section>
       )}
 
       {(phase === 'challenge' || phase === 'saving') && (
         <section role="status" className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-6 text-center text-blue-900">
           <Loader2 className="mb-4 animate-spin motion-reduce:animate-none" size={42} aria-hidden="true" />
-          <p className="font-bold">{phase === 'saving' ? 'กำลังตรวจหลักฐานและบันทึกใบหน้า...' : 'กำลังสร้างสิทธิ์ Liveness แบบใช้ครั้งเดียว...'}</p>
+          <p className="font-bold">{phase === 'saving' ? 'กำลังตรวจหลักฐานและบันทึกใบหน้า...' : 'กำลังสร้างสิทธิ์สแกนใบหน้าแบบใช้ครั้งเดียว...'}</p>
           <p className="mt-2 text-sm text-blue-700">อย่าปิดหน้านี้จนกว่าระบบจะแสดงผล</p>
         </section>
       )}
@@ -184,9 +172,9 @@ export default function StudentRegister() {
       {phase === 'retry' && (
         <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
           <p className="font-semibold text-amber-900">รหัสนักศึกษา {studentId || 'ยังไม่พร้อม'} ผ่านการตรวจบัตรแล้ว</p>
-          <p className="mt-2 text-sm text-amber-800">สร้าง challenge ใหม่แล้วทำ Liveness อีกครั้ง โดยไม่ต้องอัปโหลดบัตรซ้ำ</p>
+          <p className="mt-2 text-sm text-amber-800">สร้างสิทธิ์ใหม่แล้วสแกนใบหน้าอีกครั้ง โดยไม่ต้องอัปโหลดบัตรซ้ำ</p>
           <button type="button" onClick={() => void requestLivenessChallenge()} disabled={!verifiedCard || !runtimeReady} className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 focus-visible:ring-offset-2">
-            <RotateCw size={18} aria-hidden="true" />เริ่มตรวจ Liveness ใหม่
+            <RotateCw size={18} aria-hidden="true" />เริ่มสแกนใบหน้าใหม่
           </button>
         </section>
       )}

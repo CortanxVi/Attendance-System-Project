@@ -1,7 +1,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from core.config import supabase_db as supabase
 from core.security import AuthenticatedUser, require_roles
@@ -13,11 +14,14 @@ student_router = APIRouter(
 )
 
 
-class StudentProfileUpdate(BaseModel):
-    """Fields a student is allowed to edit on their own profile."""
-
-    model_config = ConfigDict(extra="forbid")
-    academic_year: int = Field(strict=True, ge=1, le=8)
+def derive_study_year(student_id: str | None, *, now: datetime | None = None) -> int | None:
+    """Derive study year from the two-digit Buddhist admission year in a 13-digit student ID."""
+    if not student_id or len(student_id) != 13 or not student_id.isdigit():
+        return None
+    bangkok_now = now or datetime.now(ZoneInfo("Asia/Bangkok"))
+    current_short_year = (bangkok_now.year + 543) % 100
+    derived = (current_short_year - int(student_id[:2])) % 100 + 1
+    return derived if 1 <= derived <= 8 else None
 
 
 @student_router.get("/me/profile")
@@ -35,6 +39,7 @@ def get_my_student_profile(
             "course_id", count="exact"
         ).eq("student_id", current_user.id).execute()
         profile = profile_response.data[0]
+        profile["academic_year"] = derive_study_year(profile.get("student_id"))
         profile["nfc_registered"] = bool(profile.pop("nfc_uid", None))
         profile["enrolled_course_count"] = enrollment_response.count or 0
         profile["avatar_url"] = current_user.avatar_url
@@ -46,25 +51,12 @@ def get_my_student_profile(
 
 
 @student_router.patch("/me/profile")
-def update_my_student_profile(
-    payload: StudentProfileUpdate,
+def reject_student_profile_override(
     current_user: Annotated[AuthenticatedUser, Depends(require_roles("student"))],
 ):
-    """Allow a signed-in student to update only their own academic year."""
-    try:
-        response = supabase.table("profiles").update({
-            "academic_year": payload.academic_year,
-        }).eq("id", current_user.id).eq("role", "student").execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail="ไม่พบโปรไฟล์นักศึกษา")
-        return {
-            "status": "success",
-            "profile": {"academic_year": response.data[0].get("academic_year")},
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="ไม่สามารถบันทึกชั้นปีได้") from exc
+    """Study year is authoritative and derived from the signed-in student's ID."""
+    del current_user
+    raise HTTPException(status_code=403, detail="ชั้นปีคำนวณจากรหัสนักศึกษาและนักศึกษาไม่สามารถแก้ไขเองได้")
 
 
 # --- Endpoint: ดูประวัติการเข้าเรียนของตนเอง + สถิติสรุปรายวิชา ---
@@ -143,6 +135,7 @@ def get_student_attendance_history(
             course_id = course.get('id')
 
             history_list.append({
+                "course_id": course_id,
                 "course_code": course.get('course_code', '-'),
                 "course_name": course.get('course_name', 'ไม่ทราบชื่อวิชา'),
                 "check_in_time": rec['check_in_time'],

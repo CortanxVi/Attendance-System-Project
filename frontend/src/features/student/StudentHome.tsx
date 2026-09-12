@@ -1,16 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import { faceService } from '../../services/api';
-import {
-  base64ToFile,
-  prepareStudentCardImage,
-  STUDENT_CARD_IMAGE_RULES,
-} from '../../utils/imageUtils';
+import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
-import { UploadCloud, CheckCircle, XCircle, Loader2, UserCheck, RotateCw, ShieldCheck } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, UserCheck, RotateCw, ShieldCheck, ScanFace } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
-import type { LivenessAction, LivenessEvidence } from '../../utils/liveness';
+import type { PassiveLivenessEvidence } from '../../utils/liveness';
 import {
   getFaceLandmarkerRuntimeSnapshot,
   preloadFaceLandmarker,
@@ -28,25 +24,12 @@ export default function StudentHome() {
   const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
   const [challengeTtlSeconds, setChallengeTtlSeconds] = useState(0);
   const [livenessToken, setLivenessToken] = useState<string | null>(null);
-  const [livenessActions, setLivenessActions] = useState<LivenessAction[]>([]);
-  const [livenessRequiredBlinks, setLivenessRequiredBlinks] = useState(0);
-  const [livenessPromptDelayMs, setLivenessPromptDelayMs] = useState(0);
   const [isLivenessActive, setIsLivenessActive] = useState(false);
-  const [idCardImage, setIdCardImage] = useState<File | null>(null);
-  const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
-  const [cardError, setCardError] = useState('');
-  const [isPreparingCard, setIsPreparingCard] = useState(false);
-  const [preparedCardSize, setPreparedCardSize] = useState<{ width: number; height: number; bytes: number } | null>(null);
-  const cardSelectionId = useRef(0);
 
   // สถานะเก็บรูปภาพ
   const [capturedFaceData, setCapturedFaceData] = useState<string | null>(null);
-  const [capturedBaselineData, setCapturedBaselineData] = useState<string | null>(null);
-  const [capturedNearData, setCapturedNearData] = useState<string | null>(null);
-  const [capturedReturnData, setCapturedReturnData] = useState<string | null>(null);
-  const [capturedBlinkClosedData, setCapturedBlinkClosedData] = useState<string[]>([]);
-  const [capturedBlinkOpenData, setCapturedBlinkOpenData] = useState<string[]>([]);
-  const [livenessEvidence, setLivenessEvidence] = useState<LivenessEvidence | null>(null);
+  const [capturedPassiveData, setCapturedPassiveData] = useState<[string, string, string] | null>(null);
+  const [livenessEvidence, setLivenessEvidence] = useState<PassiveLivenessEvidence | null>(null);
   
   // สถานะการส่งข้อมูล
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -57,16 +40,6 @@ export default function StudentHome() {
   const [resultScore, setResultScore] = useState<number | null>(null); // คะแนนความเหมือน
   const [resultStatus, setResultStatus] = useState<string>(''); // 🌟 [เพิ่มใหม่] สถานะจริง present/late/absent
   const [resultCheckInTime, setResultCheckInTime] = useState<string>('');
-
-  useEffect(() => {
-    return () => {
-      if (idCardPreview) URL.revokeObjectURL(idCardPreview);
-    };
-  }, [idCardPreview]);
-
-  useEffect(() => () => {
-    cardSelectionId.current += 1;
-  }, []);
 
   useEffect(() => {
     const unsubscribe = subscribeFaceLandmarkerRuntime(setFaceRuntime);
@@ -83,18 +56,11 @@ export default function StudentHome() {
     setChallengeExpiresAt(info.challengeExpiresAt);
     setChallengeTtlSeconds(info.challengeTtlSeconds);
     setLivenessToken(info.livenessToken);
-    setLivenessActions(info.livenessActions);
-    setLivenessRequiredBlinks(info.livenessRequiredBlinks);
-    setLivenessPromptDelayMs(info.livenessPromptDelayMs);
   };
 
   const handleFaceCapture = (capture: LivenessCapture) => {
     setCapturedFaceData(capture.faceImageSrc);
-    setCapturedBaselineData(capture.baselineImageSrc);
-    setCapturedNearData(capture.nearImageSrc);
-    setCapturedReturnData(capture.returnImageSrc);
-    setCapturedBlinkClosedData(capture.blinkClosedImageSrcs);
-    setCapturedBlinkOpenData(capture.blinkOpenImageSrcs);
+    setCapturedPassiveData(capture.passiveImageSrcs);
     setLivenessEvidence(capture.evidence);
     setIsLivenessActive(false);
   };
@@ -103,12 +69,7 @@ export default function StudentHome() {
   const handleSubmitAttendance = async () => {
     if (
       !capturedFaceData
-      || !capturedBaselineData
-      || !capturedNearData
-      || !capturedReturnData
-      || capturedBlinkClosedData.length !== livenessRequiredBlinks
-      || capturedBlinkOpenData.length !== livenessRequiredBlinks
-      || !idCardImage
+      || !capturedPassiveData
       || !challengeId
       || !livenessToken
       || !livenessEvidence
@@ -116,27 +77,11 @@ export default function StudentHome() {
     setIsSubmitting(true);
 
     try {
-      // ภาพจาก Liveness ถูกย่อและเข้ารหัสครั้งเดียวตอนจับเฟรม เพื่อรักษารายละเอียดดวงตา
-      const faceFile = base64ToFile(capturedFaceData, 'liveness_face.jpg');
-      const baselineFile = base64ToFile(capturedBaselineData, 'liveness_baseline.jpg');
-      const nearFile = base64ToFile(capturedNearData, 'liveness_near.jpg');
-      const returnFile = base64ToFile(capturedReturnData, 'liveness_return.jpg');
-      const blinkClosedFiles = capturedBlinkClosedData.map((image, index) => (
-        base64ToFile(image, `liveness_blink_closed_${index + 1}.jpg`)
-      ));
-      const blinkOpenFiles = capturedBlinkOpenData.map((image, index) => (
-        base64ToFile(image, `liveness_blink_open_${index + 1}.jpg`)
-      ));
+      const passiveFiles = capturedPassiveData.map((image, index) => base64ToFile(image, `passive_liveness_${index + 1}.jpg`)) as [File, File, File];
 
       // 2. ส่งข้อมูลไปยัง FastAPI Backend (POST /api/v1/attendance/verify)
       const result = await faceService.verifyAttendance(
-        faceFile,
-        baselineFile,
-        nearFile,
-        returnFile,
-        blinkClosedFiles,
-        blinkOpenFiles,
-        idCardImage,
+        passiveFiles,
         challengeId,
         livenessToken,
         livenessEvidence,
@@ -150,7 +95,7 @@ export default function StudentHome() {
       setResultStatus(result.calculated_status || '');
       setResultCheckInTime(result.check_in_time || '');
       setFinalResult('success');
-      notify(`${result.student_name || result.student_id || 'นักศึกษา'} เช็คชื่อสำเร็จด้วยวิธีสแกนใบหน้าและบัตร`, 'success');
+      notify(`${result.student_name || result.student_id || 'นักศึกษา'} เช็คชื่อสำเร็จด้วยการสแกนใบหน้า`, 'success');
       
     } catch (error: unknown) {
       console.error(error);
@@ -158,33 +103,6 @@ export default function StudentHome() {
       setFinalResult('failed');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const handleCardSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    setCardError('');
-    if (!file) return;
-
-    const selectionId = ++cardSelectionId.current;
-    setIsPreparingCard(true);
-    try {
-      const prepared = await prepareStudentCardImage(file);
-      if (selectionId !== cardSelectionId.current) return;
-
-      setIdCardImage(prepared.file);
-      setIdCardPreview(URL.createObjectURL(prepared.file));
-      setPreparedCardSize({
-        width: prepared.width,
-        height: prepared.height,
-        bytes: prepared.file.size,
-      });
-    } catch (error) {
-      if (selectionId !== cardSelectionId.current) return;
-      setCardError(error instanceof Error ? error.message : 'ไม่สามารถเตรียมรูปบัตรได้');
-    } finally {
-      if (selectionId === cardSelectionId.current) setIsPreparingCard(false);
     }
   };
 
@@ -236,11 +154,7 @@ export default function StudentHome() {
            <button 
              onClick={() => {
                setCapturedFaceData(null);
-               setCapturedBaselineData(null);
-               setCapturedNearData(null);
-               setCapturedReturnData(null);
-               setCapturedBlinkClosedData([]);
-               setCapturedBlinkOpenData([]);
+               setCapturedPassiveData(null);
                setLivenessEvidence(null);
              }}
              disabled={isSubmitting}
@@ -253,71 +167,25 @@ export default function StudentHome() {
         /* ด่านที่ 2: หน้าจอ Liveness Detection */
         <div className="relative">
            <button onClick={() => setIsLivenessActive(false)} className="absolute top-4 right-4 z-30 bg-white/80 p-2 rounded-full text-sm font-bold shadow-md">ยกเลิก</button>
-           <LivenessScanner
-             actions={livenessActions}
-             requiredBlinks={livenessRequiredBlinks}
-             promptDelayMs={livenessPromptDelayMs}
-             onCaptureSuccess={handleFaceCapture}
-           />
+           <LivenessScanner onCaptureSuccess={handleFaceCapture} />
         </div>
       ) : verifiedCourse ? (
-        /* ผ่าน Dynamic QR แล้ว: ต้องมีทั้งภาพบัตรสำหรับ Light OCR และภาพใบหน้าสด */
-        <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
+        <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
           <h2 className="text-xl font-bold text-green-700 mb-2">เข้าสู่ห้องเรียน {verifiedCourse} แล้ว</h2>
-          <p className="text-gray-600 mb-4">ถ่ายภาพบัตรนักศึกษาให้ชัด แล้วจึงสแกนใบหน้า</p>
-          <label className={`mb-4 flex min-h-36 flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-green-300 bg-white p-4 focus-within:ring-2 focus-within:ring-green-600 ${isPreparingCard ? 'cursor-wait' : 'cursor-pointer'}`}>
-            {isPreparingCard ? (
-              <>
-                <Loader2 className="mb-2 animate-spin text-green-600" size={28} />
-                <span role="status" className="font-semibold text-green-800">กำลังปรับรูปให้พร้อมอ่านข้อมูล...</span>
-                <span className="mt-1 text-xs text-gray-500">คงสัดส่วนและความคมชัดของตัวอักษร</span>
-              </>
-            ) : idCardPreview ? (
-              <img src={idCardPreview} alt="ตัวอย่างภาพบัตรนักศึกษา" className="max-h-40 rounded-lg object-contain" />
-            ) : (
-              <>
-                <UploadCloud className="mb-2 text-green-600" size={28} />
-                <span className="font-semibold text-green-800">ถ่ายหรือเลือกภาพบัตรนักศึกษา</span>
-              </>
-            )}
-            <span id="student-card-help" className="mt-1 text-xs text-gray-500">JPEG/PNG · ระบบย่ออัตโนมัติไม่เกิน {STUDENT_CARD_IMAGE_RULES.maxWidth}×{STUDENT_CARD_IMAGE_RULES.maxHeight} px</span>
-            <input
-              type="file"
-              accept="image/jpeg,image/png"
-              capture="environment"
-              onChange={handleCardSelected}
-              disabled={isPreparingCard}
-              aria-describedby="student-card-help student-card-error"
-              aria-invalid={Boolean(cardError)}
-              className="sr-only"
-            />
-          </label>
-          {preparedCardSize && !isPreparingCard && (
-            <p role="status" className="mb-3 text-xs text-green-700">
-              รูปพร้อมใช้งาน {preparedCardSize.width}×{preparedCardSize.height} px · {(preparedCardSize.bytes / (1024 * 1024)).toFixed(2)} MB
-            </p>
-          )}
-          <p id="student-card-error" role={cardError ? 'alert' : undefined} className={cardError ? 'mb-3 text-sm font-medium text-red-600' : 'sr-only'}>{cardError}</p>
+          <div className="mx-auto my-4 flex size-16 items-center justify-center rounded-full bg-white text-green-700 shadow-sm"><ScanFace size={32} /></div>
+          <p className="mb-4 text-sm leading-6 text-gray-600">ขั้นตอนต่อไปสแกนใบหน้าเพียงอย่างเดียว ไม่ต้องถ่ายหรืออัปโหลดบัตรนักศึกษา</p>
           {challengeExpiresAt && (
             <p className="mb-3 text-xs text-gray-500">
-              สิทธิ์จาก QR ใช้ลอง Liveness ซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
-              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 45 วินาที
+              สิทธิ์จาก QR ใช้ลองสแกนซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
+              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 20 วินาที
             </p>
           )}
           <button 
              onClick={() => setIsLivenessActive(true)}
-             disabled={
-               !idCardImage
-               || isPreparingCard
-               || !livenessToken
-               || livenessActions[0] !== 'move_closer'
-               || livenessActions[1] !== 'blink'
-               || ![1, 2].includes(livenessRequiredBlinks)
-               || livenessPromptDelayMs < 400
-             }
+             disabled={!livenessToken}
              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-lg w-full transition-colors"
           >
-            เริ่มสแกนใบหน้า (Liveness)
+            เริ่มสแกนใบหน้า
           </button>
         </div>
       ) : isScanning ? (

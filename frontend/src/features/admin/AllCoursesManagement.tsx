@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { BookOpen, Settings, Edit, Trash2 } from 'lucide-react';
+import { BookOpen, Settings, Edit, Trash2, Search, X } from 'lucide-react';
 import EditCourseModal from '../teacher/EditCourseModal';
 import CourseSettingsModal from '../teacher/CourseSettings';
 import { useNotification } from '../../components/notifications/notificationContext';
@@ -27,6 +27,7 @@ export default function AllCoursesManagement() {
   const temporaryAdmin = useTemporaryAdmin();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
 
   // States for Modals
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -69,6 +70,17 @@ export default function AllCoursesManagement() {
     }
   };
 
+  const filteredCourses = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase('th-TH');
+    if (!normalized) return courses;
+    return courses.filter((course) => [
+      course.course_code,
+      course.course_name,
+      course.profiles?.full_name,
+      String(course.section),
+    ].some((value) => value?.toLocaleLowerCase('th-TH').includes(normalized)));
+  }, [courses, query]);
+
   return (
     <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
       <ConfirmDialog
@@ -95,6 +107,13 @@ export default function AllCoursesManagement() {
         <BookOpen className="shrink-0 text-red-500" /> จัดการข้อมูลรายวิชา (All Courses)
       </h2>
 
+      <div className="relative mb-5 max-w-xl">
+        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={19} />
+        <label htmlFor="admin-course-search" className="sr-only">ค้นหารายวิชา รหัสวิชา หรือชื่อผู้สอน</label>
+        <input id="admin-course-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหารหัสวิชา ชื่อวิชา หรือผู้สอน" className="min-h-11 w-full rounded-xl border border-slate-300 bg-white py-2 pl-10 pr-11 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" />
+        {query && <button type="button" onClick={() => setQuery('')} aria-label="ล้างคำค้นหา" className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-red-300"><X size={17} /></button>}
+      </div>
+
       {loading ? (
         <div className="text-center py-10 text-gray-500">กำลังโหลดข้อมูล...</div>
       ) : (
@@ -111,7 +130,7 @@ export default function AllCoursesManagement() {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {courses.map(course => (
+              {filteredCourses.map(course => (
                 <tr key={course.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                   <td className="py-3 px-4 font-bold text-red-600">{course.course_code}</td>
                   <td className="py-3 px-4 font-medium text-gray-900">{course.course_name} <span className="text-xs text-gray-500 block">Sec: {course.section}</span></td>
@@ -129,9 +148,9 @@ export default function AllCoursesManagement() {
                   </td>
                 </tr>
               ))}
-              {courses.length === 0 && (
+              {filteredCourses.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-gray-500">ไม่มีข้อมูลรายวิชาในระบบ</td>
+                  <td colSpan={6} className="text-center py-8 text-gray-500">{courses.length ? 'ไม่พบรายวิชาที่ตรงกับคำค้นหา' : 'ไม่มีข้อมูลรายวิชาในระบบ'}</td>
                 </tr>
               )}
             </tbody>

@@ -10,7 +10,7 @@ os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-two-characters")
 
 from services.insightface_service import FaceObservation
-from services.liveness_frame_service import verify_liveness_frames
+from services.liveness_frame_service import verify_liveness_frames, verify_passive_liveness_frames
 
 
 def observation(
@@ -95,6 +95,33 @@ class LivenessFrameVerificationTests(unittest.TestCase):
             verify_liveness_frames(
                 frame(0), frame(0), frame(0), [frame(30)], [frame(40)], frame(50), 1
             )
+
+    @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
+    @patch("services.liveness_frame_service.passive_pad_service.assert_live")
+    def test_passive_liveness_accepts_three_continuous_frontal_samples(self, pad, extract):
+        extract.side_effect = [observation(scale=0.40), observation(scale=0.405), observation(scale=0.398)]
+        result = verify_passive_liveness_frames([frame(10), frame(12), frame(14)])
+        np.testing.assert_array_equal(result.final_embedding, np.asarray([1.0, 0.0], dtype=np.float32))
+        pad.assert_called_once()
+
+    @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
+    @patch("services.liveness_frame_service.passive_pad_service.assert_live")
+    def test_passive_liveness_rejects_duplicated_still_frames(self, _pad, extract):
+        extract.side_effect = [observation(scale=0.40), observation(scale=0.40), observation(scale=0.40)]
+        with self.assertRaises(HTTPException):
+            verify_passive_liveness_frames([frame(10), frame(10), frame(10)])
+
+    @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
+    @patch("services.liveness_frame_service.passive_pad_service.assert_live")
+    def test_passive_liveness_rejects_reference_outside_capture_frame(self, pad, extract):
+        extract.side_effect = [
+            observation(scale=0.40, center_offset=0.34),
+            observation(scale=0.40),
+            observation(scale=0.40),
+        ]
+        with self.assertRaises(HTTPException):
+            verify_passive_liveness_frames([frame(10), frame(12), frame(14)])
+        pad.assert_not_called()
 
 
 if __name__ == "__main__":
