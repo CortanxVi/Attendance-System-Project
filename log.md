@@ -759,3 +759,170 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Push or merge the accepted Preview branch into the configured Production branch, wait for the Vercel Production deployment, then verify the live page, Google OAuth return, authenticated profile load, and an application workflow.
 - The computer, Docker daemon, Backend container, OCR container, and ngrok agent must all be running for the public API to work. A powered-off computer cannot serve requests.
 - Configure ngrok and Docker for boot-time startup if this workstation will remain the temporary ingress. For durable Production availability, migrate the API to an always-on host with a stable reviewed HTTPS domain and monitoring.
+
+## 2026-09-10 — Production Branch Merge and Remote Authentication Blocker
+
+- **Status:** Local Production merge completed; remote publication is blocked only by missing GitHub credentials in the Codex shell.
+- **Actor:** Codex primary agent.
+- **Objective:** Promote the verified `demo3.1` release candidate into the repository branch tracked by Vercel Production.
+
+### Files and components changed
+
+- Committed the accumulated deployment verification records on `demo3.1`.
+- Merged `demo3.1` into the local `main` branch with a dedicated non-fast-forward Production promotion commit.
+- No additional runtime code, secret, Supabase setting, database object, or workstation service was changed during the merge.
+
+### Implementation rationale
+
+- Keeping `demo3.1` as the Preview branch and `main` as the Production branch preserves the reviewed promotion workflow and matches the connected hosting provider's branch model.
+- A merge commit gives the release a clear audit and rollback boundary while retaining the tested Preview history.
+
+### Security and privacy impact
+
+- The merge contains the previously verified exact-origin CORS rules and narrowly scoped ngrok interstitial bypass; it does not add wildcard cross-origin access.
+- No credential was generated, requested, persisted, or printed. The failed HTTPS push stopped before remote mutation because no interactive GitHub credential was available.
+- No token, user data, private URL, student record, image, or biometric value was added to this log.
+
+### Database and deployment impact
+
+- No Supabase Auth, database schema, row, RLS policy, Storage object, or migration was changed.
+- The local `main` branch now contains the accepted Preview revision, but Vercel Production has not rebuilt because the remote `main` branch has not yet received the merge.
+
+### Verification performed
+
+- Fetched the latest remote refs immediately before merging and confirmed the local Production branch started from the current remote Production tip.
+- The merge completed without conflicts and the worktree remained clean before this log append.
+- The GitHub HTTPS push was attempted and failed with a missing-credentials error; no partial remote update occurred.
+
+### Remaining risks and handoff work
+
+- An authenticated repository owner must push local `main` to `origin`; Vercel should then build the configured Production branch automatically.
+- After the Vercel deployment is ready, verify the Production page, OAuth return, authenticated profile request, and one normal application workflow while the workstation Backend and tunnel remain online.
+
+## 2026-09-10 — Production CORS Incident Revalidation
+
+- **Status:** Live Backend and current Production bundle are correctly configured; remaining failure is isolated to a stale browser/PWA client using the pre-fix JavaScript bundle.
+- **Actor:** Codex primary agent.
+- **Objective:** Revalidate the reported missing `Access-Control-Allow-Origin` response on the Production profile request after the Preview-to-Production promotion.
+
+### Files and components changed
+
+- Appended this diagnostic record to `log.md` only.
+- No Frontend source, Backend source, ignored runtime environment, Supabase setting, ngrok configuration, or database component required modification.
+
+### Implementation rationale
+
+- A standard browser request without the ngrok bypass header is intercepted at the ngrok edge and receives an HTML warning response before FastAPI can add CORS headers.
+- The currently published Production JavaScript contains both the current API origin and the scoped ngrok bypass header logic. The current Backend also permits the exact Production origin and bypass header.
+- Sanitized local tunnel inspection showed older Production preflights requesting only Authorization, while the current bundle's preflight requests Authorization plus the ngrok bypass header. This distinguishes a stale PWA client from a current server configuration error.
+
+### Security and privacy impact
+
+- Exact-origin CORS, credential-aware requests, Trusted Host enforcement, loopback Backend binding, and JWT validation remain unchanged.
+- No wildcard origin, authentication bypass, secret, raw authorization value, email address, profile payload, student record, private URL, image, or biometric data was introduced or logged.
+
+### Database and deployment impact
+
+- No Supabase Auth configuration, schema, row, RLS policy, Storage object, migration, or deployment setting was changed.
+- No new Vercel deployment or Docker recreation is required for the validated server-side configuration. A stale client must activate the already published service worker and hashed application bundle.
+
+### Verification performed
+
+- Confirmed local `main` and remote `main` point to the same promoted revision.
+- Confirmed Backend and OCR containers are healthy and the active tunnel forwards to the loopback Backend.
+- Confirmed the running Backend allowlist contains both exact Preview and Production origins.
+- Browser-equivalent Production preflight requesting Authorization and the ngrok bypass header returned HTTP 200 with the exact allow-origin response.
+- Browser-equivalent Production GET with the bypass header reached FastAPI and returned the expected JSON authentication boundary plus exact CORS headers; the same request without the bypass reproduced the ngrok HTML interstitial.
+- Confirmed the current Production HTML references the newest hashed JavaScript bundle and that bundle contains the scoped bypass logic and current API origin.
+- Reviewed the current Supabase Auth session documentation and changelog; no applicable hosted Auth breaking change explains this transport-level failure.
+
+### Remaining risks and handoff work
+
+- Close all tabs for the Production site, unregister its service worker or clear that site's cached data, reopen it, and sign in again so the current bundle controls the page.
+- If a fresh private window still fails, capture the failing request's `Access-Control-Request-Headers`, response status, and response content type without exposing the Authorization value; those fields will identify whether the request reached FastAPI or was intercepted at the tunnel edge.
+- Replace the free development tunnel with a stable Production ingress to remove dependence on provider-specific browser interstitial behavior.
+
+## 2026-09-10 — End-to-End Deployment Runbook Summary
+
+- **Status:** Current deployment workflow, incident fixes, release promotion, hosting operations, and remaining Production gaps were consolidated for user handoff.
+- **Actor:** Codex primary agent.
+- **Objective:** Provide a repeatable start-to-finish deployment procedure covering local build verification, Docker Backend/OCR staging, public ingress, Supabase Google OAuth, Vercel Preview and Production, CORS repair, PWA cache recovery, monitoring, and rollback.
+
+### Files and components changed
+
+- Appended this documentation handoff record to `log.md` only.
+- No application source, environment file, container, tunnel, Supabase setting, database object, Git branch, or hosting configuration was changed.
+
+### Implementation rationale
+
+- The handoff distinguishes Vite build-time variables from Backend runtime variables and separates the accepted `demo3.1` Preview workflow from the `main` Production promotion path.
+- It also distinguishes the currently public workstation/ngrok staging runtime from a durable Production backend, so temporary reachability is not mistaken for 24/7 hosting readiness.
+
+### Security and privacy impact
+
+- The runbook uses placeholders for secrets, retains exact-origin CORS, loopback-only published service ports, private OCR networking, server-side token validation, and restricted Supabase redirect guidance.
+- No secret, token, email address, student record, private URL, image, or biometric data was written to this log.
+
+### Database and deployment impact
+
+- No Supabase Auth, schema, row, RLS policy, Storage object, migration, Vercel deployment, Docker runtime, or public endpoint was changed.
+- Current health and cross-origin preflight were rechecked read-only before preparing the handoff.
+
+### Verification performed
+
+- Confirmed the local Backend and OCR containers are healthy, Backend readiness reports database/OCR/face dependencies ready, and the public Production-origin preflight returns HTTP 200 with the exact CORS origin and required ngrok bypass header allowance.
+- Re-read the repository deployment guides, Docker Compose file, Vercel SPA configuration, environment templates, release verification script, release-bundle script, and Production preflight validator.
+- Reviewed current official Vercel Git/environment, Supabase redirect/Google OAuth, Docker Compose health dependency, and ngrok lifecycle documentation; no applicable hosted Supabase Auth change alters this deployment procedure.
+
+### Remaining risks and handoff work
+
+- The Docker Compose stack currently in use is explicitly Staging and the public API depends on a powered-on development workstation plus a running ngrok agent.
+- A durable final Production backend still requires an always-on host, stable reviewed HTTPS ingress, separate Production secrets/data, monitoring, backup/restore, load tests, and closure of the previously recorded migration and biometric-model licensing gates.
+
+## 2026-09-12 — English Project Overview and Improvement Plan
+
+- **Status:** Completed a repository-evidenced project overview, role/responsibility matrix, deployment assessment, and prioritized production improvement plan.
+- **Actor:** Codex primary agent.
+- **Objective:** Produce an English Markdown handoff that explains what the complete attendance system does, what each human and service role may do, which security controls already exist, and what must still be improved for performance, reliability, security, privacy, and production readiness.
+
+### Files and components changed
+
+- Added `docs/PROJECT_OVERVIEW_AND_IMPROVEMENT_PLAN.md`.
+- Appended this audit-safe work record to `log.md`.
+- Reviewed the React/PWA route and feature inventory, FastAPI authorization and role guards, Light OCR queue/security configuration, face/liveness services, Supabase migrations, test inventory, launch scripts, Docker staging topology, deployment guides, and recent operational handoff records.
+- No application source, threshold, dependency, environment file, database object, migration, container, hosting setting, or remote Git reference was modified.
+
+### Implementation rationale
+
+- The overview separates functionality present in source code from functionality proven in a deployed environment so that broad feature coverage is not mistaken for completed Production acceptance.
+- It documents anonymous, student, teacher, temporary-administrator, permanent-administrator, Backend, OCR, and database-function responsibilities, including permanent-admin-only restrictions that are enforced in Backend code.
+- Remaining work is ordered as release blockers, performance/scalability, security/privacy/fraud resistance, and quality/maintainability, with concrete actions and exit criteria for the highest-priority items.
+- The recommended order prioritizes database consistency, durable Backend hosting, authentication hardening, biometric calibration, backup/restore, and measured 30–40-user capacity before additional non-essential UI work.
+
+### Security and privacy impact
+
+- The new document records security architecture, residual biometric/NFC risks, RLS and authorization expectations, data-minimization needs, and privacy/retention work without disclosing operational credentials or personal records.
+- No secret, token value, PIN, email address, student record, private endpoint, raw biometric data, image, embedding, or attachment content was added.
+- The review explicitly warns that RGB-camera liveness is not impossible to spoof or independently certified and that face embeddings remain sensitive biometric templates even when attendance photographs are not retained.
+
+### Database and deployment impact
+
+- No Supabase write was performed.
+- A read-only release check found no database lint errors and no Performance Advisor findings, but retained the Security Advisor warning that leaked-password protection is disabled.
+- The review recorded three local/remote migration timestamp mismatches and the remote absence of local secure face-enrollment migration `20260907164433_secure_face_enrollment_liveness.sql`; this is classified as a release blocker requiring staged reconciliation rather than an unreviewed migration-history mutation.
+- The document records that the current workstation/tunnel Backend is appropriate for staging verification but must be replaced by the intended always-on Ubuntu Server Mini PC with stable HTTPS before Production acceptance.
+
+### Verification performed
+
+- `git diff --check` completed successfully with exit code 0 before this log append.
+- The generated overview contains 552 lines and 4,730 words with all expected top-level and priority sections present.
+- Every repository-relative Markdown link in the new document resolved to an existing file; the local-link check completed with exit code 0 and no broken-link output.
+- A credential-pattern review found only explanatory uses of the words access token and service role; it found no assignments, JWT-like values, or embedded secrets.
+- Re-read the current official Supabase production checklist, Auth session, JWT/signing-key, MFA, and Database Advisor guidance and linked those references in the overview.
+- Re-ran `git diff --check` after this log append; it completed successfully with exit code 0. Final Git status showed only the new overview and this expected `log.md` modification.
+
+### Remaining risks and handoff work
+
+- Review the new overview and this log entry before committing them.
+- An authorized operator still must reconcile and apply Supabase migrations in staging, close the Auth warning/MFA policy, deploy the permanent Mini PC Backend, calibrate biometric behavior on real devices, and execute representative 30–40-user burst and soak tests.
+- Local `main` was two commits ahead of `origin/main` at the start of this task; review and intentionally push all desired local commits rather than assuming remote Production contains this documentation.
