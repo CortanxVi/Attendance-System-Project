@@ -878,3 +878,51 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 
 - The Docker Compose stack currently in use is explicitly Staging and the public API depends on a powered-on development workstation plus a running ngrok agent.
 - A durable final Production backend still requires an always-on host, stable reviewed HTTPS ingress, separate Production secrets/data, monitoring, backup/restore, load tests, and closure of the previously recorded migration and biometric-model licensing gates.
+
+## 2026-09-12 — English Project Overview and Improvement Plan
+
+- **Status:** Completed a repository-evidenced project overview, role/responsibility matrix, deployment assessment, and prioritized production improvement plan.
+- **Actor:** Codex primary agent.
+- **Objective:** Produce an English Markdown handoff that explains what the complete attendance system does, what each human and service role may do, which security controls already exist, and what must still be improved for performance, reliability, security, privacy, and production readiness.
+
+### Files and components changed
+
+- Added `docs/PROJECT_OVERVIEW_AND_IMPROVEMENT_PLAN.md`.
+- Appended this audit-safe work record to `log.md`.
+- Reviewed the React/PWA route and feature inventory, FastAPI authorization and role guards, Light OCR queue/security configuration, face/liveness services, Supabase migrations, test inventory, launch scripts, Docker staging topology, deployment guides, and recent operational handoff records.
+- No application source, threshold, dependency, environment file, database object, migration, container, hosting setting, or remote Git reference was modified.
+
+### Implementation rationale
+
+- The overview separates functionality present in source code from functionality proven in a deployed environment so that broad feature coverage is not mistaken for completed Production acceptance.
+- It documents anonymous, student, teacher, temporary-administrator, permanent-administrator, Backend, OCR, and database-function responsibilities, including permanent-admin-only restrictions that are enforced in Backend code.
+- Remaining work is ordered as release blockers, performance/scalability, security/privacy/fraud resistance, and quality/maintainability, with concrete actions and exit criteria for the highest-priority items.
+- The recommended order prioritizes database consistency, durable Backend hosting, authentication hardening, biometric calibration, backup/restore, and measured 30–40-user capacity before additional non-essential UI work.
+
+### Security and privacy impact
+
+- The new document records security architecture, residual biometric/NFC risks, RLS and authorization expectations, data-minimization needs, and privacy/retention work without disclosing operational credentials or personal records.
+- No secret, token value, PIN, email address, student record, private endpoint, raw biometric data, image, embedding, or attachment content was added.
+- The review explicitly warns that RGB-camera liveness is not impossible to spoof or independently certified and that face embeddings remain sensitive biometric templates even when attendance photographs are not retained.
+
+### Database and deployment impact
+
+- No Supabase write was performed.
+- A read-only release check found no database lint errors and no Performance Advisor findings, but retained the Security Advisor warning that leaked-password protection is disabled.
+- The review recorded three local/remote migration timestamp mismatches and the remote absence of local secure face-enrollment migration `20260907164433_secure_face_enrollment_liveness.sql`; this is classified as a release blocker requiring staged reconciliation rather than an unreviewed migration-history mutation.
+- The document records that the current workstation/tunnel Backend is appropriate for staging verification but must be replaced by the intended always-on Ubuntu Server Mini PC with stable HTTPS before Production acceptance.
+
+### Verification performed
+
+- `git diff --check` completed successfully with exit code 0 before this log append.
+- The generated overview contains 552 lines and 4,730 words with all expected top-level and priority sections present.
+- Every repository-relative Markdown link in the new document resolved to an existing file; the local-link check completed with exit code 0 and no broken-link output.
+- A credential-pattern review found only explanatory uses of the words access token and service role; it found no assignments, JWT-like values, or embedded secrets.
+- Re-read the current official Supabase production checklist, Auth session, JWT/signing-key, MFA, and Database Advisor guidance and linked those references in the overview.
+- Re-ran `git diff --check` after this log append; it completed successfully with exit code 0. Final Git status showed only the new overview and this expected `log.md` modification.
+
+### Remaining risks and handoff work
+
+- Review the new overview and this log entry before committing them.
+- An authorized operator still must reconcile and apply Supabase migrations in staging, close the Auth warning/MFA policy, deploy the permanent Mini PC Backend, calibrate biometric behavior on real devices, and execute representative 30–40-user burst and soak tests.
+- Local `main` was two commits ahead of `origin/main` at the start of this task; review and intentionally push all desired local commits rather than assuming remote Production contains this documentation.
