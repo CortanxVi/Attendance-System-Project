@@ -183,6 +183,7 @@ export default function App() {
             <Route path="/student" element={<StudentLayout />}>
             <Route index element={<StudentHome />} />
             <Route path="history" element={<AttendanceHistory />} />
+            <Route path="history/:courseId" element={<AttendanceHistory />} />
             <Route path="register" element={<StudentRegister />} />
             <Route path="profile" element={<StudentProfile />} />
             <Route path="requests" element={<StudentRequests />} />

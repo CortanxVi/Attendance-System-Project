@@ -35,11 +35,7 @@ class StudentFaceEnrollmentBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 enrollment_challenge_id=None,
                 liveness_token=None,
                 liveness_evidence=None,
-                liveness_baseline_image=None,
-                liveness_near_image=None,
-                liveness_return_image=None,
-                liveness_blink_closed_images=None,
-                liveness_blink_open_images=None,
+                liveness_passive_images=None,
                 current_user=user(role="admin"),
             )
         self.assertEqual(caught.exception.status_code, 422)
@@ -52,11 +48,7 @@ class StudentFaceEnrollmentBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 enrollment_challenge_id=None,
                 liveness_token=None,
                 liveness_evidence=None,
-                liveness_baseline_image=None,
-                liveness_near_image=None,
-                liveness_return_image=None,
-                liveness_blink_closed_images=None,
-                liveness_blink_open_images=None,
+                liveness_passive_images=None,
                 current_user=user(role="student"),
             )
         self.assertEqual(caught.exception.status_code, 422)
@@ -70,11 +62,7 @@ class StudentFaceEnrollmentBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 enrollment_challenge_id=None,
                 liveness_token=None,
                 liveness_evidence=None,
-                liveness_baseline_image=None,
-                liveness_near_image=None,
-                liveness_return_image=None,
-                liveness_blink_closed_images=None,
-                liveness_blink_open_images=None,
+                liveness_passive_images=None,
                 current_user=user(role="admin", temporary=True),
             )
         self.assertEqual(caught.exception.status_code, 403)

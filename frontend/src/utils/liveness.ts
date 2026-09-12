@@ -1,5 +1,15 @@
 export type LivenessAction = 'move_closer' | 'blink';
 
+export interface PassiveLivenessEvidence {
+  version: 3;
+  mode: 'passive';
+  sampleCount: 3;
+  frames: Array<{ kind: 'passive_sample'; sampleIndex: number; timestampMs: number }>;
+  startedAtMs: number;
+  completedAtMs: number;
+  effectiveFps: number;
+}
+
 export type LivenessFrameKind =
   | 'baseline_open'
   | 'near'

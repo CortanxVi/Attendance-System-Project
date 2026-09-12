@@ -1,4 +1,4 @@
-"""Backend recomputation for protocol-v2 transient liveness frames."""
+"""Backend recomputation for passive and legacy transient liveness frames."""
 
 from __future__ import annotations
 
@@ -20,6 +20,25 @@ BLINK_FRAME_IDENTITY_THRESHOLD = 0.30
 @dataclass(frozen=True)
 class VerifiedLivenessFrames:
     final_embedding: np.ndarray
+
+
+def verify_passive_liveness_frames(images: Sequence[np.ndarray]) -> VerifiedLivenessFrames:
+    """Verify three transient frontal samples with local PAD and identity continuity."""
+    if len(images) != 3:
+        raise HTTPException(status_code=422, detail="หลักฐาน Passive Liveness ต้องมี 3 เฟรม")
+    observations = [_extract(image, f"ภาพต่อเนื่องลำดับที่ {index}") for index, image in enumerate(images, start=1)]
+    reference = observations[0]
+    if not 0.17 <= reference.face_width_ratio <= 0.84 or reference.center_offset > 0.30:
+        raise HTTPException(status_code=422, detail="โปรดมองตรงและให้ใบหน้าอยู่ในกรอบตลอดการสแกน")
+    for observation in observations[1:]:
+        _same_person(reference, observation)
+        if not _frontal(reference, observation, scale_tolerance=0.22):
+            raise HTTPException(status_code=422, detail="โปรดมองตรงและให้ใบหน้าอยู่ในกรอบตลอดการสแกน")
+    passive_pad_service.assert_live(images, [observation.bbox for observation in observations])
+    differences = [_frame_difference(first, second) for first, second in zip(images, images[1:])]
+    if any(difference < 0.35 for difference in differences):
+        raise HTTPException(status_code=422, detail="ตรวจพบภาพซ้ำหรือภาพนิ่ง กรุณาใช้บุคคลจริงหน้ากล้อง")
+    return VerifiedLivenessFrames(final_embedding=observations[-1].embedding)
 
 
 def _frame_difference(first: np.ndarray, second: np.ndarray) -> float:

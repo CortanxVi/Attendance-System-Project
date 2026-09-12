@@ -926,3 +926,114 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Review the new overview and this log entry before committing them.
 - An authorized operator still must reconcile and apply Supabase migrations in staging, close the Auth warning/MFA policy, deploy the permanent Mini PC Backend, calibrate biometric behavior on real devices, and execute representative 30–40-user burst and soak tests.
 - Local `main` was two commits ahead of `origin/main` at the start of this task; review and intentionally push all desired local commits rather than assuming remote Production contains this documentation.
+
+## 2026-09-12 — Real-device Navigation, Passive Face Verification, and Admin Usability
+
+- **Status:** Implemented and verified locally; the staging Backend runtime and the required Supabase face-enrollment objects were updated. Frontend source is ready for a deliberate Preview deployment but was not pushed or deployed by this task.
+- **Actor:** Codex primary agent.
+- **Objective:** Address the real-phone findings for student, teacher, and administrator navigation; add browser/PWA pull-to-refresh and persistent desktop sidebar controls; simplify Dynamic QR attendance to passive face verification only; repair student face enrollment; derive academic year from the student identifier; and improve student history plus administrator report, course, and log discovery.
+
+### Files and components changed
+
+- Added shared navigation and layout utilities: `AppBackButton`, `usePullToRefresh`, `PullToRefreshIndicator`, and `useDesktopSidebar`.
+- Updated student, teacher, and administrator layouts with visible back navigation. All three authenticated role shells now use a defined scroll owner and expose pull-to-refresh; teacher and administrator desktop sidebars now persist click-to-collapse state and temporarily expand on fine-pointer hover while retaining the mobile drawer.
+- Reworked the student Dynamic QR attendance path, liveness scanner, API client contract, and QR contract to protocol v3 passive capture. Attendance now submits three transient face samples only and no longer requests or submits a student-card image after QR validation. The front-camera preview is mirrored while server-bound frames remain camera-native.
+- Reworked Backend liveness token/evidence validation and frame verification for an account-bound, expiring passive challenge, bounded sample timing, one-face and frontal checks, identity continuity, duplicate-frame resistance, local MiniFAS passive presentation-attack detection, and final face-template comparison.
+- Updated student enrollment to offer separate camera-capture and existing-image choices for the student card before passive face enrollment, while retaining the verified card in memory for a challenge retry instead of asking for another upload.
+- Changed the student profile to display a read-only academic year derived from the two-digit Buddhist admission year in a valid 13-digit student identifier; the student profile update endpoint now rejects manual academic-year overrides. Added a profile logout action.
+- Rebuilt student attendance history as a searchable course list with a dedicated per-course detail route, summary counts, check-in timestamps, status, and method.
+- Added administrator course search across code, name, instructor, and section; administrator log search across operator, action, target, details, and formatted date; and list/table report display with instructor attribution in the UI and generated files.
+- Corrected the teacher live-feed face-method copy so it no longer claims that a student card was used for attendance.
+- Updated `DESIGN.md` and `UX-CONTRACT.md` to record the cross-role navigation behavior, passive protocol, no-card attendance contract, read-only derived academic year, and RGB-camera PAD limitation.
+- Updated Backend authorization, liveness, frame, and enrollment regression tests and the Frontend liveness contract test.
+
+### Implementation rationale
+
+- Shared layout-level navigation and refresh behavior keeps the three role experiences consistent and avoids duplicating touch gesture listeners across individual pages.
+- Sidebar preference is persisted locally but hover expansion is limited to devices reporting a fine pointer, preventing sticky hover behavior on touch phones and tablets.
+- Removing card OCR from post-QR attendance reduces user friction and eliminates repeated identity-document processing; the authenticated account, one-use QR claim, registered face template, signed passive evidence, same-person continuity, duplicate-frame check, and server-side PAD remain the attendance controls.
+- Student-card OCR remains only in initial self-enrollment because it binds the first face template to the authoritative student identifier. Separate capture and gallery inputs make the mobile choice explicit.
+- Academic year is computed on the Backend so a student cannot manipulate it through the UI or direct API calls. Invalid or implausible identifiers return no derived year rather than accepting user input.
+
+### Security and privacy impact
+
+- Attendance no longer transmits a student-card image. Passive face frames are validated in request memory and are not intentionally persisted or logged; the existing face embedding remains sensitive biometric data and must retain its current access restrictions and retention governance.
+- Passive RGB presentation-attack detection reduces common printed-photo, replay-screen, duplicate-frame, face-swap, and multi-face attempts but is not impossible to spoof and is not represented as certified liveness assurance.
+- Liveness tokens remain HMAC-signed, account/challenge-bound, short-lived, canonical-encoded, and protected by a database-backed one-use claim. Backend timing and image checks do not trust browser evidence alone.
+- The face-enrollment table has RLS enabled; anonymous and authenticated roles have no direct table/function access, while the server service role has only the privileges required by the enrollment flow.
+- No credential, token, private endpoint, student record, attachment content, raw image, embedding, or other personal data was added to this log.
+
+### Database and deployment impact
+
+- Diagnosed the reported enrollment failure as the remote database missing local migration `20260907164433_secure_face_enrollment_liveness.sql`; the failure occurred while preparing the one-use enrollment challenge, before card-image or camera analysis.
+- Applied that idempotent migration through the authenticated Supabase SQL Editor, verified that the challenge table and required claim/finalize routines exist, and marked migration `20260907164433` applied in remote migration history.
+- Supabase schema lint subsequently reported no schema errors. Three older local/remote timestamp pairs remain intentionally unreconciled because their schema equivalence was not established in this task.
+- Rebuilt and recreated the Docker Compose staging Backend runtime on the development workstation. Compose also recreated its OCR dependency; both services returned healthy. No database row, stored face template, user account, Vercel setting, Git remote, or Production frontend deployment was modified.
+- Existing CORS configuration was preserved. Read-only preflight checks for both configured hosted frontend origins returned HTTP 200 and echoed the exact requesting origin.
+
+### Verification performed
+
+- Frontend TypeScript build and ESLint completed with exit code 0 using Node.js 24.19.0.
+- Frontend production Vite/PWA build completed successfully: 1,905 modules transformed and 67 service-worker precache entries generated.
+- Frontend card-image sizing, spreadsheet export security, passive scanner contract, face-runtime, and API-origin tests all passed. The scanner contract specifically verifies three passive samples, mirrored front preview, and absence of the attendance card-upload field.
+- Backend Docker test discovery completed with 90 tests passing and no failures or errors, including passive PAD invocation, still-frame rejection, out-of-frame rejection, one-use challenge, authorization, upload, and profile-year regressions.
+- `scripts/verify_face_models.sh` verified all three required InsightFace model files. `pip check` found no broken Backend requirements.
+- Frontend and OCR dependency audits reported zero vulnerabilities at the configured moderate threshold. OCR environment-isolation tests passed; OCR doctor found the released native runtime, while its host-side optional model-module flag remained false and the running container readiness check remained healthy.
+- The strict frontend design audit reported zero findings, errors, warnings, or unresolved violations.
+- Supabase schema lint reported no schema errors. Migration listing showed the repaired face-enrollment migration aligned locally and remotely while retaining the three pre-existing mismatched timestamp pairs.
+- Staging `/health/live` returned status `ok`; `/health/ready` returned database, OCR, and face dependencies `ok`. Final `git diff --check` completed with exit code 0 before this log append.
+
+### Remaining risks and handoff work
+
+- Deploy the Frontend changes to the `demo3.1` Preview environment, clear/update the PWA service worker on test phones, and repeat real-device acceptance across iOS Safari/PWA and Android Chrome/PWA. This task did not push, commit, or trigger a Vercel deployment.
+- Calibrate passive PAD and face-match thresholds against an authorized representative device/lighting dataset. Provide a supervised fallback because RGB-only passive liveness can reject genuine users or accept sophisticated presentation attacks.
+- Confirm the institutional academic-year rollover rule. The implemented rule derives the year from the first two digits of a valid 13-digit identifier and the current Buddhist calendar year, capped at years 1–8; a semester-boundary rule can be added if the institution defines one.
+- Reconcile the three older migration timestamp pairs only after comparing their SQL/schema effects; do not use broad migration repair or an unrestricted database push without that review.
+- Review the working tree before committing. The pre-existing untracked `start_mobile_test.sh` was deliberately left untouched.
+
+## 2026-09-12 — Reconciled Three Supabase Migration Timestamp Pairs
+
+- **Status:** Completed. Local and remote migration history now align for every repository migration, and the remote schema remains unchanged and up to date.
+- **Actor:** Codex primary agent.
+- **Objective:** Resolve the three previously documented local/remote migration timestamp mismatches without replaying schema changes or modifying application data.
+
+### Files and components changed
+
+- Appended this audit record to `log.md` only.
+- Reconciled the Supabase migration-history entries for the face-attendance finalization, processing-lease claim/release, and claim-renewal migrations.
+- No migration SQL file, application source file, environment file, container definition, or generated schema file was modified.
+
+### Implementation rationale
+
+- A fresh read-only dump of the remote `public` schema confirmed that `attendance_checkin_challenges` contains both processing-lease columns and that the current `claim_face_attendance_challenge`, `release_face_attendance_challenge`, seven-argument `finalize_face_attendance`, and `renew_face_attendance_challenge` function bodies canonically match the final definitions in the three local migration files.
+- The remote-only timestamps were created minutes after their corresponding local timestamps and represented schema changes already present in the database. The repair therefore removed only the obsolete remote history labels and marked the repository timestamps applied; it did not execute DDL again.
+- The previous migration-list snapshot was retained only in a temporary local directory for rollback evidence during the operation and was not added to the repository.
+
+### Security and privacy impact
+
+- The verification confirmed that the attendance claim/finalize functions remain `SECURITY INVOKER`, are revoked from `PUBLIC`, and are granted to the Backend service role.
+- No table row, attendance record, account, credential, private endpoint, student record, face image, embedding, or other personal data was read into the project log or changed by the history repair.
+- The existing Supabase Security Advisor warning that leaked-password protection is disabled remains. It is unrelated to migration history and was not changed without a separate authentication-policy decision.
+
+### Database and deployment impact
+
+- Marked the three obsolete remote-only migration versions as reverted in Supabase migration history.
+- Marked local migrations `20260902065653`, `20260902072732`, and `20260902150753` as applied in Supabase migration history.
+- The schema and application data were not altered. No Git push, Vercel deployment, Docker rebuild, or service restart was required.
+
+### Verification performed
+
+- Fetched and reviewed the current Supabase changelog; no relevant migration-repair breaking change applied. Supabase CLI version 2.117.0 and current `migration repair`, `db dump`, and `db advisors` help were consulted before mutation.
+- `supabase db dump --linked --schema public` completed successfully. Programmatic whitespace-normalized comparisons reported exact matches for all four current function bodies: claim, release, seven-argument finalize, and renew.
+- The post-repair migration list showed every local timestamp paired with the same remote timestamp and no local-only or remote-only entries.
+- `supabase db push --dry-run` returned `upToDate: true` with no migrations, seeds, or roles pending.
+- `supabase db lint --linked --level warning` reported no schema errors.
+- Supabase Performance Advisor reported no issues. Security Advisor reported only the pre-existing leaked-password-protection warning.
+- The staging Backend readiness endpoint reported database, OCR, and face dependencies ready.
+- `git diff --check` completed with exit code 0 before this log append.
+
+### Remaining risks and handoff work
+
+- Review and enable Supabase leaked-password protection if password authentication is or will be permitted; Google-only sign-in reduces but does not automatically remove the need to define that policy.
+- Preserve the canonical repository timestamps in future deployments. Do not recreate the three removed remote-only history labels.
+- Review the existing application working tree and this log entry before committing; unrelated user work and the pre-existing untracked mobile-test script remain untouched.

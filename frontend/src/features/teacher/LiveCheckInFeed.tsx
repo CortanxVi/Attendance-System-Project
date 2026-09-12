@@ -36,7 +36,7 @@ const METHOD_CONFIG: Record<string, { label: string; icon: LucideIcon }> = {
 
 /**
  * 🌟 [เพิ่มใหม่] การ์ดแสดงจำนวน + รายชื่อนักศึกษาที่เช็คชื่อสำเร็จแล้วแบบเรียลไทม์
- * รวมทั้ง 2 ช่องทาง (สแกนใบหน้า+OCR และแตะบัตร NFC) ไว้ในที่เดียวกัน เพราะทั้งคู่บันทึกลงตาราง
+ * รวมทั้ง 2 ช่องทาง (สแกนใบหน้าแบบ Passive และแตะบัตร NFC) ไว้ในที่เดียวกัน เพราะทั้งคู่บันทึกลงตาราง
  * attendance_records เดียวกัน ผูกกับ session_id เดียวกัน จึงไม่ต้องแยกดึงข้อมูลคนละที่
  */
 export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFeedProps) {
@@ -71,7 +71,7 @@ export default function LiveCheckInFeed({ sessionId, courseCode }: LiveCheckInFe
             const nextItems = await fetchCheckInList();
             const inserted = nextItems.find((item) => item.id === payload.new.id);
             if (!inserted) return;
-            const method = inserted.method === 'nfc' ? 'แตะบัตร NFC' : inserted.method === 'face_ocr' ? 'สแกนใบหน้าและบัตร' : 'แก้ไขโดยอาจารย์';
+            const method = inserted.method === 'nfc' ? 'แตะบัตร NFC' : inserted.method === 'face_ocr' ? 'สแกนใบหน้า' : 'แก้ไขโดยอาจารย์';
             notify(`${inserted.full_name} เช็คชื่อสำเร็จด้วยวิธี${method}`, 'success');
           } catch {
             notify('มีรายการเช็คชื่อใหม่ แต่โหลดรายละเอียดไม่สำเร็จ', 'error');

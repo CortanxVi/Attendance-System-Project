@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { apiErrorMessage } from './apiError';
-import type { LivenessEvidence } from '../utils/liveness';
+import type { PassiveLivenessEvidence } from '../utils/liveness';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
 const API_BASE_URL = '/api/v1';
@@ -30,10 +30,10 @@ export interface EnrollmentLivenessChallenge {
   student_id: string;
   challenge_expires_at: string;
   challenge_ttl_seconds: number;
+  liveness_protocol_version: 3;
+  liveness_mode: 'passive';
+  liveness_sample_count: 3;
   liveness_token: string;
-  liveness_actions: ('move_closer' | 'blink')[];
-  liveness_required_blinks: number;
-  liveness_prompt_delay_ms: number;
 }
 
 export const faceService = {
@@ -79,13 +79,8 @@ export const faceService = {
     challengeId: string,
     livenessToken: string,
     capture: {
-      faceImage: File;
-      baselineImage: File;
-      nearImage: File;
-      returnImage: File;
-      blinkClosedImages: File[];
-      blinkOpenImages: File[];
-      evidence: LivenessEvidence;
+      passiveImages: [File, File, File];
+      evidence: PassiveLivenessEvidence;
     },
   ): Promise<RegisterResponse> => {
     const formData = new FormData();
@@ -93,12 +88,7 @@ export const faceService = {
     formData.append('enrollment_challenge_id', challengeId);
     formData.append('liveness_token', livenessToken);
     formData.append('liveness_evidence', JSON.stringify(capture.evidence));
-    formData.append('face_image', capture.faceImage);
-    formData.append('liveness_baseline_image', capture.baselineImage);
-    formData.append('liveness_near_image', capture.nearImage);
-    formData.append('liveness_return_image', capture.returnImage);
-    capture.blinkClosedImages.forEach((image) => formData.append('liveness_blink_closed_images', image));
-    capture.blinkOpenImages.forEach((image) => formData.append('liveness_blink_open_images', image));
+    capture.passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
     try {
       const response = await axios.post<RegisterResponse>(
         `${API_BASE_URL}/enrollment/register-face`,
@@ -111,29 +101,15 @@ export const faceService = {
     }
   },
 
-  // ฟังก์ชันยิง API ยืนยันตัวตนเช็คชื่อ (ใบหน้าสด + รูปบัตรนักศึกษาหรือรหัสนักศึกษา)
-  // 🌟 [เพิ่มใหม่] sessionId เป็น parameter แบบไม่บังคับ — ถ้ามี (มาจากการสแกน QR ผ่านแล้ว)
-  // จะถูกส่งไปให้ backend ผูกกับคาบเรียนจริง และคำนวณสาย/ขาดให้ถูกต้อง
+  // ยืนยันการเช็คชื่อด้วย Passive Liveness ที่ผูกกับบัญชีและ Dynamic QR แบบใช้ครั้งเดียว
   verifyAttendance: async (
-    faceImage: File,
-    baselineImage: File,
-    nearImage: File,
-    returnImage: File,
-    blinkClosedImages: File[],
-    blinkOpenImages: File[],
-    idCardImage: File,
+    passiveImages: [File, File, File],
     challengeId: string,
     livenessToken: string,
-    livenessEvidence: LivenessEvidence,
+    livenessEvidence: PassiveLivenessEvidence,
   ): Promise<VerifyResponse> => {
     const formData = new FormData();
-    formData.append('face_image', faceImage);
-    formData.append('liveness_baseline_image', baselineImage);
-    formData.append('liveness_near_image', nearImage);
-    formData.append('liveness_return_image', returnImage);
-    blinkClosedImages.forEach((image) => formData.append('liveness_blink_closed_images', image));
-    blinkOpenImages.forEach((image) => formData.append('liveness_blink_open_images', image));
-    formData.append('id_card_image', idCardImage);
+    passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
     formData.append('challenge_id', challengeId);
     formData.append('liveness_token', livenessToken);
     formData.append('liveness_evidence', JSON.stringify(livenessEvidence));

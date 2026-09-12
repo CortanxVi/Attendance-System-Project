@@ -43,7 +43,7 @@ from core.operational import OperationalHeadersMiddleware
 from services.light_ocr_service import extract_student_id, read_validated_image, student_card_ocr_limiter
 from services.insightface_service import face_service
 from services.liveness_service import create_liveness_challenge, verify_liveness_submission
-from services.liveness_frame_service import verify_liveness_frames
+from services.liveness_frame_service import verify_passive_liveness_frames
 from services.face_enrollment_service import (
     claim_face_enrollment_challenge,
     finalize_face_enrollment,
@@ -537,10 +537,10 @@ async def create_face_enrollment_liveness_challenge(
         "student_id": current_user.student_id,
         "challenge_expires_at": expires_at.isoformat(),
         "challenge_ttl_seconds": int((expires_at - datetime.now(timezone.utc)).total_seconds()),
+        "liveness_protocol_version": 3,
+        "liveness_mode": liveness.mode,
+        "liveness_sample_count": liveness.sample_count,
         "liveness_token": liveness.token,
-        "liveness_actions": list(liveness.actions),
-        "liveness_required_blinks": liveness.required_blinks,
-        "liveness_prompt_delay_ms": liveness.prompt_delay_ms,
     }
 
 
@@ -551,11 +551,7 @@ async def register_face(
     enrollment_challenge_id: str | None = Form(None),
     liveness_token: str | None = Form(None),
     liveness_evidence: str | None = Form(None),
-    liveness_baseline_image: UploadFile | None = File(None),
-    liveness_near_image: UploadFile | None = File(None),
-    liveness_return_image: UploadFile | None = File(None),
-    liveness_blink_closed_images: list[UploadFile] | None = File(None),
-    liveness_blink_open_images: list[UploadFile] | None = File(None),
+    liveness_passive_images: list[UploadFile] | None = File(None),
     current_user: AuthenticatedUser = Depends(require_roles("student", "admin")),
 ):
     processing_claim_token: str | None = None
@@ -574,16 +570,11 @@ async def register_face(
                 enrollment_challenge_id,
                 liveness_token,
                 liveness_evidence,
-                face_image,
-                liveness_baseline_image,
-                liveness_near_image,
-                liveness_return_image,
             )
             if any(value is None for value in required_values):
                 raise HTTPException(status_code=422, detail="ต้องผ่าน Liveness ก่อนลงทะเบียนใบหน้า")
 
-            closed_uploads = liveness_blink_closed_images or []
-            open_uploads = liveness_blink_open_images or []
+            passive_uploads = liveness_passive_images or []
             await run_in_threadpool(
                 load_face_enrollment_challenge,
                 enrollment_challenge_id,
@@ -596,11 +587,8 @@ async def register_face(
                 enrollment_challenge_id,
                 current_user.id,
             )
-            if (
-                len(closed_uploads) != verified_liveness.required_blinks
-                or len(open_uploads) != verified_liveness.required_blinks
-            ):
-                raise HTTPException(status_code=422, detail="จำนวนภาพกระพริบตาไม่ตรงกับ challenge")
+            if len(passive_uploads) != verified_liveness.sample_count:
+                raise HTTPException(status_code=422, detail="จำนวนภาพ Passive Liveness ไม่ตรงกับ challenge")
 
             processing_claim_token = str(uuid.uuid4())
             await run_in_threadpool(
@@ -618,19 +606,9 @@ async def register_face(
             )
 
             upload_tasks = [
-                read_validated_image(face_image, "ภาพใบหน้าสุดท้าย"),
-                read_validated_image(liveness_baseline_image, "ภาพปรับเทียบใบหน้า"),
-                read_validated_image(liveness_near_image, "ภาพขณะเข้าใกล้กล้อง"),
-                read_validated_image(liveness_return_image, "ภาพหลังกลับเข้ากรอบ"),
+                read_validated_image(upload, f"ภาพ Passive Liveness ลำดับที่ {index}")
+                for index, upload in enumerate(passive_uploads, start=1)
             ]
-            upload_tasks.extend(
-                read_validated_image(upload, f"ภาพหลับตาครั้งที่ {index}")
-                for index, upload in enumerate(closed_uploads, start=1)
-            )
-            upload_tasks.extend(
-                read_validated_image(upload, f"ภาพลืมตาครั้งที่ {index}")
-                for index, upload in enumerate(open_uploads, start=1)
-            )
             validated_uploads = await asyncio.gather(*upload_tasks)
             prepared_images = await asyncio.gather(*(
                 run_in_threadpool(prepare_face_image, upload.content)
@@ -639,18 +617,9 @@ async def register_face(
             if any(image is None for image in prepared_images):
                 raise HTTPException(status_code=400, detail="ไฟล์ภาพ Liveness เสียหรืออ่านไม่ได้")
 
-            img_final, img_baseline, img_near, img_return = prepared_images[:4]
-            img_closed = prepared_images[4:4 + verified_liveness.required_blinks]
-            img_open = prepared_images[4 + verified_liveness.required_blinks:]
             verified_frames = await run_in_threadpool(
-                verify_liveness_frames,
-                img_baseline,
-                img_near,
-                img_return,
-                img_closed,
-                img_open,
-                img_final,
-                verified_liveness.required_blinks,
+                verify_passive_liveness_frames,
+                prepared_images,
             )
             await run_in_threadpool(
                 finalize_face_enrollment,
@@ -720,14 +689,8 @@ async def register_face(
                 logger.exception("Face enrollment challenge release failed")
 
 @app.post("/api/v1/attendance/verify")
-async def verify_FaceReg_OCR_attendance(
-    face_image: UploadFile = File(...),
-    liveness_baseline_image: UploadFile = File(...),
-    liveness_near_image: UploadFile = File(...),
-    liveness_return_image: UploadFile = File(...),
-    liveness_blink_closed_images: list[UploadFile] = File(...),
-    liveness_blink_open_images: list[UploadFile] = File(...),
-    id_card_image: UploadFile = File(...),
+async def verify_passive_face_attendance(
+    liveness_passive_images: list[UploadFile] = File(...),
     challenge_id: str = Form(...),
     liveness_token: str = Form(...),
     liveness_evidence: str = Form(...),
@@ -775,70 +738,21 @@ async def verify_FaceReg_OCR_attendance(
             )
         )
 
-        if (
-            len(liveness_blink_closed_images) != verified_liveness.required_blinks
-            or len(liveness_blink_open_images) != verified_liveness.required_blinks
-        ):
-            raise HTTPException(status_code=422, detail="จำนวนภาพกระพริบตาไม่ตรงกับ challenge")
-
-        upload_tasks = [
-            read_validated_image(face_image, "ภาพใบหน้าสุดท้าย"),
-            read_validated_image(liveness_baseline_image, "ภาพปรับเทียบใบหน้า"),
-            read_validated_image(liveness_near_image, "ภาพขณะเข้าใกล้กล้อง"),
-            read_validated_image(liveness_return_image, "ภาพหลังกลับเข้ากรอบ"),
-            read_validated_image(id_card_image, "ภาพบัตรนักศึกษา"),
-        ]
-        upload_tasks.extend(
-            read_validated_image(upload, f"ภาพหลับตาครั้งที่ {index}")
-            for index, upload in enumerate(liveness_blink_closed_images, start=1)
-        )
-        upload_tasks.extend(
-            read_validated_image(upload, f"ภาพลืมตาครั้งที่ {index}")
-            for index, upload in enumerate(liveness_blink_open_images, start=1)
-        )
-        validated_uploads = await asyncio.gather(*upload_tasks)
-        face_upload, baseline_upload, near_upload, return_upload, card_upload = validated_uploads[:5]
-        blink_closed_uploads = validated_uploads[5:5 + verified_liveness.required_blinks]
-        blink_open_uploads = validated_uploads[5 + verified_liveness.required_blinks:]
-
-        face_inputs = [
-            face_upload,
-            baseline_upload,
-            near_upload,
-            return_upload,
-            *blink_closed_uploads,
-            *blink_open_uploads,
-        ]
+        if len(liveness_passive_images) != verified_liveness.sample_count:
+            raise HTTPException(status_code=422, detail="จำนวนภาพ Passive Liveness ไม่ตรงกับ challenge")
+        validated_uploads = await asyncio.gather(*(
+            read_validated_image(upload, f"ภาพ Passive Liveness ลำดับที่ {index}")
+            for index, upload in enumerate(liveness_passive_images, start=1)
+        ))
         prepared_images = await asyncio.gather(*(
             run_in_threadpool(prepare_face_image, upload.content)
-            for upload in face_inputs
+            for upload in validated_uploads
         ))
         if any(image is None for image in prepared_images):
             raise HTTPException(status_code=400, detail="ไฟล์ภาพ liveness เสียหรืออ่านไม่ได้")
 
-        img_live, img_baseline, img_near, img_return = prepared_images[:4]
-        img_blink_closed = prepared_images[4:4 + verified_liveness.required_blinks]
-        img_blink_open = prepared_images[4 + verified_liveness.required_blinks:]
-        verified_frames, extracted_student_id = await asyncio.gather(
-            run_in_threadpool(
-                verify_liveness_frames,
-                img_baseline,
-                img_near,
-                img_return,
-                img_blink_closed,
-                img_blink_open,
-                img_live,
-                verified_liveness.required_blinks,
-            ),
-            extract_student_id(card_upload),
-        )
+        verified_frames = await run_in_threadpool(verify_passive_liveness_frames, prepared_images)
         emb_live = verified_frames.final_embedding
-
-        if extracted_student_id != current_user.student_id:
-            raise HTTPException(
-                status_code=403,
-                detail="รหัสบนบัตรไม่ตรงกับบัญชีที่เข้าสู่ระบบ",
-            )
 
         db_response = await run_in_threadpool(
             lambda: supabase.table('profiles')
@@ -850,11 +764,11 @@ async def verify_FaceReg_OCR_attendance(
         if len(db_response.data) == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, 
-                detail=f"ไม่พบรหัสนักศึกษา {extracted_student_id} ในระบบฐานข้อมูลโปรไฟล์"
+                detail="ไม่พบโปรไฟล์นักศึกษาในระบบฐานข้อมูล"
             )
             
         profile_uuid = current_user.id
-        full_name = db_response.data[0].get('full_name') or extracted_student_id
+        full_name = db_response.data[0].get('full_name') or current_user.student_id
 
         
         registered_embedding_data = db_response.data[0].get('face_embedding')
@@ -906,7 +820,7 @@ async def verify_FaceReg_OCR_attendance(
         # คืนค่าความสำเร็จกลับไปให้หน้าบ้าน (Frontend)
         return {
             "success": True,
-            "student_id": extracted_student_id, # ตรงนี้ส่งรหัส 13 หลักกลับไปให้ Frontend โชว์ได้ปกติ
+            "student_id": current_user.student_id,
             "student_name": full_name,
             "method": "face_ocr",
             "score": round(similarity_score, 4),
@@ -1260,11 +1174,10 @@ def validate_session_qr_token(
             "challenge_id": challenge_id,
             "challenge_expires_at": expires_at.isoformat(),
             "challenge_ttl_seconds": QR_CHALLENGE_SECONDS,
-            "liveness_protocol_version": 2,
+            "liveness_protocol_version": 3,
             "liveness_token": liveness_challenge.token,
-            "liveness_actions": list(liveness_challenge.actions),
-            "liveness_required_blinks": liveness_challenge.required_blinks,
-            "liveness_prompt_delay_ms": liveness_challenge.prompt_delay_ms,
+            "liveness_mode": liveness_challenge.mode,
+            "liveness_sample_count": liveness_challenge.sample_count,
         }
     except HTTPException:
         raise
