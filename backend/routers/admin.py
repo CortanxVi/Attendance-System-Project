@@ -13,6 +13,7 @@ from core.security import (
     require_roles,
 )
 from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
+from services.attendance_export_service import export_service
 
 
 logger = logging.getLogger(__name__)
@@ -388,33 +389,19 @@ def get_audit_logs():
 
 @admin_router.get("/export/attendance/{course_id}")
 def get_export_attendance_data(course_id: str):
-    """ดึงข้อมูลสำหรับนำไปสร้างไฟล์ Excel/CSV/PDF ที่หน้าบ้าน"""
+    """Return the same canonical attendance-report payload used by teachers."""
     try:
-        course_res = supabase.table("courses").select("*").eq("id", course_id).execute()
-        if not course_res.data:
-             raise HTTPException(status_code=404, detail="ไม่พบวิชา")
-        course = course_res.data[0]
-
-        records_res = supabase.table("attendance_records") \
-            .select("check_in_time, status, method, profiles(student_id, full_name), attendance_sessions!inner(course_id)") \
-            .eq("attendance_sessions.course_id", course_id) \
-            .order("check_in_time", desc=False) \
-            .execute()
-
-        export_data = []
-        for r in records_res.data:
-            export_data.append({
-                "student_id": r["profiles"]["student_id"] if r["profiles"] else "N/A",
-                "full_name": r["profiles"]["full_name"] if r["profiles"] else "Unknown",
-                "check_in_time": r["check_in_time"],
-                "status": r["status"],
-                "method": r["method"]
-            })
-
+        data, error = export_service.get_export_data(course_id)
+        if error or data is None:
+            raise HTTPException(status_code=404, detail=error or "ไม่พบข้อมูลรายวิชานี้")
         return {
             "status": "success",
-            "course": course,
-            "records": export_data
+            "course": data["course"],
+            "records": data["records"],
+            "sessions": data["sessions"],
+            "students": data["students"],
         }
-    except Exception as e:
-         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from exc

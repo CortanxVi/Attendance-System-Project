@@ -3,8 +3,8 @@ import axios from 'axios';
 import { X, Download, Clock, Search, AlertCircle, Edit2, CheckCircle2, List, Grid, CalendarDays, CheckSquare, XSquare } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
-import { sanitizeSpreadsheetMatrix } from '../../services/spreadsheet';
 import { apiErrorMessage } from '../../services/apiError';
+import { exportAttendanceReport, type AttendanceExportPayload, type ReportFormat } from '../../services/reportExport';
 
 interface CourseAttendanceViewProps {
   courseId: string;
@@ -14,7 +14,7 @@ interface CourseAttendanceViewProps {
 }
 
 interface AttendanceRecord { id: string; student_id: string; full_name: string; session_id: string; status: string; check_in_time: string; method?: string | null }
-interface AttendanceSession { id: string; created_at: string; status?: string }
+interface AttendanceSession { id: string; created_at: string; status?: string | null }
 interface AttendanceStudent { student_id: string; full_name: string }
 
 export default function CourseAttendanceView({ courseId, courseCode, courseName, onClose }: CourseAttendanceViewProps) {
@@ -22,7 +22,9 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [sessions, setSessions] = useState<AttendanceSession[]>([]);
   const [students, setStudents] = useState<AttendanceStudent[]>([]);
+  const [exportPayload, setExportPayload] = useState<AttendanceExportPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState<ReportFormat | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'session' | 'list' | 'matrix'>('matrix');
   
@@ -38,10 +40,11 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
   const fetchData = useCallback(async (preserveSession = false) => {
     try {
       if (!preserveSession) setLoading(true);
-      const res = await axios.get(`/api/v1/teacher/export/attendance/${courseId}`);
+      const res = await axios.get<AttendanceExportPayload & { status: string }>(`/api/v1/teacher/export/attendance/${courseId}`);
       if (res.data.status === 'success') {
         setRecords(res.data.records);
         setStudents(res.data.students || []);
+        setExportPayload(res.data);
         const s = res.data.sessions || [];
         setSessions(s);
         if (!preserveSession && s.length > 0) setSelectedSessionId((current) => current || s[s.length - 1].id);
@@ -145,54 +148,16 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
     if (!matrixMap[r.student_id]) matrixMap[r.student_id] = {};
     matrixMap[r.student_id][r.session_id] = r;
   });
-
-
-
-
-  const handleExportExcel = async () => {
+  const handleExport = async (format: ReportFormat) => {
+    if (!exportPayload || exporting) return;
     try {
-      // Create worksheet data
-      const wsData = [];
-      
-      // Header row
-      const header = ["รหัสนักศึกษา", "ชื่อ-นามสกุล"];
-      sessions.forEach((_session, i) => header.push(`ครั้งที่ ${i + 1}`));
-      header.push("มา/สาย", "ขาด");
-      wsData.push(header);
-      
-      // Data rows
-      filteredStudents.forEach(student => {
-        const row = [student.student_id, student.full_name];
-        let presentCount = 0;
-        let absentCount = 0;
-        
-        sessions.forEach(s => {
-          const record = matrixMap[student.student_id]?.[s.id];
-          const status = record?.status;
-          const isAttended = status === 'present' || status === 'late';
-          if (isAttended) presentCount++;
-          else absentCount++;
-          
-          let statusText = 'ขาด';
-          if (status === 'present') statusText = 'มา';
-          else if (status === 'late') statusText = 'สาย';
-          
-          row.push(statusText);
-        });
-        
-        row.push(presentCount.toString(), absentCount.toString());
-        wsData.push(row);
-      });
-      
-      const XLSX = await import('xlsx');
-      const ws = XLSX.utils.aoa_to_sheet(sanitizeSpreadsheetMatrix(wsData));
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Attendance");
-      
-      XLSX.writeFile(wb, `Attendance_${courseCode}.xlsx`);
-    } catch (err) {
-      console.error(err);
-      notify('เกิดข้อผิดพลาดในการสร้างไฟล์ Excel', 'error');
+      setExporting(format);
+      await exportAttendanceReport(exportPayload, format);
+      notify(`สร้างไฟล์ ${format.toUpperCase()} สำเร็จ`, 'success');
+    } catch (err: unknown) {
+      notify(`สร้างรายงานไม่สำเร็จ: ${apiErrorMessage(err, 'ไม่สามารถสร้างไฟล์ได้')}`, 'error');
+    } finally {
+      setExporting(null);
     }
   };
   return (
@@ -238,12 +203,19 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
 
             
             <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-              <button 
-                onClick={handleExportExcel}
-                className="flex min-h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-green-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-300"
-              >
-                <Download size={16} /> โหลด Excel
-              </button>
+              <div className="grid shrink-0 grid-cols-3 gap-2" aria-label="ดาวน์โหลดรายงาน">
+                {(['excel', 'csv', 'pdf'] as const).map((format) => (
+                  <button
+                    key={format}
+                    type="button"
+                    disabled={!exportPayload || Boolean(exporting)}
+                    onClick={() => void handleExport(format)}
+                    className={`flex min-h-10 cursor-pointer items-center justify-center gap-1 rounded-lg px-3 text-xs font-bold shadow-sm transition-colors focus:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${format === 'excel' ? 'bg-green-500 text-white hover:bg-green-600 focus-visible:ring-green-300' : format === 'csv' ? 'bg-blue-500 text-white hover:bg-blue-600 focus-visible:ring-blue-300' : 'bg-orange-500 text-white hover:bg-orange-600 focus-visible:ring-orange-300'}`}
+                  >
+                    <Download size={15} />{exporting === format ? 'กำลังสร้าง…' : format === 'excel' ? 'Excel' : format.toUpperCase()}
+                  </button>
+                ))}
+              </div>
 
               {/* Toggle View Mode */}
               <div className="grid min-w-0 grid-cols-3 rounded-lg bg-gray-100 p-1">

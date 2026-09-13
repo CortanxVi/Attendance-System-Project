@@ -1201,3 +1201,64 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - The in-app browser inspection validates responsive layout and camera-surface integration but does not replace physical-device safe-area, thermal, focus, camera-selection, or anti-spoof calibration testing.
 - RGB Passive PAD and face similarity remain risk-reduction controls rather than a guarantee against every presentation attack. Calibrate thresholds on an authorized representative dataset and maintain a supervised fallback and biometric retention/deletion policy.
 - Review the full dirty working tree before committing because it also contains valid changes from the preceding Teacher/Admin task. Deploy all interdependent Backend and Frontend changes together where required, then clear/update installed PWA service workers during acceptance.
+
+## 2026-09-13 — Unified Weekly Attendance Export for Administrators and Teachers
+
+- **Status:** Completed in the working tree. The shared Backend payload, browser export implementation, formula/style verification, production build, and regression tests passed. No commit, push, database mutation, container restart, or hosting deployment was performed.
+- **Actor:** Codex primary agent.
+- **Objective:** Replace the event-list attendance exports with one weekly roster report shared by Administrator and Teacher workflows, match the supplied register workbook structure, apply the required `1`, `/`, and `X` symbols, calculate attendance summaries against course criteria, and derive PDF output from the same canonical report model.
+
+### Files and components changed
+
+- Refactored `backend/services/attendance_export_service.py` to return an explicitly selected course configuration, instructor name, chronological attendance sessions with close state, enrolled roster, and session-linked attendance records in one canonical payload.
+- Replaced the duplicate Administrator export query in `backend/routers/admin.py` with the shared export service while retaining the existing role-protected endpoint and preserving HTTP errors.
+- Rebuilt `frontend/src/services/reportExport.ts` around a shared weekly report model used by Excel, CSV, and PDF. It creates one row per student, chronological week columns, symbol legend, course/instructor metadata, completed-session summaries, attendance percentage, and a criteria-based remark.
+- Added `frontend/src/services/xlsxStyle.ts`, which applies the workbook typography, orange two-level headers, borders, score number format, frozen panes, landscape print setup, and forced formula recalculation to the browser-generated XLSX package.
+- Updated Administrator and Teacher report screens, plus the Teacher attendance-history dialog, to request and export the same complete payload. The Teacher dialog now offers Excel, CSV, and PDF instead of maintaining a separate legacy Excel-only implementation.
+- Added the exact-pinned zero-dependency `fflate` package and lockfile entry for safe in-browser XLSX package styling. An evaluated Excel library with a vulnerable transitive dependency was removed before implementation and is not present in the final dependency graph.
+- Added `backend/tests/test_attendance_export_service.py` and `frontend/scripts/test-report-export.mts` for the canonical query contract, roster ordering, weekly symbol rules, closed/open session behavior, summary math, identifier formatting, spreadsheet-formula injection defense, XLSX styles/freeze/print metadata, and PDF document structure.
+- Added `outputs/attendance-export-redesign/attendance-report-sample.xlsx`, containing synthetic example data only, as the visually verified acceptance sample based on the supplied workbook layout.
+
+### Implementation rationale
+
+- A weekly pivot cannot be reconstructed reliably from the former records-only response because it lacks enrolled students with no check-in and lacks closed sessions whose missing records must be classified as absences. Returning roster, sessions, records, and course rules together makes the report deterministic for both roles.
+- A successful `present` record is written as numeric `1`; a stored `late` record is written as `/`; an explicit absence or a missing record in a closed session is written as `X`. Missing records in open sessions and future configured weeks remain blank so incomplete sessions are not prematurely counted as absences.
+- Summary calculations include only closed sessions. Attendance percentage is `(present + late) / closed sessions * 100`; late attendance counts as attended because the current course schema has no late-deduction weight. The report states this rule instead of inventing an undocumented penalty.
+- The allowed absence count is the floor of `planned weeks * max_absence_percent / 100`. The remark reports pass/fail against that stored course criterion, while also displaying present, late, absent, attended, and percentage columns separately.
+- Excel stores live formulas and cached results, so the workbook opens with values immediately and recalculates when marks are edited. CSV contains the same metadata, legend, weekly columns, and computed values as flat text. PDF uses the same report model and two-level table rather than a separate calculation path.
+- The existing SheetJS package preserves data and formulas but does not emit custom visual cell styles. Post-processing only the generated Open XML style and worksheet metadata keeps the audited existing spreadsheet writer, avoids a vulnerable spreadsheet dependency, and preserves browser-only download behavior.
+
+### Security and privacy impact
+
+- Existing server-side Administrator role checks and Teacher course-ownership checks remain authoritative. The shared service does not create a new public or client-direct Supabase data path.
+- Course and student strings are passed through the existing spreadsheet-cell sanitizer before CSV/XLSX creation, including metadata and names, preventing leading formula characters from being interpreted as spreadsheet formulas. XLSX filenames are restricted to safe character classes.
+- PDF font loading remains restricted to the current Frontend origin. No remote arbitrary font or document URL is permitted by the PDF generator.
+- The acceptance workbook and automated fixtures use synthetic records only. No production student identifiers, names, attendance rows, credentials, private endpoints, access tokens, or biometric data were written to source, output artifacts, or this log.
+- The new ZIP library is pinned exactly and has no transitive dependencies. The final Frontend dependency audit reported zero vulnerabilities at the moderate threshold.
+
+### Database and deployment impact
+
+- No SQL migration, schema change, RLS policy change, table data mutation, Auth change, or Storage operation was required. The implementation reads existing foreign-key relationships and existing course/session/attendance fields through the Backend's privileged database client after API authorization.
+- A read-only aggregate verification against the linked Supabase project confirmed the four required course-report criteria columns and found no missing profile/session relationships in the queried course, enrollment, and attendance relationship checks. No row contents were retrieved or logged.
+- Current Supabase changelog and official Python filtering/join documentation were reviewed; no relevant breaking change applies to the selected nested relations, `!inner` filter, ordering, or equality filters.
+- Backend and Frontend should be deployed together because the Frontend now expects `course`, `students`, `sessions`, and `records` from both export endpoints. No Production or Preview deployment was triggered in this task.
+
+### Verification performed
+
+- The focused Frontend report-model test passed under the supported workspace Node runtime, including weekly ordering, `1`/`/`/`X` marks, closed-versus-open handling, percentage/remark calculations, formula-injection sanitization, generated XLSX style metadata, frozen panes, landscape page setup, and the shared PDF definition.
+- The existing spreadsheet security test passed.
+- Frontend ESLint completed with exit code 0.
+- Frontend TypeScript compilation and Vite/PWA Production build completed with exit code 0 under Node.js 24.19.0; 1,910 modules were transformed and 68 service-worker precache entries were generated. The system Node.js 18 invocation failed only the documented Vite engine requirement before the supported runtime rerun passed.
+- Frontend `npm audit --audit-level=moderate` reported zero vulnerabilities after installing the exact-pinned ZIP dependency.
+- Full Backend unit discovery completed with 94 tests passing and no failures or errors, including the two new export-service tests.
+- The runtime-generated XLSX was re-imported and inspected: the weekly values and formulas were intact, all inspected formula-error patterns returned zero matches, TH Sarabun New styles and orange headers were present, and visual rendering confirmed the table fit, borders, summary area, and 16-week layout.
+- The synthetic acceptance workbook was recalculated, inspected, formula-error scanned with zero matches, and rendered for visual review before export. Only the final XLSX remains under `outputs/`.
+- `git diff --check` completed with exit code 0 before this log append.
+
+### Remaining risks and handoff work
+
+- Perform an authenticated browser acceptance test as both Administrator and Teacher using a non-sensitive test course, download all three formats, and open Excel/PDF in the institution's supported desktop/mobile viewers. Browser download behavior and physical printer margins can vary by platform.
+- Confirm the desired academic policy if late attendance should reduce the percentage or carry a custom weight. The database currently supplies only time thresholds and maximum absence percentage, so the implemented and documented rule counts late attendance as attended.
+- If the institution needs excused absence, make-up classes, multiple sessions in one week, a separate attendance-grade weight, or a fixed calendar-week mapping, add explicit schema/business rules before changing report semantics; the current data contract supports only present, late, and absent session outcomes.
+- Large rosters and unusually high configured session counts can make the browser-generated workbook/PDF wide or memory-intensive. The PDF automatically moves from A3 to A2 above 18 weeks, but representative high-volume acceptance remains necessary.
+- Review and commit the complete working tree before deployment, then deploy Backend and Frontend together and clear/update installed PWA service workers during Production acceptance.

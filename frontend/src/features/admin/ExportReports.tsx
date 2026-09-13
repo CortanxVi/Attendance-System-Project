@@ -4,7 +4,7 @@ import { Download, FileSpreadsheet, LayoutList, Search, Table2, UserRound, X } f
 import { useSearchParams } from 'react-router-dom';
 import { useNotification } from '../../components/notifications/notificationContext';
 import { apiErrorMessage } from '../../services/apiError';
-import { exportAttendanceReport, type AttendanceExportRecord, type ReportCourse, type ReportFormat } from '../../services/reportExport';
+import { exportAttendanceReport, type AttendanceExportPayload, type ReportCourse, type ReportFormat } from '../../services/reportExport';
 
 export default function ExportReports() {
   const { notify } = useNotification();
@@ -33,10 +33,9 @@ export default function ExportReports() {
     if (exporting) return;
     const operation = `${course.id}:${format}`; setExporting(operation);
     try {
-      const response = await axios.get<{ records?: AttendanceExportRecord[] }>(`/api/v1/admin/export/attendance/${course.id}`);
-      const records = response.data.records ?? [];
-      if (!records.length) { notify('ไม่มีข้อมูลการเช็คชื่อสำหรับวิชานี้', 'info'); return; }
-      await exportAttendanceReport(records, course.course_code, format, '#dc2626', course.profiles?.full_name);
+      const response = await axios.get<AttendanceExportPayload & { status: string }>(`/api/v1/admin/export/attendance/${course.id}`);
+      if (!(response.data.students?.length || response.data.records?.length)) { notify('ไม่มีรายชื่อนักศึกษาสำหรับวิชานี้', 'info'); return; }
+      await exportAttendanceReport(response.data, format);
       notify(`สร้างไฟล์ ${format.toUpperCase()} สำเร็จ`, 'success');
     } catch (error: unknown) { notify(`Export ล้มเหลว: ${apiErrorMessage(error, 'ไม่สามารถสร้างรายงานได้')}`, 'error'); }
     finally { setExporting(null); }
