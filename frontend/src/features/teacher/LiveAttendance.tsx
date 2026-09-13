@@ -2,9 +2,10 @@
 import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../../lib/supabaseClient';
-import { Clock, Users, XCircle, AlertTriangle, CreditCard, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Clock, Users, XCircle, AlertTriangle, CreditCard, ToggleLeft, ToggleRight, Maximize2, Minimize2 } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import { apiErrorMessage } from '../../services/apiError';
+import { usePresentationMode } from '../../components/presentation/usePresentationMode';
 
 interface LiveAttendanceProps {
   courseCode?: string;
@@ -15,6 +16,12 @@ interface LiveAttendanceProps {
 
 export default function LiveAttendance({ courseCode = '', courseName = '', activeSessionId, onClose }: LiveAttendanceProps) {
   const { notify } = useNotification();
+  const {
+    containerRef: presentationRef,
+    isActive: presentationActive,
+    toggle: togglePresentation,
+    exit: exitPresentation,
+  } = usePresentationMode<HTMLDivElement>();
   const [token, setToken] = useState<string>(''); 
   const [countdown, setCountdown] = useState<number>(15);
   const [refreshSeconds, setRefreshSeconds] = useState<number>(15);
@@ -125,23 +132,32 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
     token: token
   });
 
+  const closeWindow = async () => {
+    await exitPresentation();
+    onClose?.();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/95 p-2 sm:p-4">
-      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl animate-fade-in md:flex-row sm:max-h-[calc(100dvh-2rem)]">
+    <div className="fixed inset-0 flex items-center justify-center overflow-y-auto bg-slate-900/95 p-2 sm:p-4" style={{ zIndex: 'var(--z-backdrop)' }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="live-attendance-title" className="flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl animate-fade-in md:flex-row sm:max-h-[calc(100dvh-2rem)]" style={{ zIndex: 'var(--z-dialog)' }}>
         
         {/* ฝั่งซ้าย: แสดง QR Code */}
-        <div className="flex flex-1 flex-col items-center justify-center border-b border-gray-100 bg-gray-50 p-4 sm:p-8 md:border-r md:border-b-0">
-          <h2 className="mb-1 break-words text-center text-xl font-bold text-gray-800 sm:text-2xl">เช็คชื่อวิชา {courseName}</h2>
-          <p className="mb-5 text-sm font-medium text-gray-500 sm:mb-8">รหัสวิชา: {courseCode}</p>
+        <div ref={presentationRef} className={`flex flex-1 flex-col items-center justify-center overflow-y-auto border-b border-gray-100 p-4 sm:p-8 md:border-r md:border-b-0 ${presentationActive ? 'fixed inset-0 bg-slate-950 text-white' : 'relative bg-gray-50'}`} style={presentationActive ? { zIndex: 'var(--z-presentation)' } : undefined}>
+          <button type="button" onClick={() => void togglePresentation()} aria-label={presentationActive ? 'ออกจากโหมดเต็มหน้าจอ QR Code' : 'ขยาย QR Code เต็มหน้าจอ'} aria-pressed={presentationActive} className={`absolute right-3 top-3 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl px-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-300 sm:right-5 sm:top-5 ${presentationActive ? 'bg-white/10 text-white hover:bg-white/20' : 'border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-100'}`}>
+            {presentationActive ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
+            <span className="hidden sm:inline">{presentationActive ? 'ออกจากเต็มจอ' : 'เต็มหน้าจอ'}</span>
+          </button>
+          <h2 id="live-attendance-title" className={`mb-1 max-w-3xl break-words px-12 text-center font-bold ${presentationActive ? 'text-2xl text-white sm:text-4xl' : 'text-xl text-gray-800 sm:text-2xl'}`}>เช็คชื่อวิชา {courseName}</h2>
+          <p className={`mb-5 text-sm font-medium sm:mb-8 ${presentationActive ? 'text-slate-300 sm:text-xl' : 'text-gray-500'}`}>รหัสวิชา: {courseCode}</p>
           
-          <div className="relative mb-6 aspect-square w-full max-w-[250px] rounded-xl border border-gray-200 bg-white p-3 shadow-sm sm:p-4">
+          <div className={`relative mb-6 aspect-square w-full rounded-xl border border-gray-200 bg-white p-3 shadow-sm sm:p-4 ${presentationActive ? 'max-w-[min(64vmin,38rem)]' : 'max-w-[250px]'}`}>
              <QRCodeSVG value={qrData} size={250} level={"H"} className="h-auto w-full max-w-full" />
              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl text-orange-500 shadow-md border border-gray-100">
                 {countdown}
              </div>
           </div>
           
-          <div className="flex items-center gap-2 text-sm font-medium text-orange-600 bg-orange-50 px-4 py-2 rounded-full border border-orange-200">
+          <div className="flex items-center gap-2 rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-center text-sm font-medium text-orange-700">
             <Clock size={16} />
             Dynamic QR เปลี่ยน token ทุก {refreshSeconds} วินาที
           </div>
@@ -217,11 +233,11 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
           </div>
           
           <button 
-            onClick={onClose}
-            className="w-full mt-8 bg-red-50 hover:bg-red-100 text-red-600 font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            onClick={() => void closeWindow()}
+            className="mt-8 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 py-3 font-medium text-slate-700 transition-colors hover:bg-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-300"
           >
             <XCircle size={18} />
-            ปิดหน้าต่างรับเช็คชื่อ
+            ย่อหน้าต่าง (ระบบยังเปิดอยู่)
           </button>
         </div>
 

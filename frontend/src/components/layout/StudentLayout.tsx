@@ -2,13 +2,10 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { BookOpen, Home, History, User } from 'lucide-react'; // ใช้ไอคอนจาก lucide-react
 import AppBackButton from '../navigation/AppBackButton';
-import PullToRefreshIndicator from './PullToRefreshIndicator';
-import { usePullToRefresh } from './usePullToRefresh';
 
 export default function StudentLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { containerRef, pullDistance, refreshing, threshold } = usePullToRefresh<HTMLElement>();
 
   const navItems = [
     { name: 'หน้าหลัก', path: '/student', icon: Home },
@@ -34,13 +31,12 @@ export default function StudentLayout() {
         </header>
         
         {/* พื้นที่สำหรับแสดงเนื้อหาหน้าต่างๆ (เช่น กล้อง, ประวัติ) */}
-        <main ref={containerRef} id="student-scroll-region" className="student-content-scroll" tabIndex={-1}>
-          <PullToRefreshIndicator distance={pullDistance} refreshing={refreshing} threshold={threshold} />
+        <main id="student-scroll-region" className="student-content-scroll" tabIndex={-1}>
           <Outlet /> 
         </main>
 
         {/* แถบเมนูด้านล่าง (Bottom Navigation) */}
-        <nav aria-label="เมนูหลักของนักศึกษา" className="student-bottom-nav z-50 flex w-full justify-around border-t border-gray-200 bg-white shadow-[0_-4px_10px_-4px_rgba(15,23,42,0.12)]">
+        <nav aria-label="เมนูหลักของนักศึกษา" className="student-bottom-nav flex w-full justify-around border-t border-gray-200 bg-white shadow-[0_-4px_10px_-4px_rgba(15,23,42,0.12)]">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = item.path === '/student/profile'

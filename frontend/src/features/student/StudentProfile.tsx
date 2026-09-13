@@ -71,7 +71,7 @@ export default function StudentProfile() {
   if (error) return <p role="alert" className="rounded-xl bg-red-50 p-4 text-red-700">{error}</p>;
   if (!profile) return <p role="status" className="min-h-24 p-4 text-sm text-gray-500">กำลังโหลดโปรไฟล์…</p>;
 
-  return <div className="space-y-5 bg-slate-50 p-4 pb-6">
+  return <div className="student-page space-y-5 bg-slate-50">
     <section aria-labelledby="student-profile-title" className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-4 text-center">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-600">KMUTNB Attendance</p>
@@ -95,7 +95,6 @@ export default function StudentProfile() {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-slate-800">ข้อมูลการศึกษา</p>
               <p className="mt-0.5 break-words text-xs text-slate-500">{profile.academic_year ? `ชั้นปี ${profile.academic_year}` : 'ไม่สามารถคำนวณชั้นปีจากรหัสนักศึกษาได้'}{profile.class_level ? ` · ${profile.class_level}` : ''}</p>
-              <p className="mt-1 text-[11px] leading-5 text-slate-400">ระบบคำนวณอัตโนมัติจากปีรับเข้าในรหัสนักศึกษา</p>
             </div>
           </div>
         </li>

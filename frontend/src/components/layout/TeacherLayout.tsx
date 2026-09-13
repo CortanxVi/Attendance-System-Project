@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { BookOpen, FileText, Settings, LogOut, LayoutDashboard, Menu, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { BookOpen, FileText, Settings, LogOut, LayoutDashboard, Menu, X, PanelLeftClose, PanelLeftOpen, RadioTower } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 import { useResponsiveDrawer } from './useResponsiveDrawer';
 import { useDesktopSidebar } from './useDesktopSidebar';
-import PullToRefreshIndicator from './PullToRefreshIndicator';
-import { usePullToRefresh } from './usePullToRefresh';
 import AppBackButton from '../navigation/AppBackButton';
+import { useTeacherAttendance } from '../../contexts/teacherAttendanceState';
 
 export default function TeacherLayout() {
   const navigate = useNavigate();
@@ -14,7 +13,7 @@ export default function TeacherLayout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { drawerRef, triggerRef, closeRef } = useResponsiveDrawer(isSidebarOpen, setIsSidebarOpen);
   const sidebar = useDesktopSidebar('attendance.teacher.sidebar');
-  const { containerRef, pullDistance, refreshing, threshold } = usePullToRefresh<HTMLElement>();
+  const attendance = useTeacherAttendance();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -96,8 +95,7 @@ export default function TeacherLayout() {
       </aside>
 
       {/* พื้นที่หลักแสดงเนื้อหา (Main Content) */}
-      <main ref={containerRef} className="h-svh min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
-        <PullToRefreshIndicator distance={pullDistance} refreshing={refreshing} threshold={threshold} />
+      <main className="h-svh min-w-0 flex-1 overflow-y-auto">
         <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between border-b border-gray-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:px-5 lg:px-8">
           <div className="flex min-w-0 items-center gap-3 sm:gap-4">
             <button ref={triggerRef} type="button" aria-label="เปิดเมนูด้านข้าง" aria-controls="teacher-navigation" aria-expanded={isSidebarOpen} onClick={() => setIsSidebarOpen(true)} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-slate-800 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 lg:hidden">
@@ -106,6 +104,13 @@ export default function TeacherLayout() {
             <AppBackButton fallbackPath="/teacher" />
             <h1 className="truncate text-base font-semibold text-gray-800 sm:text-xl">{currentPageName}</h1>
           </div>
+          {attendance.activeSession && (
+            <button type="button" onClick={() => { attendance.setActivePanel('qr'); navigate('/teacher'); }} className="ml-3 inline-flex min-h-10 min-w-0 cursor-pointer items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-800 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400" aria-label={`กลับไปหน้าจอเช็คชื่อวิชา ${attendance.activeSession.course_code}`}>
+              <span className="relative flex size-2.5 shrink-0"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex size-2.5 rounded-full bg-emerald-500" /></span>
+              <RadioTower aria-hidden="true" className="hidden shrink-0 sm:block" size={16} />
+              <span className="max-w-28 truncate sm:max-w-48">{attendance.activeSession.course_code} เปิดอยู่</span>
+            </button>
+          )}
         </header>
         <div className="w-full min-w-0 p-3 sm:p-5 lg:p-8">
           <Outlet />

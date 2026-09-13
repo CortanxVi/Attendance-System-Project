@@ -9,6 +9,8 @@ import {
   Copy,
   KeyRound,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   RefreshCw,
   Settings2,
   ShieldAlert,
@@ -25,6 +27,7 @@ import CourseAttendanceView from './CourseAttendanceView';
 import CourseSettingsModal from './CourseSettings';
 import EditCourseModal from './EditCourseModal';
 import ImportStudents from './ImportStudents';
+import { usePresentationMode } from '../../components/presentation/usePresentationMode';
 
 interface Course {
   id: string;
@@ -195,6 +198,11 @@ function Info({ label, value, mono = false }: { label: string; value: string; mo
 
 function JoinCodePanel({ courseId }: { courseId: string }) {
   const { notify } = useNotification();
+  const {
+    containerRef: presentationRef,
+    isActive: presentationActive,
+    toggle: togglePresentation,
+  } = usePresentationMode<HTMLDivElement>();
   const [joinCode, setJoinCode] = useState<JoinCode | null>(null);
   const [requests, setRequests] = useState<JoinRequestRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -271,7 +279,18 @@ function JoinCodePanel({ courseId }: { courseId: string }) {
     <ConfirmDialog open={Boolean(confirmAction)} title={confirmTitle} description={confirmDescription} confirmLabel={confirmAction?.type === 'rotate' ? 'สร้างรหัสใหม่' : confirmAction?.decision === 'approved' ? 'อนุมัติ' : 'ปฏิเสธ'} danger={confirmAction?.type === 'rotate' || confirmAction?.decision === 'rejected'} busy={busy} onConfirm={() => void performConfirmedAction()} onCancel={() => setConfirmAction(null)} />
     {loading ? <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-slate-500"><LoaderCircle className="animate-spin" />กำลังโหลดรหัสคลาส…</div> : error ? <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p> : joinCode && <>
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="bg-slate-900 px-6 py-5 text-white"><p className="text-sm font-semibold text-orange-300">รหัสเข้าร่วมคลาส</p><div className="mt-2 flex flex-wrap items-center gap-3"><code className="text-3xl font-black tracking-[0.18em] sm:text-4xl">{joinCode.join_code}</code><button type="button" onClick={async () => { try { await navigator.clipboard.writeText(joinCode.join_code.replace('-', '')); notify('คัดลอกรหัสคลาสแล้ว', 'success'); } catch { notify('เบราว์เซอร์ไม่อนุญาตให้คัดลอก กรุณาเลือกรหัสด้วยตนเอง', 'error'); } }} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-bold hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-orange-300"><Copy size={18} />คัดลอก</button></div><p className="mt-3 text-sm text-slate-300">ผู้ที่ไม่มีรายชื่อเดิมจะต้องรออาจารย์อนุมัติก่อนเข้าร่วม</p></div>
+        <div ref={presentationRef} className={`flex flex-col bg-slate-900 px-5 py-5 text-white sm:px-6 ${presentationActive ? 'fixed inset-0 items-center justify-center overflow-y-auto p-6 text-center' : 'relative'}`} style={presentationActive ? { zIndex: 'var(--z-presentation)' } : undefined}>
+          <button type="button" onClick={() => void togglePresentation()} aria-label={presentationActive ? 'ออกจากโหมดเต็มหน้าจอรหัสคลาส' : 'ขยายรหัสคลาสเต็มหน้าจอ'} aria-pressed={presentationActive} className="absolute right-3 top-3 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-orange-300 sm:right-5 sm:top-5">
+            {presentationActive ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
+            <span className="hidden sm:inline">{presentationActive ? 'ออกจากเต็มจอ' : 'เต็มหน้าจอ'}</span>
+          </button>
+          <p className={`font-semibold text-orange-300 ${presentationActive ? 'text-lg sm:text-2xl' : 'pr-28 text-sm'}`}>รหัสเข้าร่วมคลาส</p>
+          <div className={`mt-2 flex flex-wrap items-center gap-3 ${presentationActive ? 'flex-col sm:mt-6' : ''}`}>
+            <code className={`font-black tracking-[0.18em] ${presentationActive ? 'break-all text-5xl sm:text-7xl lg:text-8xl' : 'text-3xl sm:text-4xl'}`}>{joinCode.join_code}</code>
+            <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(joinCode.join_code.replace('-', '')); notify('คัดลอกรหัสคลาสแล้ว', 'success'); } catch { notify('เบราว์เซอร์ไม่อนุญาตให้คัดลอก กรุณาเลือกรหัสด้วยตนเอง', 'error'); } }} className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-bold hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-orange-300"><Copy size={18} />คัดลอก</button>
+          </div>
+          <p className={`mt-3 text-slate-300 ${presentationActive ? 'max-w-2xl text-base sm:mt-8 sm:text-xl' : 'text-sm'}`}>ให้นักศึกษากรอกรหัสนี้เพื่อส่งคำขอเข้าร่วมรายวิชา ผู้ที่ไม่มีรายชื่อเดิมต้องรออาจารย์อนุมัติ</p>
+        </div>
         <div className="grid gap-5 p-6 md:grid-cols-2"><div><p className="text-sm font-bold text-slate-800">สถานะการรับสมาชิก</p><button type="button" disabled={busy} onClick={() => void updateSettings({ is_active: !joinCode.is_active })} className={`mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl px-4 text-sm font-bold focus:outline-none focus:ring-2 disabled:opacity-50 ${joinCode.is_active ? 'bg-emerald-100 text-emerald-800 focus:ring-emerald-300' : 'bg-slate-200 text-slate-700 focus:ring-slate-400'}`}>{joinCode.is_active ? <Check size={18} /> : <X size={18} />}{joinCode.is_active ? 'เปิดรับสมาชิก' : 'ปิดรับสมาชิก'}</button><p className="mt-3 text-xs text-slate-500">อนุมัติเข้าร่วมแล้ว {joinCode.usage_count} คน</p></div><div><label htmlFor="join-code-expiry" className="text-sm font-bold text-slate-800">วันหมดอายุ</label><div className="mt-2 flex flex-wrap gap-2"><input id="join-code-expiry" type="datetime-local" value={expiry} onChange={(event) => setExpiry(event.target.value)} disabled={busy} className="min-h-11 flex-1 rounded-xl border border-slate-300 px-3 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" /><button type="button" disabled={busy} onClick={() => void saveExpiry()} className="min-h-11 rounded-xl bg-orange-600 px-4 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-50">บันทึก</button>{expiry && <button type="button" disabled={busy} onClick={() => { setExpiry(''); void updateSettings({ expires_at: null }); }} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50">ไม่หมดอายุ</button>}</div></div></div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-6 py-4"><p className="text-xs text-slate-500">สร้างรหัสล่าสุด {joinCode.rotated_at ? new Date(joinCode.rotated_at).toLocaleString('th-TH') : '-'}</p><button type="button" disabled={busy} onClick={() => setConfirmAction({ type: 'rotate' })} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-amber-300 px-3 text-sm font-bold text-amber-800 hover:bg-amber-50 disabled:opacity-50"><RefreshCw size={17} />สร้างรหัสใหม่</button></div>
       </section>

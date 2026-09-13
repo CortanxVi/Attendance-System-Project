@@ -7,7 +7,7 @@ from core.security import AuthenticatedUser
 def require_owned_course(course_id: str, current_user: AuthenticatedUser) -> dict:
     response = (
         supabase_db.table("courses")
-        .select("id, teacher_id, course_code, course_name")
+        .select("id, teacher_id, course_code, course_name, section")
         .eq("id", course_id)
         .execute()
     )

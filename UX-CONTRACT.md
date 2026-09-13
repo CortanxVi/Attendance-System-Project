@@ -21,7 +21,8 @@
 | Student support requests | `backend/routers/support.py`, migrations `20260830072753`, `20260830072951` และ `20260830075957` | API/schema/storage policy | 2026-08-30 |
 | Student self-profile | `backend/routers/student.py`, `profiles.academic_year` check constraint | API/schema policy | 2026-08-30 |
 | Course join codes and approval | `backend/routers/course_membership.py`, migration `20260831165330` | API/schema policy | 2026-08-31 |
-| Course roster import and paging | `backend/services/roster_import_service.py`, migration `20260901155020` | API/schema policy | 2026-09-01 |
+| Course roster import and paging | `backend/services/roster_import_service.py`, migration `20260901160534` | API/schema policy | 2026-09-01 |
+| Teacher attendance session recovery | `backend/main.py`, `backend/services/teacher_session_service.py`, `attendance_sessions` | API/domain lifecycle | 2026-09-13 |
 
 ## Visual contract
 
@@ -42,6 +43,8 @@
 | Toast | `NotificationProvider` | shared component | success/info/error | live region + browser |
 | Upload | screen-owned accessible file input + shared preview/validation | `imageUtils.prepareStudentCardImage`, `SupportCenter`, `roster_import_service`, backend validators | card image/XLSX/CSV/support attachment | client + server validation |
 | CRUD | backend-authorized screen flows | API routes | stay/refresh | API + browser |
+| Presentation mode | `usePresentationMode` | Fullscreen API + app viewport fallback | Dynamic QR/class code | keyboard/touch/browser |
+| Student QR camera | `QRScanner` fullscreen dialog | Dynamic QR API contract + layer tokens | rear-camera scan/error/retry | keyboard/touch/camera/browser |
 
 ## Component behavior
 
@@ -56,10 +59,11 @@
 
 | Operation | Trigger | Pending | Success destination | Success feedback | Failure recovery | Focus outcome | Source ref |
 |---|---|---|---|---|---|---|---|
-| Prepare face runtime and scan Dynamic QR | attendance page entry preloads/warms local model; QR action unlocks only when ready | stable inline model status, then QR verifying | card capture | ready status then inline QR check | retry model preparation before opening QR; rescan latest QR after QR failure | retry/QR action | `faceLandmarkerRuntime.ts`, `QRScanner.tsx` |
+| Prepare face runtime and scan Dynamic QR | attendance page entry preloads/warms local model; explicit action opens a full-viewport rear-camera scanner only when ready | stable inline model status, then fullscreen QR verifying | verified-course face-scan step | fullscreen success status, then course confirmation | retry model preparation before opening QR; camera permission error explains recovery; invalid/expired QR remains in scanner with retry | scanner close returns focus to QR action; success advances to face action | `faceLandmarkerRuntime.ts`, `QRScanner.tsx`, `StudentHome.tsx` |
 | Passive face check-in | signed protocol-v3 passive challenge, then submit three transient frames; no card after QR | progress then disabled + spinner | result card | result + realtime toast | retry the 20-second camera attempt within the one-use 7-minute QR authorization; rescan QR only on expiry | result heading/live status | `LivenessScanner.tsx`, `StudentHome.tsx`, `liveness_frame_service.py` |
 | NFC check-in | card reader Enter | checking | remain ready | inline + realtime toast | clear UID and retry | reader input | `NFCManager.tsx` |
-| Open/close session | teacher action | disabled | dashboard/live view | toast/inline | retry | trigger | `TeacherDashboard.tsx` |
+| Open/close session | teacher action; provider first recovers caller-owned open session from Backend | disabled | dashboard/live view; open state survives child-route changes | toast/inline + persistent Teacher-shell indicator | retain server state and retry; Backend rejects opening a second caller-owned session | trigger | `TeacherAttendanceProvider.tsx`, `teacher_session_service.py`, `TeacherDashboard.tsx` |
+| Expand QR/class code | explicit fullscreen button | stable panel | presentation mode | pressed state + visible exit control | Fullscreen API denial falls back to app-owned viewport mode | fullscreen control | `usePresentationMode.ts`, `LiveAttendance.tsx`, `CourseManagement.tsx` |
 | Upload/background job | file select | progress/disabled | remain | inline | preserve selected file | upload control | import/registration |
 | Request temporary admin | teacher reason submit | disabled | settings status | toast + pending state | edit/retry | request form | `TeacherSettings.tsx` |
 | Enroll/activate PIN | approved teacher submit | masked + disabled | admin dashboard | toast + expiry banner | inline attempts/lock | PIN field | `TeacherSettings.tsx` |
@@ -67,9 +71,10 @@
 | Preview roster import | teacher selects XLSX/CSV | stable busy button | remain with paged preview | inline summary | retain file and show row errors | preview heading | `ImportStudents.tsx`, `roster_import_service.py` |
 | Commit roster import | teacher confirms reviewed file | confirmation busy | remain/refetch roster | toast + import result | retain file; require new preview on conflict | roster heading | `ImportStudents.tsx`, `import_course_roster` RPC |
 | Create student request | request page form | disabled + spinner | selected thread | toast | preserve text/files and retry | thread heading | `StudentRequests.tsx`, `SupportCenter.tsx`, `routers/support.py` |
-| Edit own academic year | profile inline edit | disabled + spinner | remain on profile | toast + updated row | keep editor open and retry | edited row | `StudentProfile.tsx`, `routers/student.py` |
+| View derived academic year | profile load | stable profile skeleton/text | remain on profile | read-only education row | explain when the student ID cannot produce a year and direct corrections to a request | profile heading | `StudentProfile.tsx`, `routers/student.py` |
 | Open student requests | profile navigation row | route navigation | request list/thread | none | route error remains recoverable | page heading | `StudentProfile.tsx`, `StudentRequests.tsx` |
 | Reply to request | thread composer | disabled + spinner | remain/refetch | toast | preserve text/files and retry | composer | `SupportCenter.tsx`, `routers/support.py` |
+| Switch away from request thread | route/tab navigation | n/a | selected thread and unsent in-memory reply restore on return within the authenticated role session | none | draft clears after successful send or logout/role-provider unmount | composer | `SupportWorkspaceProvider.tsx`, `SupportCenter.tsx` |
 | Preview support file | explicit preview button | inline spinner | inline image/PDF | inline state | retry same button | preview control | `SupportCenter.tsx`, `routers/support.py` |
 | Resolve/reopen request | teacher status action/student reply | disabled | remain/refetch | toast/status badge | retain thread and retry | status action | `SupportCenter.tsx`, `routers/support.py` |
 | Open course management | course-card action | route loading | selected management tab | none | retry/back to course list | page heading | `CourseManagement.tsx` |
@@ -86,7 +91,9 @@
 - Teacher settings: `/teacher/settings` is the owning menu; `/teacher/settings/student-requests`, `/teacher/settings/admin-access`, and `/teacher/settings/system-info` are independently addressable pages with an explicit Back link
 - Route error / 403 page behavior: backend 403 is not treated as login; protected route renders only for verified role
 - Teacher/Admin shell: page width is fluid; sidebar is an overlay drawer below 1024px and a persistent sticky sidebar from 1024px upward. Desktop collapse preference persists locally, click always toggles it, and hover temporarily expands a collapsed rail. Main content owns no forced fixed width and every route must keep `min-width: 0`
-- Student shell: mobile-only width `100%` capped at 440px; height follows `100dvh` with `100svh` fallback and iPhone safe areas. Bottom navigation is outside the single main-content scroller, remains visible, and must not cover focused content
+- Teacher active-session indicator remains in the shell across child routes and returns directly to the Dynamic QR panel; dismissing QR/NFC does not close the attendance session
+- Student shell: mobile-only width `100%` capped at 480px; shared `student-page` padding scales from 0.75rem to 1.25rem for phone viewports from 320px upward. Height follows `100dvh` with `100svh` fallback and iPhone/Android safe areas. Bottom navigation is outside the single main-content scroller, remains visible, and must not cover focused content
+- Refresh gesture policy: application layouts do not intercept touch movement, render a Pull to Refresh indicator, or call full-page reload. Screens that need current remote data expose their own retry/reload behavior; browser/PWA navigation remains native
 - Sidebar/drawer/bottom-sheet transformation: drawer overlay closes from its close control, backdrop, or destination selection; persistent sidebar navigation remains independently scrollable when viewport height is short
 - Responsive table strategy: horizontal scroll; no table height constraints on sibling forms
 - Truncation/full-value access: names wrap; identifiers remain readable
@@ -96,7 +103,7 @@
 
 - Toast placement/duration/deduplication: top-right; success/info 5s; error persistent; duplicate window 2s; max 4
 - Alert/banner scope and persistence: inline for form/camera state
-- Layer/z-index contract: toast 900, dialog 600, backdrop 500, popover 300, dropdown 200
+- Layer/z-index contract: toast 900, presentation 700, dialog/fullscreen scanner 600, backdrop 500, application chrome 400, popover 300, dropdown 200
 
 ## Async and resilience
 
@@ -107,11 +114,12 @@
 - Session expiry/re-authentication: Axios interceptor clears expired local session and redirects through App
 - Stale-request cancellation/invalidation: live initial fetch aborts on unmount; Realtime subscription removed; 15s polling fallback
 - Dialog/form preservation: uploads remain selected on recoverable failure except consumed/expired QR; support composer retains text/files until server confirmation
+- Teacher session recovery: the provider revalidates against Backend on mount and when the document becomes visible; no QR token is persisted in browser storage or returned by the recovery endpoint
 
 ## Validation
 
 - Schema/validation layer: Pydantic + PostgreSQL constraints/RLS; client validation is advisory
-- Student academic year: the student API accepts only strict integers 1–8 and updates only the authenticated student's `profiles` row; no client-supplied profile id or other profile field is accepted
+- Student academic year: the student profile API derives a year from the authenticated account's 13-digit student ID in Asia/Bangkok time; the student PATCH route fails closed with 403 and the UI provides no edit control
 - Trigger timing: file validation on selection and again on server; QR/token/challenge at each server boundary
 - Server error mapping: Thai `detail` shown inline/toast without leaking secrets
 - Sensitive-value handling: no service key, embedding, raw OCR or QR token in notifications/logs

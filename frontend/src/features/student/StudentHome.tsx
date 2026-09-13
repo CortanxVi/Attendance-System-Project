@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import { faceService } from '../../services/api';
 import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
-import { CheckCircle, XCircle, Loader2, UserCheck, RotateCw, ShieldCheck, ScanFace } from 'lucide-react';
+import { ArrowRight, Camera, CheckCircle, Loader2, QrCode, RotateCw, ScanFace, ShieldCheck, UserCheck, XCircle } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import type { PassiveLivenessEvidence } from '../../utils/liveness';
 import {
@@ -18,6 +18,7 @@ export default function StudentHome() {
   const { notify } = useNotification();
   const [faceRuntime, setFaceRuntime] = useState(getFaceLandmarkerRuntimeSnapshot);
   const [isScanning, setIsScanning] = useState(false);
+  const scanButtonRef = useRef<HTMLButtonElement>(null);
   const [verifiedCourse, setVerifiedCourse] = useState<string | null>(null);
   // 🌟 [เพิ่มใหม่] เก็บ session_id ที่ผ่านการตรวจสอบ QR แล้วไว้ใช้ตอนส่งเช็คชื่อจริง (ต่อสายให้ครบใน Step ถัดไป)
   const [challengeId, setChallengeId] = useState<string | null>(null);
@@ -57,6 +58,11 @@ export default function StudentHome() {
     setChallengeTtlSeconds(info.challengeTtlSeconds);
     setLivenessToken(info.livenessToken);
   };
+
+  const closeQrScanner = useCallback(() => {
+    setIsScanning(false);
+    window.requestAnimationFrame(() => scanButtonRef.current?.focus());
+  }, []);
 
   const handleFaceCapture = (capture: LivenessCapture) => {
     setCapturedFaceData(capture.faceImageSrc);
@@ -107,8 +113,8 @@ export default function StudentHome() {
   };
 
   return (
-    <div className="mx-auto w-full p-3 min-[375px]:p-4">
-      <h1 className="mb-5 flex items-center gap-2 text-xl font-bold text-gray-800 min-[390px]:text-2xl">
+    <div className="student-page mx-auto">
+      <h1 className="mb-5 flex items-center gap-2 text-[clamp(1.25rem,5vw,1.5rem)] font-bold text-gray-800">
         <UserCheck className="text-blue-600"/> เช็คชื่อนักศึกษา
       </h1>
       
@@ -190,19 +196,50 @@ export default function StudentHome() {
         </div>
       ) : isScanning ? (
         /* หน้าจอเปิดกล้องสแกน QR */
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-2 relative">
-          <button onClick={() => setIsScanning(false)} className="absolute top-4 right-4 z-10 bg-white/80 hover:bg-white text-gray-800 p-2 rounded-full shadow-md text-sm font-bold">ยกเลิก</button>
-          <QRScanner onVerifySuccess={handleVerifySuccess} />
-        </div>
+        <QRScanner onVerifySuccess={handleVerifySuccess} onClose={closeQrScanner} />
       ) : (
         /* หน้าจอเริ่มต้น */
         <div className="flex flex-col gap-4">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">เช็คชื่อเข้าเรียน (Live)</h2>
+          <section className="overflow-hidden rounded-3xl bg-slate-900 text-white shadow-lg shadow-slate-900/10">
+            <div className="px-[clamp(1rem,5vw,1.5rem)] pb-5 pt-6">
+              <p className="text-xs font-bold tracking-wide text-orange-300">DYNAMIC QR CHECK-IN</p>
+              <h2 className="mt-2 text-[clamp(1.35rem,6vw,1.75rem)] font-black leading-tight">สแกน QR หน้าห้องเรียน</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">เปิดกล้องหลัง แล้ววาง QR ที่อาจารย์แสดงให้อยู่ในกรอบ ระบบจะตรวจสอบอัตโนมัติ</p>
+
+              <div aria-hidden="true" className="mx-auto my-6 flex aspect-square w-[min(52vw,12rem)] items-center justify-center rounded-[2rem] border border-white/15 bg-slate-800 shadow-inner">
+                <div className="relative flex size-[72%] items-center justify-center rounded-2xl border border-dashed border-orange-300/60">
+                  <QrCode className="text-white" size={64} strokeWidth={1.5} />
+                  <span className="absolute -left-1 -top-1 size-8 rounded-tl-xl border-l-4 border-t-4 border-orange-400" />
+                  <span className="absolute -right-1 -top-1 size-8 rounded-tr-xl border-r-4 border-t-4 border-orange-400" />
+                  <span className="absolute -bottom-1 -left-1 size-8 rounded-bl-xl border-b-4 border-l-4 border-orange-400" />
+                  <span className="absolute -bottom-1 -right-1 size-8 rounded-br-xl border-b-4 border-r-4 border-orange-400" />
+                </div>
+              </div>
+
+              <button
+                ref={scanButtonRef}
+                type="button"
+                onClick={() => setIsScanning(true)}
+                disabled={faceRuntime.status !== 'ready'}
+                className="flex min-h-14 w-full cursor-pointer items-center justify-center gap-2 rounded-2xl bg-orange-500 px-4 font-bold text-white shadow-sm transition-colors hover:bg-orange-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                <Camera aria-hidden="true" size={21} />
+                เปิดกล้องสแกน QR
+                <ArrowRight aria-hidden="true" size={19} />
+              </button>
+            </div>
+            <div className="flex items-center justify-center gap-2 border-t border-white/10 bg-slate-950/45 px-4 py-3 text-xs text-slate-300">
+              <ShieldCheck className="shrink-0 text-emerald-400" aria-hidden="true" size={17} />
+              ต้องผ่าน QR ล่าสุดก่อนเริ่มสแกนใบหน้า
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-[clamp(0.875rem,4vw,1.25rem)] shadow-sm" aria-labelledby="face-runtime-title">
+            <h2 id="face-runtime-title" className="mb-3 text-sm font-bold text-slate-800">ความพร้อมของระบบ</h2>
             <div
               role={faceRuntime.status === 'error' ? 'alert' : 'status'}
               aria-live="polite"
-              className={`mb-4 flex min-h-14 items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+              className={`flex min-h-14 flex-wrap items-center gap-3 rounded-xl border px-3 py-3 text-sm min-[360px]:px-4 ${
                 faceRuntime.status === 'ready'
                   ? 'border-green-200 bg-green-50 text-green-800'
                   : faceRuntime.status === 'error'
@@ -217,7 +254,7 @@ export default function StudentHome() {
               ) : (
                 <Loader2 className="h-5 w-5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
               )}
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-[1_1_12rem]">
                 <p className="font-semibold">
                   {faceRuntime.status === 'ready'
                     ? 'ระบบตรวจจับใบหน้าพร้อมใช้งาน'
@@ -244,14 +281,7 @@ export default function StudentHome() {
                 </button>
               )}
             </div>
-            <button 
-              onClick={() => setIsScanning(true)}
-              disabled={faceRuntime.status !== 'ready'}
-              className="w-full rounded-lg bg-blue-600 py-3 font-bold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
-            >
-              สแกน QR Code หน้าห้องเรียน
-            </button>
-          </div>
+          </section>
         </div>
       )}
     </div>

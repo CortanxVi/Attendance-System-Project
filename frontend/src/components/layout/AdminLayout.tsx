@@ -7,8 +7,6 @@ import { useTemporaryAdmin } from '../../contexts/temporaryAdminState';
 import { useNotification } from '../notifications/notificationContext';
 import { useResponsiveDrawer } from './useResponsiveDrawer';
 import { useDesktopSidebar } from './useDesktopSidebar';
-import PullToRefreshIndicator from './PullToRefreshIndicator';
-import { usePullToRefresh } from './usePullToRefresh';
 import AppBackButton from '../navigation/AppBackButton';
 
 export default function AdminLayout({ temporary = false }: { temporary?: boolean }) {
@@ -17,7 +15,6 @@ export default function AdminLayout({ temporary = false }: { temporary?: boolean
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { drawerRef, triggerRef, closeRef } = useResponsiveDrawer(isSidebarOpen, setIsSidebarOpen);
   const sidebar = useDesktopSidebar('attendance.admin.sidebar');
-  const { containerRef, pullDistance, refreshing, threshold } = usePullToRefresh<HTMLElement>();
   const temporaryAdmin = useTemporaryAdmin();
   const { notify } = useNotification();
 
@@ -114,8 +111,7 @@ export default function AdminLayout({ temporary = false }: { temporary?: boolean
         </div>
       </aside>
 
-      <main ref={containerRef} className="h-svh min-w-0 flex-1 overflow-y-auto overscroll-y-contain">
-        <PullToRefreshIndicator distance={pullDistance} refreshing={refreshing} threshold={threshold} />
+      <main className="h-svh min-w-0 flex-1 overflow-y-auto">
         <div className="sticky top-0 z-30">
         {temporary && temporaryAdmin.expiresAt && <div role="status" className="flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-3 py-3 text-sm text-amber-950 sm:px-5 lg:px-8"><span><strong>กำลังใช้สิทธิ์ผู้ดูแลชั่วคราว</strong> · หมดอายุ {new Date(temporaryAdmin.expiresAt).toLocaleTimeString('th-TH')}</span><button type="button" onClick={leaveTemporaryAdmin} className="min-h-10 cursor-pointer rounded-lg border border-amber-700 px-3 py-1.5 font-semibold hover:bg-amber-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-800">กลับสิทธิ์อาจารย์</button></div>}
         <header className="flex min-h-16 items-center justify-between border-b border-gray-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:px-5 lg:px-8">

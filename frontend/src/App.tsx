@@ -12,6 +12,8 @@ import TeacherLayout from './components/layout/TeacherLayout';
 import AdminLayout from './components/layout/AdminLayout';
 import { useTemporaryAdmin } from './contexts/temporaryAdminState';
 import { setAuthAccessToken } from './services/http';
+import { TeacherAttendanceProvider } from './contexts/TeacherAttendanceProvider';
+import { SupportWorkspaceProvider } from './contexts/SupportWorkspaceProvider';
 
 const StudentHome = lazy(() => import('./features/student/StudentHome'));
 const AttendanceHistory = lazy(() => import('./features/student/AttendanceHistory'));
@@ -180,7 +182,7 @@ export default function App() {
         <Routes>
           {/* เส้นทางสำหรับนักศึกษา */}
           {activeRole === 'student' && (
-            <Route path="/student" element={<StudentLayout />}>
+            <Route path="/student" element={<SupportWorkspaceProvider><StudentLayout /></SupportWorkspaceProvider>}>
             <Route index element={<StudentHome />} />
             <Route path="history" element={<AttendanceHistory />} />
             <Route path="history/:courseId" element={<AttendanceHistory />} />
@@ -206,7 +208,7 @@ export default function App() {
 
         {/* เส้นทางสำหรับอาจารย์ */}
         {activeRole === 'teacher' && (
-          <Route path="/teacher" element={<TeacherLayout />}>
+          <Route path="/teacher" element={<TeacherAttendanceProvider><SupportWorkspaceProvider><TeacherLayout /></SupportWorkspaceProvider></TeacherAttendanceProvider>}>
             <Route index element={<TeacherDashboard />} />
             <Route path="reports" element={<TeacherExportReports />} />
             <Route path="courses/:courseId/manage/:tab?" element={<CourseManagement />} />

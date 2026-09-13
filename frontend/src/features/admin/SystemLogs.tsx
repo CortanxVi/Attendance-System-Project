@@ -55,16 +55,16 @@ export default function SystemLogs() {
 
     // ถ้าเป็น Object (JSON) ให้แกะออกมาทำเป็น Badge
     return (
-      <div className="flex flex-wrap gap-1.5 justify-end">
+      <div className="flex min-w-0 flex-wrap gap-1.5">
         {Object.entries(details as Record<string, unknown>).map(([key, value]) => (
           <span
             key={key}
-            className="inline-flex items-center bg-white border border-gray-200 shadow-sm rounded-md px-2 py-1 text-[11px] text-gray-600"
+            className="inline-flex max-w-full flex-wrap items-baseline rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-600 shadow-sm"
           >
             <span className="font-bold text-slate-700 mr-1 capitalize">
               {key.replace(/_/g, " ")}:
             </span>
-            <span className="text-blue-600 font-medium">{String(value)}</span>
+            <span className="min-w-0 break-all font-medium text-blue-600">{String(value)}</span>
           </span>
         ))}
       </div>
@@ -85,7 +85,7 @@ export default function SystemLogs() {
   }, [logs, query]);
 
   return (
-    <div className="min-w-0 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
+    <div className="w-full min-w-0 max-w-full overflow-hidden rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
       <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
         <h2 className="flex items-start gap-2 text-xl font-bold text-gray-800 sm:items-center sm:text-2xl">
           <ClipboardList className="shrink-0 text-red-500" /> Audit Logs
@@ -110,22 +110,46 @@ export default function SystemLogs() {
         <div className="text-center py-10 text-gray-500">
           กำลังโหลดข้อมูล...
         </div>
+      ) : filteredLogs.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-gray-500">
+          {logs.length ? "ไม่พบ Log ที่ตรงกับคำค้นหา" : "ยังไม่มีประวัติการทำงานของแอดมิน"}
+        </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-max border-collapse text-left">
+        <>
+          <ul className="grid min-w-0 gap-3 xl:hidden" aria-label="รายการประวัติการใช้งานระบบ">
+            {filteredLogs.map((log) => (
+              <li key={log.id} className="min-w-0 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="break-words font-semibold text-slate-900">{log.profiles?.full_name || "System / Unknown"}</p>
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><Clock size={14} />{formatDate(log.created_at)}</p>
+                  </div>
+                  <span className="w-fit max-w-full break-all rounded bg-slate-200 px-2 py-1 font-mono text-xs font-bold text-slate-700">{log.action}</span>
+                </div>
+                <dl className="mt-4 grid min-w-0 gap-3 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(9rem,0.7fr)_minmax(0,1.3fr)]">
+                  <div className="min-w-0"><dt className="text-xs font-semibold text-slate-500">เป้าหมาย</dt><dd className="mt-1 break-all text-sm text-slate-700">{log.target_type ? `${log.target_type}: ` : ""}{log.target_id || "-"}</dd></div>
+                  <div className="min-w-0"><dt className="text-xs font-semibold text-slate-500">รายละเอียดเพิ่มเติม</dt><dd className="mt-1 min-w-0 text-sm">{formatDetails(log.details)}</dd></div>
+                </dl>
+              </li>
+            ))}
+          </ul>
+
+          <div className="hidden max-w-full overflow-x-auto rounded-xl border border-slate-200 xl:block">
+          <table className="w-full min-w-[900px] table-fixed border-collapse text-left">
+            <colgroup><col className="w-[18%]" /><col className="w-[18%]" /><col className="w-[18%]" /><col className="w-[18%]" /><col className="w-[28%]" /></colgroup>
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 text-sm">
-                <th className="py-3 px-4 rounded-tl-xl font-semibold w-1/4">
+                <th className="py-3 px-4 rounded-tl-xl font-semibold">
                   <Clock size={16} className="inline mr-1" /> วัน-เวลา
                 </th>
-                <th className="py-3 px-4 font-semibold w-1/5">
+                <th className="py-3 px-4 font-semibold">
                   ผู้ดำเนินการ (Admin)
                 </th>
-                <th className="py-3 px-4 font-semibold w-1/5">
+                <th className="py-3 px-4 font-semibold">
                   การกระทำ (Action)
                 </th>
-                <th className="py-3 px-4 font-semibold w-1/6">เป้าหมาย</th>
-                <th className="py-3 px-4 rounded-tr-xl font-semibold text-right">
+                <th className="py-3 px-4 font-semibold">เป้าหมาย</th>
+                <th className="py-3 px-4 rounded-tr-xl font-semibold">
                   รายละเอียดเพิ่มเติม
                 </th>
               </tr>
@@ -136,18 +160,18 @@ export default function SystemLogs() {
                   key={log.id}
                   className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
                 >
-                  <td className="py-3 px-4 whitespace-nowrap text-gray-500">
+                  <td className="px-4 py-3 align-top text-gray-500">
                     {formatDate(log.created_at)}
                   </td>
-                  <td className="py-3 px-4 font-medium">
+                  <td className="break-words px-4 py-3 align-top font-medium">
                     {log.profiles?.full_name || "System / Unknown"}
                   </td>
-                  <td className="py-3 px-4">
-                    <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-mono font-bold">
+                  <td className="px-4 py-3 align-top">
+                    <span className="inline-block max-w-full break-all rounded bg-slate-100 px-2 py-1 font-mono text-xs font-bold text-slate-700">
                       {log.action}
                     </span>
                   </td>
-                  <td className="py-3 px-4">
+                  <td className="break-all px-4 py-3 align-top">
                     {/* ป้องกันหน้าขาวด้วยการเช็คว่ามีค่าไหมก่อนใช้ substring */}
                     {log.target_type ? `${log.target_type}: ` : ""}
                     <span className="text-xs text-gray-400">
@@ -156,21 +180,15 @@ export default function SystemLogs() {
                         : "-"}
                     </span>
                   </td>
-                  <td className="py-3 px-4 text-right max-w-sm">
+                  <td className="min-w-0 px-4 py-3 align-top">
                     {formatDetails(log.details)}
                   </td>
                 </tr>
               ))}
-              {filteredLogs.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="text-center py-8 text-gray-500">
-                    {logs.length ? "ไม่พบ Log ที่ตรงกับคำค้นหา" : "ยังไม่มีประวัติการทำงานของแอดมิน"}
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

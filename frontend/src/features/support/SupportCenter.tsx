@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
+import { useSupportWorkspace, type SupportReplyDraft } from '../../contexts/supportWorkspaceState';
 
 const MAX_FILES = 3;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -72,9 +73,11 @@ export default function SupportCenter({
   hideCreateButton = false,
 }: SupportCenterProps) {
   const { notify } = useNotification();
+  const { selectedRequestIds, selectRequest } = useSupportWorkspace();
   const [requests, setRequests] = useState<SupportRequest[]>([]);
   const [courses, setCourses] = useState<SupportCourse[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedId = selectedRequestIds[mode] ?? null;
+  const selectedIdRef = useRef<string | null>(selectedId);
   const [detail, setDetail] = useState<SupportRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -83,22 +86,28 @@ export default function SupportCenter({
   const resolvedCreateOpen = createOpen ?? internalCreateOpen;
   const setCreateOpen = onCreateOpenChange ?? setInternalCreateOpen;
 
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
   const loadRequests = useCallback(async (signal?: AbortSignal, quiet = false) => {
     if (!quiet) setLoading(true);
     try {
       const response = await axios.get('/api/v1/support/requests', { signal });
       const next = response.data.requests as SupportRequest[];
       setRequests(next);
-      setSelectedId((current) => current && next.some((request) => request.id === current)
+      const current = selectedIdRef.current;
+      const nextSelection = current && next.some((request) => request.id === current)
         ? current
-        : next[0]?.id ?? null);
+        : next[0]?.id ?? null;
+      if (nextSelection !== current) selectRequest(mode, nextSelection);
       setError('');
     } catch (requestError) {
       if (!axios.isCancel(requestError)) setError(apiMessage(requestError, 'ไม่สามารถโหลดรายการคำร้องได้'));
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [mode, selectRequest]);
 
   const loadDetail = useCallback(async (requestId: string, signal?: AbortSignal, quiet = false) => {
     if (!quiet) setDetailLoading(true);
@@ -147,7 +156,7 @@ export default function SupportCenter({
 
   const handleCreated = (request: SupportRequest) => {
     setCreateOpen(false);
-    setSelectedId(request.id);
+    selectRequest(mode, request.id);
     setDetail(request);
     void loadRequests(undefined, true);
     notify('ส่งคำร้องให้อาจารย์ผู้รับผิดชอบแล้ว', 'success');
@@ -193,7 +202,7 @@ export default function SupportCenter({
               {requests.map((request) => {
                 const active = selectedId === request.id;
                 const person = mode === 'teacher' ? request.student : request.teacher;
-                return <li key={request.id}><button type="button" onClick={() => setSelectedId(request.id)} aria-current={active ? 'true' : undefined} className={`w-full rounded-xl border p-3 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-orange-300 ${active ? 'border-orange-300 bg-orange-50' : 'border-transparent hover:bg-slate-50'}`}>
+                  return <li key={request.id}><button type="button" onClick={() => selectRequest(mode, request.id)} aria-current={active ? 'true' : undefined} className={`w-full cursor-pointer rounded-xl border p-3 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-orange-300 ${active ? 'border-orange-300 bg-orange-50' : 'border-transparent hover:bg-slate-50'}`}>
                   <div className="flex items-start justify-between gap-2"><p className="line-clamp-2 text-sm font-bold text-slate-900">{request.subject}</p><StatusBadge status={request.status} /></div>
                   <p className="mt-1 text-xs text-slate-600">{request.course?.course_code || 'ไม่ทราบรายวิชา'} · {person?.full_name || (mode === 'teacher' ? 'นักศึกษา' : 'อาจารย์')}</p>
                   <p className="mt-2 text-[11px] text-slate-400">อัปเดต {formatDate(request.last_message_at)}</p>
@@ -204,7 +213,7 @@ export default function SupportCenter({
         </div>
         <div className="min-w-0 p-4">
           {!selectedId ? <p className="p-8 text-center text-sm text-slate-500">เลือกคำร้องเพื่ออ่านข้อความ</p> : detailLoading && !detail ? <LoadingLabel label="กำลังโหลดข้อความ…" /> : detail ? (
-            <SupportThread request={detail} mode={mode} onUpdated={handleUpdated} />
+            <SupportThread key={detail.id} request={detail} mode={mode} onUpdated={handleUpdated} />
           ) : null}
         </div>
       </div>
@@ -277,30 +286,52 @@ function CreateRequestForm({ courses, onCancel, onCreated }: { courses: SupportC
 
 function SupportThread({ request, mode, onUpdated }: { request: SupportRequest; mode: 'student' | 'teacher'; onUpdated: (request: SupportRequest) => void }) {
   const { notify } = useNotification();
-  const [message, setMessage] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
+  const { replyDrafts, saveReplyDraft, clearReplyDraft } = useSupportWorkspace();
+  const [draft, setDraft] = useState<SupportReplyDraft>(() => replyDrafts[request.id] ?? {
+    message: '',
+    files: [],
+    clientToken: crypto.randomUUID(),
+    attempted: false,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const messageEnd = useRef<HTMLDivElement | null>(null);
-  const [clientToken, setClientToken] = useState(() => crypto.randomUUID());
-  const attempted = useRef(false);
+  const skipNextDraftSave = useRef(false);
   const otherPerson = mode === 'teacher' ? request.student : request.teacher;
 
   useEffect(() => { messageEnd.current?.scrollIntoView({ block: 'nearest' }); }, [request.messages?.length]);
+  useEffect(() => {
+    if (skipNextDraftSave.current) {
+      skipNextDraftSave.current = false;
+      return;
+    }
+    saveReplyDraft(request.id, draft);
+  }, [draft, request.id, saveReplyDraft]);
+
+  const updateDraft = (patch: Partial<SupportReplyDraft>) => {
+    setDraft((current) => ({
+      ...current,
+      ...(current.attempted ? { clientToken: crypto.randomUUID(), attempted: false } : {}),
+      ...patch,
+    }));
+  };
 
   const send = async (event: React.FormEvent) => {
     event.preventDefault(); setError('');
-    if (!message.trim() && files.length === 0) { setError('กรุณาพิมพ์ข้อความหรือแนบไฟล์'); return; }
+    if (!draft.message.trim() && draft.files.length === 0) { setError('กรุณาพิมพ์ข้อความหรือแนบไฟล์'); return; }
     setBusy(true);
-    attempted.current = true;
+    setDraft((current) => ({ ...current, attempted: true }));
     const data = new FormData();
-    data.set('message', message.trim());
-    data.set('client_token', clientToken);
-    files.forEach((file) => data.append('attachments', file));
+    data.set('message', draft.message.trim());
+    data.set('client_token', draft.clientToken);
+    draft.files.forEach((file) => data.append('attachments', file));
     try {
       const response = await axios.post(`/api/v1/support/requests/${request.id}/messages`, data);
-      setClientToken(crypto.randomUUID()); attempted.current = false;
-      setMessage(''); setFiles([]); onUpdated(response.data.request); notify('ส่งข้อความแล้ว', 'success');
+      const emptyDraft = { message: '', files: [], clientToken: crypto.randomUUID(), attempted: false };
+      skipNextDraftSave.current = true;
+      setDraft(emptyDraft);
+      clearReplyDraft(request.id);
+      onUpdated(response.data.request); notify('ส่งข้อความแล้ว', 'success');
     } catch (requestError) { setError(apiMessage(requestError, 'ส่งข้อความไม่สำเร็จ ข้อความและไฟล์ยังคงอยู่')); } finally { setBusy(false); }
   };
 
@@ -322,7 +353,7 @@ function SupportThread({ request, mode, onUpdated }: { request: SupportRequest; 
       })}
       <div ref={messageEnd} />
     </ol>
-    {request.status === 'resolved' && mode === 'teacher' ? <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">คำร้องนี้เสร็จสิ้นแล้ว นักศึกษาสามารถส่งข้อความใหม่เพื่อเปิดคำร้องอีกครั้ง</p> : <form noValidate onSubmit={send} className="space-y-3 border-t border-slate-100 pt-4"><MessageFields message={message} onMessageChange={(value) => { if (attempted.current) { setClientToken(crypto.randomUUID()); attempted.current = false; } setMessage(value); }} files={files} onFilesChange={(value) => { if (attempted.current) { setClientToken(crypto.randomUUID()); attempted.current = false; } setFiles(value); }} compact /><button type="submit" disabled={busy} className="inline-flex min-w-28 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-300 disabled:opacity-50">{busy ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}{busy ? 'กำลังส่ง…' : request.status === 'resolved' ? 'ส่งและเปิดคำร้องอีกครั้ง' : 'ส่งข้อความ'}</button></form>}
+    {request.status === 'resolved' && mode === 'teacher' ? <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">คำร้องนี้เสร็จสิ้นแล้ว นักศึกษาสามารถส่งข้อความใหม่เพื่อเปิดคำร้องอีกครั้ง</p> : <form noValidate onSubmit={send} className="space-y-3 border-t border-slate-100 pt-4"><MessageFields message={draft.message} onMessageChange={(value) => updateDraft({ message: value })} files={draft.files} onFilesChange={(value) => updateDraft({ files: value })} compact /><button type="submit" disabled={busy} className="inline-flex min-w-28 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-300 disabled:cursor-not-allowed disabled:opacity-50">{busy ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}{busy ? 'กำลังส่ง…' : request.status === 'resolved' ? 'ส่งและเปิดคำร้องอีกครั้ง' : 'ส่งข้อความ'}</button></form>}
   </div>;
 }
 

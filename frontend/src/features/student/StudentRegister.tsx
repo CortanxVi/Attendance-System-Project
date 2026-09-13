@@ -100,7 +100,8 @@ export default function StudentRegister() {
   const runtimeReady = faceRuntime.status === 'ready';
 
   return (
-    <main className="mx-3 my-3 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm min-[390px]:mx-4 min-[390px]:p-5">
+    <div className="student-page">
+      <div className="rounded-2xl border border-gray-100 bg-white p-[clamp(1rem,4vw,1.25rem)] shadow-sm">
       <header className="mb-6 text-center">
         <h1 className="text-2xl font-bold text-gray-800">ลงทะเบียนใบหน้า</h1>
         <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าแบบ Passive ก่อนบันทึก</p>
@@ -178,6 +179,7 @@ export default function StudentRegister() {
           </button>
         </section>
       )}
-    </main>
+      </div>
+    </div>
   );
 }

@@ -111,7 +111,7 @@ export default function StudentCourses() {
     }
   };
 
-  return <div className="space-y-5 bg-slate-50 p-4 pb-8">
+  return <div className="student-page space-y-5 bg-slate-50">
     <ConfirmDialog open={Boolean(cancelTarget)} title="ยกเลิกคำขอเข้าร่วมหรือไม่" description={`ยกเลิกคำขอเข้าร่วม ${cancelTarget?.course?.course_code || 'รายวิชานี้'} คุณสามารถกรอกรหัสเพื่อส่งคำขอใหม่ได้ภายหลัง`} confirmLabel="ยกเลิกคำขอ" danger busy={submitting} onConfirm={() => void cancelRequest()} onCancel={() => setCancelTarget(null)} />
 
     <header className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm">

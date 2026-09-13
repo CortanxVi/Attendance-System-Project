@@ -8,7 +8,7 @@ export default function StudentRequests() {
     document.title = 'คำร้องถึงอาจารย์ — ระบบบันทึกเวลาเข้าเรียน KMUTNB';
   }, []);
 
-  return <div className="space-y-4 bg-slate-50 p-4 pb-6">
+  return <div className="student-page space-y-4 bg-slate-50">
     <header className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <Link to="/student/profile" className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-orange-300">
         <ArrowLeft aria-hidden="true" size={18} />

@@ -1086,3 +1086,118 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - After deployment, test the Production URL in a private browser window and on installed iOS/Android PWAs. Reload or reinstall the PWA if an older service worker keeps the previous frontend bundle.
 - Keep the development workstation, Docker Backend/OCR services, and public tunnel running for the current architecture; move the Backend to an always-on host before claiming 24/7 Production availability.
 - The existing Supabase Auth warning for leaked-password protection remains a separate policy decision.
+
+## 2026-09-13 — Persistent Teacher Attendance Workspace, Presentation Mode, and Responsive Admin Discovery
+
+- **Status:** Completed in the working tree; implementation and proportional checks passed. No commit, push, database migration, container restart, or hosting deployment was performed.
+- **Actor:** Codex primary agent.
+- **Objective:** Keep a teacher-owned attendance session available across route changes until it is explicitly closed, add fullscreen presentation controls for Dynamic QR and class-code panels, retain the active support-request workspace across navigation, add administrator report search, and make Audit Log output responsive.
+
+### Files and components changed
+
+- Added `TeacherAttendanceProvider` and its context contract, mounted above the Teacher route shell, and updated `TeacherDashboard`/`TeacherLayout` to use the shared server-backed session state and persistent active-session indicator.
+- Added a Backend active-session query service and authenticated recovery endpoint; the session-start endpoint now rejects a second open session for the same caller and returns safe course/session metadata.
+- Added the shared `usePresentationMode` hook and applied it to the Dynamic QR panel and class-code panel, including native Fullscreen API support, an app-owned viewport fallback, Escape handling, accessible pressed states, and explicit exit controls.
+- Added `SupportWorkspaceProvider` above Student and Teacher route shells. The selected request and unsent reply draft, including in-memory file objects and the idempotency token, survive child-route changes and clear after a successful send or provider unmount.
+- Added administrator Export filtering for course code, course name, and instructor name with a URL-restorable query, clear action, result count, and no-results state.
+- Reworked Audit Log output to use responsive cards below the wide-desktop breakpoint and a bounded fixed-layout table above it; long actions, targets, and detail values now wrap without expanding the page shell.
+- Updated `DESIGN.md`, `UX-CONTRACT.md`, and the runtime presentation z-index token to record the durable session, request-draft, fullscreen, and responsive behavior.
+- Added focused Backend unit coverage for active-session filtering, newest-row limiting, course metadata serialization, and QR-token non-disclosure.
+
+### Implementation rationale
+
+- The former attendance identifiers and QR/NFC panel flags were owned by `TeacherDashboard`, so normal React route unmounting discarded them. The provider now survives Teacher child-route changes, while a fresh Backend lookup rehydrates the state after a page reload or tab visibility change.
+- Backend state remains authoritative. Browser state never decides whether a session is open, and closing the QR/NFC window only hides the tool; only the explicit close-session mutation changes the stored session status.
+- A shared presentation hook avoids divergent fullscreen implementations and supplies a CSS fallback for browsers that do not expose element fullscreen, including affected mobile Safari versions.
+- Support reply state is retained only in memory rather than browser persistence because drafts and attachments can contain personal or academic information. This preserves same-login navigation without leaving message content in local storage.
+- Export search is local because the existing administrator course endpoint already returns the bounded dataset used by both card and table views. The query is encoded in the route so refresh/back navigation remains predictable.
+- Audit Log keeps the existing Backend cap of the newest 100 records, changes to a one-dimensional card layout on constrained widths, and reserves horizontal scrolling only for the genuine wide table.
+
+### Security and privacy impact
+
+- The active-session recovery query is filtered by the authenticated caller's identifier and returns only the session identifier plus non-secret course metadata. It does not return or persist the Dynamic QR token.
+- The existing server authorization remains in force for course ownership, token rotation, NFC writes, and session closure. Permanent administrators retain the pre-existing operational override; no client-side context broadens permissions.
+- Starting a second open session for the same caller is rejected by the API, reducing accidental parallel sessions after navigation or reload. No database uniqueness constraint was added, so extreme concurrent start requests remain a residual race noted below.
+- Support drafts and selected-request state are cleared when the role-scoped provider unmounts; no message text, attachment, student record, credential, private endpoint, or token was written to project logs or persistent browser storage.
+- Audit details continue to render as text through React, and long untrusted values are wrapped rather than interpreted as markup.
+
+### Database and deployment impact
+
+- No schema or RLS change is required. The implementation reads existing `attendance_sessions` and `courses` rows through the authenticated Backend boundary.
+- Backend deployment must precede or accompany Frontend deployment because the new Frontend provider calls the new active-session endpoint. Deploying only the Frontend would show the recoverable session-check error and keep start controls disabled until the Backend is updated.
+- Existing open sessions are not auto-closed, modified, or migrated. No Production or Preview deployment was triggered in this task.
+
+### Verification performed
+
+- Frontend ESLint completed with exit code 0 after the final source changes.
+- Frontend TypeScript compilation and Vite/PWA Production build completed with exit code 0; 1,910 modules were transformed and 68 service-worker precache entries were generated.
+- Frontend card-image sizing, spreadsheet export security, passive-liveness, face-runtime, and API-origin contract scripts all passed.
+- Backend Docker test discovery completed with 92 tests passing and no failures or errors. The focused active-session service rerun completed with 2 tests passing.
+- The strict frontend design audit completed with zero findings, warnings, errors, or unresolved violations.
+- The built application booted successfully in a local in-app browser at the unauthenticated screen with no console warnings or errors. Authenticated Teacher/Admin visual acceptance was not performed because no test credential was entered.
+- Current official Supabase Python query documentation confirms the used descending `order` and `limit(1)` modifiers. The current changelog showed no relevant breaking change for this query; the 2026 transient GET retry change does not alter its contract.
+- `git diff --check` completed with exit code 0 before this log append.
+
+### Remaining risks and handoff work
+
+- Exercise the authenticated Teacher workflow on desktop projector, iOS Safari/PWA, and Android Chrome/PWA: open a session, switch among Teacher routes, return through the persistent indicator, expand/exit both presentation surfaces, and explicitly close the session.
+- Exercise support navigation with an unsent text/file reply. Browser security intentionally prevents restoring selected files after a full page reload; the provider guarantees only in-app route changes during the current authenticated role session.
+- The API pre-check prevents normal duplicate open sessions but is not an atomic database guarantee. If simultaneous start requests from multiple tabs must be impossible, add a reviewed partial unique index or transactional database function after resolving how any legacy duplicate-open rows should be handled.
+- Deploy Backend and Frontend together, then verify the hosting service worker is serving the new bundle. Review the working tree and this entry before committing or pushing.
+
+## 2026-09-13 — Removed Pull-to-Refresh, Rebuilt the Student QR Scanner, and Documented Supabase Architecture
+
+- **Status:** Completed in the working tree. Frontend implementation, documentation, static audit, production build, browser inspection, and proportional automated tests passed. No commit, push, database mutation, container restart, or hosting deployment was performed.
+- **Actor:** Codex primary agent.
+- **Objective:** Remove the custom Pull-to-Refresh feature from every role shell, normalize Student layouts across phone sizes, replace the Student classroom QR experience with a full-viewport rear-camera scanner, and provide a detailed Thai guide to the Backend, database, and Supabase implementation.
+
+### Files and components changed
+
+- Deleted the shared `PullToRefreshIndicator` and `usePullToRefresh` implementation and removed their gesture handlers, refresh indicators, reload behavior, refs, and overscroll containment from the Student, Teacher, and Admin layouts.
+- Added shared Student viewport/page spacing tokens in `frontend/src/index.css`, raised application chrome onto the documented layer scale, widened the balanced Student shell cap to 480 CSS pixels, retained a single content scroller, and added a reduced-motion-aware QR scan line.
+- Applied the shared responsive Student page container to the home, attendance history, courses, profile, registration, and request screens so 320–480 CSS-pixel phones use consistent clamped spacing, safe-area handling, and no fixed desktop transformation.
+- Rebuilt `QRScanner` as an accessible full-viewport dialog using the rear camera, QR-only decoding, a bank-style finder, verification/success/failure states, camera-specific recovery messages, request/timer cancellation, body scroll locking, Escape/Back support, focus containment, and trigger-focus restoration.
+- Redesigned the Student check-in entry card in `StudentHome` with a prominent camera action and retained the existing server contract and QR-to-passive-face flow. Removed the obsolete pull-refresh opt-out attribute from the face scanner.
+- Added `docs/BACKEND_DATABASE_SUPABASE_GUIDE_TH.md`, covering system boundaries, authentication, authorization, configuration, Dynamic QR and passive face flows, all 18 public tables, RLS/RPC/trigger/storage behavior, API groups, migrations, Dashboard/code inspection, Docker staging, CORS, deployment dependencies, security considerations, and release checks.
+- Reconciled `DESIGN.md` and `UX-CONTRACT.md` with the new Student shell/scanner behavior, no-interception refresh policy, current layer mapping, derived read-only academic year, and the canonical roster migration timestamp.
+- Preserved the unrelated existing Teacher session, support workspace, Admin reporting, Backend authorization, and other user changes already present in the dirty working tree.
+
+### Implementation rationale
+
+- The removed gesture layer intercepted touch movement and forced a full document reload after a downward drag. Native browser/PWA behavior and explicit screen-level retry controls are more predictable and do not discard in-memory work unexpectedly.
+- A shared `student-page` owner prevents each Student screen from choosing slightly different hard-coded padding and widths. Clamp-based spacing and a 480-pixel shell cap provide a stable middle-ground layout across narrow and large phones without turning Student screens into desktop pages.
+- The previous QR reader was embedded in a small card and gave no reliable camera-permission recovery. The new dialog dedicates the viewport to aiming, pauses decoding during validation, avoids repeated requests, and keeps error actions reachable on short displays.
+- Backend validation remains authoritative: the visual redesign does not weaken current-session token checks, course enrollment checks, one-use challenge issuance, Passive PAD, face matching, or atomic attendance finalization.
+- The architecture guide is based on repository migrations and a read-only inspection of the linked Supabase schema rather than inferred sample data, and it deliberately omits project identifiers, credentials, row contents, row counts, biometric values, and private endpoints.
+
+### Security and privacy impact
+
+- The QR dialog aborts an in-flight validation request and clears transition timers when it closes or unmounts, reducing stale state changes and accidental continuation after navigation.
+- QR contents remain transient; the scanner does not persist camera frames, QR tokens, Supabase access tokens, or course data. The existing face flow continues to send only bounded transient evidence to the authenticated Backend.
+- The guide explicitly separates browser-safe publishable configuration from server-only privileged configuration and records the current Supabase legacy-key transition without exposing any actual value.
+- Read-only Supabase inspection confirmed that all 18 public tables have RLS enabled and that the support attachment bucket is private. No database row, Auth user, Storage object, student record, raw camera image, face embedding, key, or environment value was modified or copied into project documentation.
+
+### Database and deployment impact
+
+- No SQL migration, schema, RLS policy, function, trigger, data row, Auth setting, Storage object, Vercel setting, Docker runtime, or public tunnel was changed.
+- The linked migration listing showed all 19 repository migrations aligned with the remote history. This was a read-only verification.
+- The frontend change is ready to be deployed but has not been deployed. Camera access still requires HTTPS or localhost, and a cross-origin Backend still requires the exact deployed Frontend origin in CORS plus the API hostname in Trusted Hosts.
+- Removing custom Pull-to-Refresh does not alter service-worker cache policy or API caching; the PWA continues to avoid caching attendance API responses.
+
+### Verification performed
+
+- Frontend ESLint completed with exit code 0.
+- Frontend TypeScript compilation and Vite/PWA production build completed with exit code 0 under Node.js 22.23.2; 1,908 modules were transformed and 69 service-worker precache entries were generated. An initial shell invocation under system Node.js 18.19.1 correctly failed the Vite engine requirement before rerunning with the documented supported runtime.
+- Frontend card-image sizing, spreadsheet export security, API-origin, passive-liveness, and face-runtime contract scripts all passed. The liveness contract confirmed three passive frames, mirrored front-camera preview, and no attendance-time card upload.
+- Backend unit discovery, run from the required `backend` working directory, completed with 92 tests passing and no failures or errors. An earlier root-directory invocation could not resolve the Backend's top-level `core`/`services` modules; no application defect was involved, and the correctly scoped command passed.
+- The strict premium frontend audit returned zero findings, errors, warnings, unresolved items, or violations.
+- Official `DESIGN.md` lint completed with zero errors; it reported five pre-existing orphan-token warnings and one informational token summary.
+- A temporary isolated QA harness rendered the real `QRScanner` in the in-app browser at a 320×568 CSS-pixel viewport. The scanner occupied the viewport, the rear-camera surface rendered, the finder/instructions remained within bounds, and initial focus landed on the labeled Back control. The viewport override was reset and both temporary source files and the development server were removed/stopped afterward.
+- Pull-to-refresh implementation and opt-out symbol search returned no matches in `frontend/src`; the temporary QA files were absent; final `git diff --check` completed with exit code 0 before this log append.
+
+### Remaining risks and handoff work
+
+- Perform authenticated end-to-end acceptance on physical iOS Safari/PWA and Android Chrome/PWA with the real teacher-generated rotating QR. Test allow/deny camera, old QR, closed session, duplicate check-in, app switching, rotation, low light, network loss, and the transition into Passive Liveness.
+- The in-app browser inspection validates responsive layout and camera-surface integration but does not replace physical-device safe-area, thermal, focus, camera-selection, or anti-spoof calibration testing.
+- RGB Passive PAD and face similarity remain risk-reduction controls rather than a guarantee against every presentation attack. Calibrate thresholds on an authorized representative dataset and maintain a supervised fallback and biometric retention/deletion policy.
+- Review the full dirty working tree before committing because it also contains valid changes from the preceding Teacher/Admin task. Deploy all interdependent Backend and Frontend changes together where required, then clear/update installed PWA service workers during acceptance.

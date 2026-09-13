@@ -53,6 +53,7 @@ from services.face_enrollment_service import (
     renew_face_enrollment_challenge,
 )
 from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
+from services.teacher_session_service import find_active_teacher_session
 
 # นำเข้า Router สำหรับ Admin
 from routers.admin import admin_router
@@ -1001,13 +1002,33 @@ def nfc_checkin(
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # API สำหรับอาจารย์กดสร้างห้องเรียน (เปิด Session)
+@app.get("/api/v1/sessions/active")
+def get_active_attendance_session(
+    current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
+):
+    """Recover the caller's server-authoritative open session after route or page changes."""
+    try:
+        return {
+            "status": "success",
+            "session": find_active_teacher_session(supabase, current_user.id),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="ไม่สามารถโหลดคาบเรียนที่เปิดอยู่ได้") from e
+
+
 @app.post("/api/v1/sessions/start")
 def start_attendance_session(
     payload: SessionStartRequest,
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
-        require_owned_course(payload.course_id, current_user)
+        open_session = find_active_teacher_session(supabase, current_user.id)
+        if open_session:
+            raise HTTPException(
+                status_code=409,
+                detail=f"มีคาบ {open_session['course_code'] or 'อื่น'} เปิดอยู่ กรุณาปิดคาบเดิมก่อน",
+            )
+        course = require_owned_course(payload.course_id, current_user)
         # 🌟 2. เจนเนอเรต Token ก้อนแรกขึ้นมาสำหรับเซสชันนี้
         initial_token = str(uuid.uuid4())
 
@@ -1034,6 +1055,15 @@ def start_attendance_session(
             "session_id": new_session_id,
             "qr_token": initial_token,
             "qr_refresh_rate_seconds": QR_REFRESH_SECONDS,
+            "session": {
+                "id": new_session_id,
+                "course_id": payload.course_id,
+                "course_code": course.get("course_code") or "",
+                "course_name": course.get("course_name") or "",
+                "section": course.get("section"),
+                "created_at": response.data[0].get("created_at"),
+                "status": SessionStatus.OPEN.value,
+            },
         }
         
     except HTTPException:
