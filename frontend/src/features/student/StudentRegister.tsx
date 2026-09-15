@@ -76,6 +76,12 @@ export default function StudentRegister() {
 
   const handleLivenessCapture = async (capture: LivenessCapture) => {
     if (!challenge || !studentId) return;
+    if (capture.mode !== 'passive') {
+      setChallenge(null);
+      setErrorMsg('รูปแบบ Liveness สำหรับลงทะเบียนไม่ถูกต้อง กรุณาเริ่มใหม่');
+      setPhase('retry');
+      return;
+    }
     setPhase('saving');
     setErrorMsg('');
     try {

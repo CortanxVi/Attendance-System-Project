@@ -10,6 +10,68 @@ export interface PassiveLivenessEvidence {
   effectiveFps: number;
 }
 
+export type AttendanceLivenessAction = 'blink' | 'move_closer';
+
+export interface AttendanceLivenessEvidence {
+  version: 4;
+  mode: 'hybrid';
+  sampleCount: 3;
+  action: AttendanceLivenessAction;
+  promptDelayMs: number;
+  frames: Array<
+    | { kind: 'passive_sample'; sampleIndex: number; timestampMs: number }
+    | { kind: 'challenge_action'; action: AttendanceLivenessAction; timestampMs: number }
+    | { kind: 'challenge_recovery'; action: AttendanceLivenessAction; timestampMs: number }
+  >;
+  startedAtMs: number;
+  promptAtMs: number;
+  completedAtMs: number;
+  effectiveFps: number;
+}
+
+export interface AttendanceLivenessBaseline {
+  leftEar: number;
+  rightEar: number;
+  faceWidthRatio: number;
+  yaw: number;
+  pitch: number;
+}
+
+export function attendanceActionDetected(
+  action: AttendanceLivenessAction,
+  observation: LivenessObservation,
+  baseline: AttendanceLivenessBaseline,
+): boolean {
+  const poseStable = observation.faceCount === 1
+    && observation.centerOffset <= 0.30
+    && Math.abs(observation.yaw - baseline.yaw) <= 0.14
+    && Math.abs(observation.pitch - baseline.pitch) <= 0.18;
+  if (!poseStable) return false;
+  if (action === 'blink') {
+    return observation.leftEar / Math.max(baseline.leftEar, 0.001) <= 0.75
+      && observation.rightEar / Math.max(baseline.rightEar, 0.001) <= 0.75
+      && observation.leftBlinkScore >= 0.32
+      && observation.rightBlinkScore >= 0.32;
+  }
+  const scaleRatio = observation.faceWidthRatio / Math.max(baseline.faceWidthRatio, 0.001);
+  return scaleRatio >= 1.08 && scaleRatio <= 1.70;
+}
+
+export function attendanceRecoveryDetected(
+  observation: LivenessObservation,
+  baseline: AttendanceLivenessBaseline,
+): boolean {
+  return observation.faceCount === 1
+    && observation.faceWidthRatio >= 0.20
+    && observation.faceWidthRatio <= 0.76
+    && observation.centerOffset <= 0.22
+    && Math.abs(observation.yaw - baseline.yaw) <= 0.14
+    && Math.abs(observation.pitch - baseline.pitch) <= 0.18
+    && Math.abs(observation.faceWidthRatio / Math.max(baseline.faceWidthRatio, 0.001) - 1) <= 0.18
+    && observation.leftEar / Math.max(baseline.leftEar, 0.001) >= 0.78
+    && observation.rightEar / Math.max(baseline.rightEar, 0.001) >= 0.78;
+}
+
 export type LivenessFrameKind =
   | 'baseline_open'
   | 'near'

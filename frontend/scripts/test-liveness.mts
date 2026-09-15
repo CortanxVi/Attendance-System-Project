@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { LivenessTracker, type LivenessObservation } from '../src/utils/liveness.ts';
+import {
+  attendanceActionDetected,
+  attendanceRecoveryDetected,
+  LivenessTracker,
+  type LivenessObservation,
+} from '../src/utils/liveness.ts';
 
 function observation(timestampMs: number, overrides: Partial<LivenessObservation> = {}): LivenessObservation {
   return {
@@ -82,6 +87,35 @@ function runValid(requiredBlinks: 1 | 2): void {
 
 runValid(1);
 runValid(2);
+
+const attendanceBaseline = {
+  leftEar: 0.30,
+  rightEar: 0.31,
+  faceWidthRatio: 0.40,
+  yaw: 0,
+  pitch: 0,
+};
+assert.equal(attendanceActionDetected('blink', observation(1_000, {
+  leftEar: 0.15,
+  rightEar: 0.15,
+  leftBlinkScore: 0.75,
+  rightBlinkScore: 0.78,
+}), attendanceBaseline), true);
+assert.equal(attendanceActionDetected('blink', observation(1_000, {
+  leftEar: 0.15,
+  rightEar: 0.31,
+  leftBlinkScore: 0.75,
+}), attendanceBaseline), false);
+assert.equal(attendanceActionDetected('move_closer', observation(1_000, {
+  faceWidthRatio: 0.45,
+}), attendanceBaseline), true);
+assert.equal(attendanceActionDetected('move_closer', observation(1_000, {
+  faceWidthRatio: 0.40,
+}), attendanceBaseline), false);
+assert.equal(attendanceRecoveryDetected(observation(1_200), attendanceBaseline), true);
+assert.equal(attendanceRecoveryDetected(observation(1_200, {
+  faceWidthRatio: 0.50,
+}), attendanceBaseline), false);
 
 // Phone-as-webcam bridges commonly fluctuate around 9–11 FPS and introduce
 // small geometry noise. This remains a full move/return + bilateral blink,
@@ -186,10 +220,16 @@ const apiSource = readFileSync(new URL('../src/services/api.ts', import.meta.url
 
 assert.match(scannerSource, /mirrored=\{mirrorPreview\}/);
 assert.match(scannerSource, /passiveImageSrcs/);
+assert.match(scannerSource, /challenge_action/);
+assert.match(scannerSource, /challenge_recovery/);
+assert.match(scannerSource, /attendanceChallenge\.action === 'blink'/);
 assert.doesNotMatch(scannerSource, /actions=\{/);
 assert.doesNotMatch(attendanceSource, /idCardImage|id_card_image/);
+assert.match(attendanceSource, /livenessAction/);
 assert.doesNotMatch(apiSource, /formData\.append\(['"]id_card_image/);
+assert.match(apiSource, /liveness_action_image/);
+assert.match(apiSource, /liveness_recovery_image/);
 
 console.log(
-  'Passive scanner contract passes (three frames, mirrored front preview, no attendance card upload); legacy active tracker regressions also pass.',
+  'Hybrid attendance contract passes (passive PAD, signed random action frames, mirrored preview, no attendance card upload); enrollment passive and legacy tracker regressions also pass.',
 );

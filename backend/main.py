@@ -42,8 +42,16 @@ from core.request_limits import SupportUploadLimitMiddleware
 from core.operational import OperationalHeadersMiddleware
 from services.light_ocr_service import extract_student_id, read_validated_image, student_card_ocr_limiter
 from services.insightface_service import face_service
-from services.liveness_service import create_liveness_challenge, verify_liveness_submission
-from services.liveness_frame_service import verify_passive_liveness_frames
+from services.liveness_service import (
+    create_attendance_liveness_challenge,
+    create_liveness_challenge,
+    verify_attendance_liveness_submission,
+    verify_liveness_submission,
+)
+from services.liveness_frame_service import (
+    verify_hybrid_attendance_frames,
+    verify_passive_liveness_frames,
+)
 from services.face_enrollment_service import (
     claim_face_enrollment_challenge,
     finalize_face_enrollment,
@@ -690,8 +698,10 @@ async def register_face(
                 logger.exception("Face enrollment challenge release failed")
 
 @app.post("/api/v1/attendance/verify")
-async def verify_passive_face_attendance(
+async def verify_hybrid_face_attendance(
     liveness_passive_images: list[UploadFile] = File(...),
+    liveness_action_image: UploadFile = File(...),
+    liveness_recovery_image: UploadFile = File(...),
     challenge_id: str = Form(...),
     liveness_token: str = Form(...),
     liveness_evidence: str = Form(...),
@@ -704,11 +714,12 @@ async def verify_passive_face_attendance(
             raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
 
         challenge = await run_in_threadpool(load_valid_challenge, challenge_id, current_user)
-        verified_liveness = verify_liveness_submission(
+        verified_liveness = verify_attendance_liveness_submission(
             liveness_token,
             liveness_evidence,
             challenge_id,
             current_user.id,
+            challenge["session_id"],
         )
         session_id = challenge["session_id"]
         session_res = await run_in_threadpool(
@@ -745,14 +756,32 @@ async def verify_passive_face_attendance(
             read_validated_image(upload, f"ภาพ Passive Liveness ลำดับที่ {index}")
             for index, upload in enumerate(liveness_passive_images, start=1)
         ))
+        action_upload, recovery_upload = await asyncio.gather(
+            read_validated_image(liveness_action_image, "ภาพขณะทำคำสั่งสุ่ม"),
+            read_validated_image(liveness_recovery_image, "ภาพหลังกลับสู่ท่าปกติ"),
+        )
         prepared_images = await asyncio.gather(*(
             run_in_threadpool(prepare_face_image, upload.content)
             for upload in validated_uploads
         ))
-        if any(image is None for image in prepared_images):
+        prepared_action_image, prepared_recovery_image = await asyncio.gather(
+            run_in_threadpool(prepare_face_image, action_upload.content),
+            run_in_threadpool(prepare_face_image, recovery_upload.content),
+        )
+        if (
+            any(image is None for image in prepared_images)
+            or prepared_action_image is None
+            or prepared_recovery_image is None
+        ):
             raise HTTPException(status_code=400, detail="ไฟล์ภาพ liveness เสียหรืออ่านไม่ได้")
 
-        verified_frames = await run_in_threadpool(verify_passive_liveness_frames, prepared_images)
+        verified_frames = await run_in_threadpool(
+            verify_hybrid_attendance_frames,
+            prepared_images,
+            prepared_action_image,
+            prepared_recovery_image,
+            verified_liveness.action,
+        )
         emb_live = verified_frames.final_embedding
 
         db_response = await run_in_threadpool(
@@ -1191,9 +1220,10 @@ def validate_session_qr_token(
 
         course_info = session_row.get('courses') or {}
         challenge_id = challenge_response.data[0]["id"]
-        liveness_challenge = create_liveness_challenge(
+        liveness_challenge = create_attendance_liveness_challenge(
             challenge_id,
             current_user.id,
+            session_id,
             expires_at,
         )
         return {
@@ -1204,10 +1234,12 @@ def validate_session_qr_token(
             "challenge_id": challenge_id,
             "challenge_expires_at": expires_at.isoformat(),
             "challenge_ttl_seconds": QR_CHALLENGE_SECONDS,
-            "liveness_protocol_version": 3,
+            "liveness_protocol_version": liveness_challenge.protocol_version,
             "liveness_token": liveness_challenge.token,
             "liveness_mode": liveness_challenge.mode,
             "liveness_sample_count": liveness_challenge.sample_count,
+            "liveness_action": liveness_challenge.action,
+            "liveness_prompt_delay_ms": liveness_challenge.prompt_delay_ms,
         }
     except HTTPException:
         raise

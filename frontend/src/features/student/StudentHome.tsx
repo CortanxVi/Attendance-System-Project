@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import { faceService } from '../../services/api';
@@ -6,7 +6,7 @@ import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
 import { ArrowRight, Camera, CheckCircle, Loader2, QrCode, RotateCw, ScanFace, ShieldCheck, UserCheck, XCircle } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
-import type { PassiveLivenessEvidence } from '../../utils/liveness';
+import type { AttendanceLivenessAction, AttendanceLivenessEvidence } from '../../utils/liveness';
 import {
   getFaceLandmarkerRuntimeSnapshot,
   preloadFaceLandmarker,
@@ -25,12 +25,16 @@ export default function StudentHome() {
   const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
   const [challengeTtlSeconds, setChallengeTtlSeconds] = useState(0);
   const [livenessToken, setLivenessToken] = useState<string | null>(null);
+  const [livenessAction, setLivenessAction] = useState<AttendanceLivenessAction | null>(null);
+  const [livenessPromptDelayMs, setLivenessPromptDelayMs] = useState<number | null>(null);
   const [isLivenessActive, setIsLivenessActive] = useState(false);
 
   // สถานะเก็บรูปภาพ
   const [capturedFaceData, setCapturedFaceData] = useState<string | null>(null);
   const [capturedPassiveData, setCapturedPassiveData] = useState<[string, string, string] | null>(null);
-  const [livenessEvidence, setLivenessEvidence] = useState<PassiveLivenessEvidence | null>(null);
+  const [capturedActionData, setCapturedActionData] = useState<string | null>(null);
+  const [capturedRecoveryData, setCapturedRecoveryData] = useState<string | null>(null);
+  const [livenessEvidence, setLivenessEvidence] = useState<AttendanceLivenessEvidence | null>(null);
   
   // สถานะการส่งข้อมูล
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -41,6 +45,11 @@ export default function StudentHome() {
   const [resultScore, setResultScore] = useState<number | null>(null); // คะแนนความเหมือน
   const [resultStatus, setResultStatus] = useState<string>(''); // 🌟 [เพิ่มใหม่] สถานะจริง present/late/absent
   const [resultCheckInTime, setResultCheckInTime] = useState<string>('');
+  const attendanceChallenge = useMemo(() => (
+    livenessAction && livenessPromptDelayMs !== null
+      ? { action: livenessAction, promptDelayMs: livenessPromptDelayMs }
+      : undefined
+  ), [livenessAction, livenessPromptDelayMs]);
 
   useEffect(() => {
     const unsubscribe = subscribeFaceLandmarkerRuntime(setFaceRuntime);
@@ -57,6 +66,8 @@ export default function StudentHome() {
     setChallengeExpiresAt(info.challengeExpiresAt);
     setChallengeTtlSeconds(info.challengeTtlSeconds);
     setLivenessToken(info.livenessToken);
+    setLivenessAction(info.livenessAction);
+    setLivenessPromptDelayMs(info.livenessPromptDelayMs);
   };
 
   const closeQrScanner = useCallback(() => {
@@ -65,8 +76,16 @@ export default function StudentHome() {
   }, []);
 
   const handleFaceCapture = (capture: LivenessCapture) => {
+    if (capture.mode !== 'hybrid') {
+      setResultMessage('รูปแบบ Liveness ไม่ตรงกับ Challenge กรุณาสแกน QR ใหม่');
+      setFinalResult('failed');
+      setIsLivenessActive(false);
+      return;
+    }
     setCapturedFaceData(capture.faceImageSrc);
     setCapturedPassiveData(capture.passiveImageSrcs);
+    setCapturedActionData(capture.actionImageSrc);
+    setCapturedRecoveryData(capture.recoveryImageSrc);
     setLivenessEvidence(capture.evidence);
     setIsLivenessActive(false);
   };
@@ -76,6 +95,8 @@ export default function StudentHome() {
     if (
       !capturedFaceData
       || !capturedPassiveData
+      || !capturedActionData
+      || !capturedRecoveryData
       || !challengeId
       || !livenessToken
       || !livenessEvidence
@@ -84,10 +105,14 @@ export default function StudentHome() {
 
     try {
       const passiveFiles = capturedPassiveData.map((image, index) => base64ToFile(image, `passive_liveness_${index + 1}.jpg`)) as [File, File, File];
+      const actionFile = base64ToFile(capturedActionData, 'liveness_action.jpg');
+      const recoveryFile = base64ToFile(capturedRecoveryData, 'liveness_recovery.jpg');
 
       // 2. ส่งข้อมูลไปยัง FastAPI Backend (POST /api/v1/attendance/verify)
       const result = await faceService.verifyAttendance(
         passiveFiles,
+        actionFile,
+        recoveryFile,
         challengeId,
         livenessToken,
         livenessEvidence,
@@ -161,6 +186,8 @@ export default function StudentHome() {
              onClick={() => {
                setCapturedFaceData(null);
                setCapturedPassiveData(null);
+               setCapturedActionData(null);
+               setCapturedRecoveryData(null);
                setLivenessEvidence(null);
              }}
              disabled={isSubmitting}
@@ -173,7 +200,10 @@ export default function StudentHome() {
         /* ด่านที่ 2: หน้าจอ Liveness Detection */
         <div className="relative">
            <button onClick={() => setIsLivenessActive(false)} className="absolute top-4 right-4 z-30 bg-white/80 p-2 rounded-full text-sm font-bold shadow-md">ยกเลิก</button>
-           <LivenessScanner onCaptureSuccess={handleFaceCapture} />
+           <LivenessScanner
+             onCaptureSuccess={handleFaceCapture}
+             attendanceChallenge={attendanceChallenge}
+           />
         </div>
       ) : verifiedCourse ? (
         <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
@@ -188,7 +218,7 @@ export default function StudentHome() {
           )}
           <button 
              onClick={() => setIsLivenessActive(true)}
-             disabled={!livenessToken}
+             disabled={!livenessToken || !livenessAction || livenessPromptDelayMs === null}
              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-lg w-full transition-colors"
           >
             เริ่มสแกนใบหน้า

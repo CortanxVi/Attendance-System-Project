@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { apiErrorMessage } from './apiError';
-import type { PassiveLivenessEvidence } from '../utils/liveness';
+import type { AttendanceLivenessEvidence, PassiveLivenessEvidence } from '../utils/liveness';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
 const API_BASE_URL = '/api/v1';
@@ -101,15 +101,19 @@ export const faceService = {
     }
   },
 
-  // ยืนยันการเช็คชื่อด้วย Passive Liveness ที่ผูกกับบัญชีและ Dynamic QR แบบใช้ครั้งเดียว
+  // ยืนยันการเช็คชื่อด้วย Passive PAD + signed random action แบบใช้ครั้งเดียว
   verifyAttendance: async (
     passiveImages: [File, File, File],
+    actionImage: File,
+    recoveryImage: File,
     challengeId: string,
     livenessToken: string,
-    livenessEvidence: PassiveLivenessEvidence,
+    livenessEvidence: AttendanceLivenessEvidence,
   ): Promise<VerifyResponse> => {
     const formData = new FormData();
     passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
+    formData.append('liveness_action_image', actionImage);
+    formData.append('liveness_recovery_image', recoveryImage);
     formData.append('challenge_id', challengeId);
     formData.append('liveness_token', livenessToken);
     formData.append('liveness_evidence', JSON.stringify(livenessEvidence));

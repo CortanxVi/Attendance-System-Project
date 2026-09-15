@@ -406,14 +406,14 @@ node --env-file=.env scripts/test-ocr.mjs /absolute/path/to/student-card.jpg 123
 
 - QR token หมุนทุก 12 วินาทีโดยค่าเริ่มต้น และตั้งได้เฉพาะช่วง 10–15 วินาทีผ่าน `QR_REFRESH_SECONDS`
 - นักศึกษาต้องสแกน QR ล่าสุดก่อนเสมอ; server ออก challenge ผูกกับบัญชี ใช้ได้ครั้งเดียวและลอง liveness ซ้ำได้ภายใน 7 นาทีโดยค่าเริ่มต้น (`QR_CHALLENGE_SECONDS=420`) แต่ QR ที่หน้าห้องยังหมุนทุก 10–15 วินาทีตามเดิม
-- การเปิดกล้องแต่ละรอบจำกัดที่ 45 วินาทีเพื่อไม่ยึดกล้อง/CPU นานเกินไป เมื่อไม่ผ่านสามารถกด “ลองตรวจอีกครั้ง” ได้โดยไม่ต้องสแกน QR ใหม่ตราบใดที่ challenge 7 นาทียังไม่หมดอายุ
-- การเช็คชื่อแบบใบหน้าต้องผ่านพร้อมกันทั้ง challenge v2 ที่ลงลายเซ็น, Light OCR จากภาพบัตร, ใบหน้าที่ลงทะเบียน และชุดเฟรม “เริ่มต้น/เข้าใกล้/กลับกรอบ/ตาปิด/ตาเปิด/มองตรง”; backend คำนวณการเปลี่ยนขนาดหน้า ตาซ้าย–ขวา ความต่อเนื่อง บุคคลเดียวกัน และ passive PAD ใหม่เอง ไม่เชื่อผลผ่านจาก browser เพียงอย่างเดียว
+- การเปิดกล้องแต่ละรอบจำกัดที่ 20 วินาทีเพื่อไม่ยึดกล้อง/CPU นานเกินไป เมื่อไม่ผ่านสามารถกด “ลองตรวจอีกครั้ง” ได้โดยไม่ต้องสแกน QR ใหม่ตราบใดที่ challenge 7 นาทียังไม่หมดอายุ
+- การเช็คชื่อบน branch `livenessFeature` ใช้ signed protocol v4: Passive 3 เฟรม ตามด้วยคำสั่งสุ่มง่าย ๆ หนึ่งครั้ง (`blink` หรือ `move_closer`) และ Recovery frame; ไม่ขอภาพบัตรหลัง QR. Backend ผูก token กับบัญชี, challenge และ attendance session แล้วคำนวณตาซ้าย–ขวา ขนาดหน้า ความต่อเนื่อง บุคคลเดียวกัน และ passive PAD ใหม่เอง ไม่เชื่อผลผ่านจาก browser เพียงอย่างเดียว
 - หาก OCR หรือการบันทึกฐานข้อมูลขัดข้องชั่วคราว challenge จะยังไม่ถูกใช้; ระบบ consume challenge พร้อมสร้าง attendance record ใน PostgreSQL transaction เดียวเท่านั้น
 - ระหว่างรอคิว OCR/ใบหน้า backend จะต่ออายุ processing lease ทุก 20 วินาที เพื่อกันการส่งคำขอซ้ำแย่งงานและไม่ให้คำขอปกติถูกตัดกลางคัน
 - NFC ใช้ได้เฉพาะอาจารย์เจ้าของคาบหรือ admin และจะแจ้งชื่อ/วิธีผ่าน Supabase Realtime ทันที
 - รูป JPEG/PNG ถูกจำกัดทั้งขนาดไฟล์ มิติ และจำนวนพิกเซลก่อน decode เพื่อป้องกัน compressed-image resource exhaustion
 - กล้องหน้า กล้องหลัง และ webcam เลือกได้จากหน้าจอ liveness โดยมี browser เป็นเจ้าของ stream เพียงตัวเดียว; โทรศัพท์ที่เชื่อมผ่านเครือข่ายต้องเปิด frontend ผ่าน HTTPS เพราะ browser ไม่อนุญาตกล้องบน HTTP ที่ไม่ใช่ localhost
-- ระบบใช้ Face Landmarker ใน Web Worker, baseline ดวงตาแยกซ้าย/ขวา, challenge จำนวนกระพริบ/เวลารอที่ server ลงนาม, ตรวจเฟรมซ้ำ และ MiniFAS passive PAD แบบ local 3 เฟรม เพื่อลดภาพนิ่ง ภาพพิมพ์ และการเล่นซ้ำจากหน้าจอ แต่ยังไม่ใช่การรับรอง ISO/IEC 30107 และไม่มีระบบ RGB webcam ใดรับประกันการกัน replay/deepfake ได้ 100%; ต้องทดสอบ threshold กับกล้องและสภาพแสงจริงก่อน production
+- ระบบใช้ Face Landmarker ใน Web Worker, baseline ดวงตา/ขนาดหน้า, คำสั่งและเวลารอที่ server ลงนาม, ตรวจเฟรมซ้ำ และ MiniFAS passive PAD แบบ local 3 เฟรม เพื่อลดภาพนิ่ง ภาพพิมพ์ หน้าจอ และวิดีโอ Replay ทั่วไป แต่ยังไม่ใช่การรับรอง ISO/IEC 30107 และไม่มีระบบ RGB webcam ใดรับประกันการกัน adaptive replay/deepfake ได้ 100%; ให้ใช้ `docs/LIVENESS_PROTOCOL_V4_TEST_PLAN_TH.md` วัดผลก่อน Production
 - หน้าเช็คชื่อจะ preload, compile และ warm-up Face Landmarker เพียงครั้งเดียวก่อนเปิดปุ่มสแกน QR; โมเดลและ module-WASM ใช้ Cache First ที่ผูก cache version กับ SDK/model เพื่อให้การเปิดครั้งถัดไปเร็วขึ้น โดยไม่ cache `/api/**`
 - `LIVENESS_PAD_THRESHOLD` กำหนดความเข้มของ passive PAD (0.50–0.95; ค่าเริ่มต้น 0.65) และ `LIVENESS_PAD_CONCURRENCY` จำกัดงานโมเดลพร้อมกัน (1–4; แนะนำ 2 สำหรับ i3/8 GB)
 - นักศึกษาจากโดเมนนักศึกษาสมัครได้ตามรหัส 13 หลัก ส่วนอาจารย์และ admin ต้องมีคำเชิญที่ยังไม่ถูกใช้ก่อนล็อกอินครั้งแรก
@@ -422,8 +422,8 @@ node --env-file=.env scripts/test-ocr.mjs /absolute/path/to/student-card.jpg 123
 ### จุดปรับค่า Liveness
 
 - `backend/.env`: ปรับเวลาสิทธิ์รวมด้วย `QR_CHALLENGE_SECONDS=420`; ต้อง restart backend หลังแก้ ค่าอนุญาตอยู่ระหว่าง 60–600 วินาที ส่วน `QR_REFRESH_SECONDS` เป็นเวลาหมุน QR 10–15 วินาทีและเป็นคนละค่า
-- `frontend/src/utils/liveness.ts`: object `LIVENESS_TRACKER_LIMITS` รวมจำนวนเฟรมปรับเทียบ, FPS ต่ำสุด, เวลาต่อรอบ, ความคลาดเคลื่อนตำแหน่ง/มุม/ขนาดหน้า และเกณฑ์ตาปิด–เปิดของ browser
-- `frontend/src/features/student/LivenessScanner.tsx`: ใช้ `maxAttemptDurationMs` กำหนด timeout กล้องต่อรอบและมีปุ่มเริ่มรอบใหม่
+- `frontend/src/utils/liveness.ts`: กำหนดชนิด Evidence ของ Passive enrollment และ Hybrid attendance; tracker รุ่นเก่ายังอยู่สำหรับ regression test
+- `frontend/src/features/student/LivenessScanner.tsx`: เก็บเฟรมที่ MediaPipe วิเคราะห์จริง ตรวจคำสั่งสุ่มหนึ่งครั้ง กำหนด timeout กล้องต่อรอบ และมีปุ่มเริ่มรอบใหม่
 - `backend/services/liveness_service.py`: ตรวจเวลา/FPS/ลำดับเหตุการณ์จาก signed evidence โดยไม่เชื่อผล browser เพียงอย่างเดียว
 - `backend/services/liveness_frame_service.py`: ตรวจ geometry, ตาซ้าย–ขวา, คนเดิม และเฟรมซ้ำจากภาพจริงที่ส่งมา
 - `backend/services/insightface_service.py`: เกณฑ์ตรวจพบใบหน้าเดี่ยวของ liveness; ไม่ควรลดโดยไม่ทดสอบ face swap และภาพคนอื่น

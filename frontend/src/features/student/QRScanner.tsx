@@ -15,6 +15,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { apiErrorMessage } from '../../services/apiError';
+import type { AttendanceLivenessAction } from '../../utils/liveness';
 
 export interface VerifiedSessionInfo {
   sessionId: string;
@@ -24,8 +25,10 @@ export interface VerifiedSessionInfo {
   challengeExpiresAt: string;
   challengeTtlSeconds: number;
   livenessToken: string;
-  livenessMode: 'passive';
+  livenessMode: 'hybrid';
   livenessSampleCount: 3;
+  livenessAction: AttendanceLivenessAction;
+  livenessPromptDelayMs: number;
 }
 
 interface QRScannerProps {
@@ -153,6 +156,8 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
         liveness_token,
         liveness_mode,
         liveness_sample_count,
+        liveness_action,
+        liveness_prompt_delay_ms,
       } = res.data;
       if (
         typeof challenge_id !== 'string'
@@ -160,10 +165,14 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
         || !Number.isInteger(challenge_ttl_seconds)
         || challenge_ttl_seconds < 60
         || challenge_ttl_seconds > 600
-        || liveness_protocol_version !== 3
+        || liveness_protocol_version !== 4
         || typeof liveness_token !== 'string'
-        || liveness_mode !== 'passive'
+        || liveness_mode !== 'hybrid'
         || liveness_sample_count !== 3
+        || !['blink', 'move_closer'].includes(liveness_action)
+        || !Number.isInteger(liveness_prompt_delay_ms)
+        || liveness_prompt_delay_ms < 500
+        || liveness_prompt_delay_ms > 1_400
       ) {
         throw new Error('Backend ส่งข้อมูลสิทธิ์สแกนใบหน้าไม่ครบ กรุณาแจ้งผู้ดูแลระบบ');
       }
@@ -182,6 +191,8 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
           livenessToken: liveness_token,
           livenessMode: liveness_mode,
           livenessSampleCount: liveness_sample_count,
+          livenessAction: liveness_action,
+          livenessPromptDelayMs: liveness_prompt_delay_ms,
         });
       }, 900);
     } catch (error: unknown) {

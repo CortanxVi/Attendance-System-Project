@@ -10,7 +10,12 @@ os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-two-characters")
 
-from services.liveness_service import create_liveness_challenge, verify_liveness_submission
+from services.liveness_service import (
+    create_attendance_liveness_challenge,
+    create_liveness_challenge,
+    verify_attendance_liveness_submission,
+    verify_liveness_submission,
+)
 from services.light_ocr_service import OcrRateLimiter
 from core.request_limits import SupportUploadLimitMiddleware
 from main import app
@@ -138,8 +143,97 @@ class AtomicFaceAttendanceMigrationTests(unittest.TestCase):
         self.assertIn("renew_face_attendance_challenge", sql)
 
 
+class AttendanceHybridLivenessSecurityTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.now(timezone.utc).replace(microsecond=0)
+        self.challenge = create_attendance_liveness_challenge(
+            "challenge-1",
+            "student-1",
+            "session-1",
+            self.now + timedelta(minutes=1),
+        )
+
+    def evidence(self):
+        prompt_delay = self.challenge.prompt_delay_ms
+        action = self.challenge.action
+        prompt_at = 2_500 + prompt_delay
+        return {
+            "version": 4,
+            "mode": "hybrid",
+            "sampleCount": 3,
+            "action": action,
+            "promptDelayMs": prompt_delay,
+            "frames": [
+                {"kind": "passive_sample", "sampleIndex": 1, "timestampMs": 1_500},
+                {"kind": "passive_sample", "sampleIndex": 2, "timestampMs": 2_000},
+                {"kind": "passive_sample", "sampleIndex": 3, "timestampMs": 2_500},
+                {"kind": "challenge_action", "action": action, "timestampMs": prompt_at + 200},
+                {"kind": "challenge_recovery", "action": action, "timestampMs": prompt_at + 500},
+            ],
+            "startedAtMs": 1_000,
+            "promptAtMs": prompt_at,
+            "completedAtMs": prompt_at + 600,
+            "effectiveFps": 20,
+        }
+
+    def verify(self, evidence, **overrides):
+        return verify_attendance_liveness_submission(
+            self.challenge.token,
+            json.dumps(evidence),
+            overrides.get("challenge_id", "challenge-1"),
+            overrides.get("student_id", "student-1"),
+            overrides.get("session_id", "session-1"),
+            now=self.now,
+        )
+
+    def test_accepts_signed_random_action_sequence(self):
+        result = self.verify(self.evidence())
+        self.assertEqual(result.mode, "hybrid")
+        self.assertEqual(result.action, self.challenge.action)
+        self.assertIn(self.challenge.action, ("blink", "move_closer"))
+        self.assertGreaterEqual(self.challenge.prompt_delay_ms, 500)
+        self.assertLessEqual(self.challenge.prompt_delay_ms, 1_400)
+
+    def test_rejects_challenge_borrowed_by_another_student_or_session(self):
+        for overrides in (
+            {"student_id": "student-2"},
+            {"session_id": "session-2"},
+            {"challenge_id": "challenge-2"},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(HTTPException):
+                self.verify(self.evidence(), **overrides)
+
+    def test_rejects_client_action_substitution_and_early_action(self):
+        evidence = self.evidence()
+        replacement = "move_closer" if self.challenge.action == "blink" else "blink"
+        evidence["action"] = replacement
+        evidence["frames"][3]["action"] = replacement
+        evidence["frames"][4]["action"] = replacement
+        with self.assertRaises(HTTPException):
+            self.verify(evidence)
+
+        evidence = self.evidence()
+        evidence["frames"][3]["timestampMs"] = evidence["promptAtMs"] - 1
+        with self.assertRaises(HTTPException):
+            self.verify(evidence)
+
+    def test_rejects_protocol_v3_token_on_attendance_v4_path(self):
+        passive = create_liveness_challenge(
+            "challenge-1", "student-1", self.now + timedelta(minutes=1)
+        )
+        with self.assertRaises(HTTPException):
+            verify_attendance_liveness_submission(
+                passive.token,
+                json.dumps(self.evidence()),
+                "challenge-1",
+                "student-1",
+                "session-1",
+                now=self.now,
+            )
+
+
 class LivenessApiContractTests(unittest.TestCase):
-    def test_protocol_v3_attendance_uses_only_passive_frames(self):
+    def test_protocol_v4_attendance_requires_passive_and_random_action_frames(self):
         schema = app.openapi()
         request_schema = schema["paths"]["/api/v1/attendance/verify"]["post"]["requestBody"]["content"][
             "multipart/form-data"
@@ -147,6 +241,8 @@ class LivenessApiContractTests(unittest.TestCase):
         reference = request_schema["$ref"].rsplit("/", 1)[-1]
         properties = schema["components"]["schemas"][reference]["properties"]
         self.assertIn("liveness_passive_images", properties)
+        self.assertIn("liveness_action_image", properties)
+        self.assertIn("liveness_recovery_image", properties)
         self.assertNotIn("id_card_image", properties)
         self.assertNotIn("liveness_blink_closed_images", properties)
 

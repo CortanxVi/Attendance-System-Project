@@ -1318,3 +1318,73 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - Review the existing Supabase leaked-password-protection warning as an Auth policy decision and verify future new-table Data API exposure explicitly before the October 2026 enforcement date.
 - Complete real Production operations: provision the Mini PC/UPS, store secrets, verify model licensing, configure DNS/router/TLS, deploy the Docker stack and Vercel build, run physical-device and representative 30–40-user load tests, verify backup/restore and rollback, and establish external monitoring.
 - Review and commit the deployment files and this log entry. The pre-existing untracked `outputs/` directory was preserved and not modified by this deployment task.
+
+## 2026-09-15 — Experimental Hybrid Liveness Protocol v4 on `livenessFeature`
+
+- **Status:** Implementation and automated verification completed on the isolated feature branch; representative physical-device and presentation-attack calibration remains required before any Production merge.
+- **Actor:** Codex primary agent.
+- **Objective:** Add a testable liveness flow that raises resistance to printed photos, images displayed on another phone, ordinary prerecorded video replay, duplicate/concurrent attendance requests, and use of another account's challenge while retaining a short, understandable student interaction.
+
+### Components and files changed
+
+- Added an attendance-only signed protocol v4 in `backend/services/liveness_service.py`. The challenge now binds the database challenge identifier, authenticated account identifier, attendance-session identifier, expiry, nonce, one randomly selected action (`blink` or `move_closer`), and a random 500–1,400 ms prompt delay. Face self-enrollment deliberately remains on protocol v3 passive mode.
+- Added `verify_hybrid_attendance_frames` in `backend/services/liveness_frame_service.py`. It independently recomputes one-face presence, same-person continuity, passive three-frame MiniFAS PAD, non-duplicate transitions, the signed action geometry, and a frontal recovery frame from five transient images.
+- Updated the attendance validation and verification endpoints in `backend/main.py` to issue protocol v4 metadata and require three passive images, one action image, and one recovery image. Invalid signed metadata is rejected before the challenge processing lease and expensive face inference; successful attendance still uses the existing atomic claim/finalize path.
+- Extended Frontend liveness types and pure action/recovery predicates in `frontend/src/utils/liveness.ts`. Updated the shared camera scanner to retain passive v3 behavior for enrollment and run hybrid v4 only when an attendance challenge is supplied.
+- Updated the Student QR and attendance flow to validate protocol v4 metadata, keep a stable React challenge object so the camera worker is not restarted by unrelated renders, collect the exact analyzed action/recovery frames, and submit the expanded multipart contract. The user sees only one plain-language action after the initial automatic capture, and front-camera preview remains mirrored.
+- Extended Backend and Frontend contract tests for signed action substitution, early-action timing, challenge/account/session mismatch, v3-to-v4 protocol confusion, accepted blink/move flows, wrong geometry, static action-frame replay, multipart fields, and client-side action/recovery thresholds.
+- Added `docs/LIVENESS_PROTOCOL_V4_TEST_PLAN_TH.md` with the threat model, test matrix, privacy-safe evidence policy, metrics, Preview deployment constraints, and Production acceptance gate. Reconciled `README.md`, `DESIGN.md`, `UX-CONTRACT.md`, and the Supabase architecture guide with the experimental protocol.
+
+### Implementation rationale
+
+- Passive RGB PAD remains useful against common print and screen attacks but cannot reliably distinguish every prerecorded moving face. One server-selected action plus signed timing adds temporal unpredictability while limiting the normal interaction to a blink or a short move closer.
+- Client landmarks remain usability hints only. The Backend derives every security-relevant face, eye, pose, scale, identity, frame-difference, and PAD decision again from the uploaded images.
+- Binding the token to both the authenticated account and the database-derived attendance session closes cross-account and cross-session token substitution before expensive processing.
+- Existing Supabase processing-token leases, unique attendance constraints, and atomic finalization already provide the correct one-use/concurrent-request boundary, so no duplicate schema or browser-writable security state was introduced.
+
+### Security and privacy impact
+
+- Five bounded JPEG frames are transient request data; no raw image, video, landmark stream, or new face embedding is stored in attendance records or application logs.
+- HMAC token contents are not accepted without a canonical signature and are checked against the authenticated account, challenge row, session, protocol version, action, delay, expiry, and evidence order.
+- The change raises the cost of ordinary photo, screen, and generic replay attacks but does not claim protection against adaptive deepfake replay, virtual-camera injection, 3D masks, or formal ISO/IEC 30107 compliance. A replay prepared after reading the random action remains a residual browser/RGB-camera risk.
+- Test documentation prohibits storing student identifiers, tokens, raw biometric images, or face embeddings in calibration reports and requires consented test participants.
+
+### Database and deployment impact
+
+- No Supabase schema, migration, RLS policy, function, row, Auth configuration, or Storage object was changed. Current challenge tables and backend-only `SECURITY INVOKER` claim/renew/release/finalize RPCs are reused.
+- Current Supabase documentation was rechecked: RLS and grants are separate controls, server secret/service credentials bypass RLS and must stay server-side, and database functions should default to invoker with explicit execution grants. The existing challenge RPC migration follows the applicable backend-only execution pattern.
+- Frontend protocol v4 and Backend protocol v4 must be deployed from the same commit. Either side paired with protocol v3 will intentionally fail closed. This branch must remain a Preview/test release until the physical attack matrix is completed.
+
+### Verification performed
+
+- Frontend ESLint passed with exit code 0 under Node.js 22.23.2.
+- Frontend liveness contract tests passed, including pure blink, wink rejection, move-closer, no-movement, recovery, mirrored-preview, and multipart-contract assertions.
+- Frontend TypeScript compilation and Vite/PWA Production build passed; 1,911 modules were transformed and 68 service-worker entries were precached.
+- Backend focused liveness suites passed: 27 tests.
+- Backend full unit discovery passed: 102 tests with no failures or errors.
+- Backend bytecode compilation passed and `pip check` reported no broken requirements.
+- Frontend Premium strict audit reported zero findings, warnings, errors, unresolved items, or violations; the installed upstream design skill digest matched the expected revision.
+- Changed UI source searches found no browser `alert`/`confirm`/`prompt`, unsafe raw HTML assignment, `dangerouslySetInnerHTML`, or unexplained `!important` usage.
+- `git diff --check` passed.
+- Two initial verification invocations used system Node.js 18 and system Python without project packages; they failed for environment reasons. The documented Node.js 22.23.2 path and `backend/.venv` reruns passed as recorded above.
+
+### Remaining risks and handoff work
+
+- Run the consented genuine/print/phone-screen/video-replay matrix in `docs/LIVENESS_PROTOCOL_V4_TEST_PLAN_TH.md` on supported iPhone, Android, and notebook cameras. Measure BPCER/APCER and completion latency before changing any threshold.
+- Exercise the full authenticated QR-to-attendance workflow against a protocol-v4 Backend. No student test credential or biometric sample was entered during this implementation, so authenticated real-camera acceptance is not claimed.
+- Run duplicate/concurrent Request tests against the Preview Supabase environment to confirm the database RPC and network boundary together, even though unit and migration-contract tests pass.
+- Measure five-frame upload size, Backend queue latency, CPU, and RAM on the target Mini PC under the intended concurrent-user load.
+- Define and test the audited teacher/manual fallback for genuine users who cannot complete the camera action.
+- Do not merge into `main` until the measured attack results and residual adaptive-replay risk are reviewed and accepted.
+
+## 2026-09-15 — Protocol v4 Final Release-Check Addendum
+
+- **Status:** Completed; no implementation changed after this verification.
+- **Actor:** Codex primary agent.
+- **Objective:** Run the repository-owned aggregate release gate after the protocol-v4 implementation and documentation entry.
+- **Files or components changed:** This addendum only. Runtime code, database schema, deployment configuration, secrets, biometric data, and test fixtures were not changed by the release check.
+- **Implementation rationale:** The aggregate gate covers dependent Frontend, Backend, face-model, OCR, dependency, and UI-contract checks that are broader than the focused liveness suites.
+- **Security and privacy impact:** All three required InsightFace model checksums matched; Frontend and OCR dependency audits reported zero vulnerabilities at the configured moderate threshold. No image, token, user record, private endpoint, or embedding was printed or persisted.
+- **Database or deployment impact:** None. The release check did not apply migrations, mutate Supabase, restart containers, publish a Preview, or deploy Production.
+- **Verification performed:** `scripts/verify_release.sh` completed successfully under Node.js 22.23.2. It reported 102 Backend tests passing, Python dependency consistency passing, Frontend lint plus card-image/spreadsheet/liveness/face-runtime/API-origin contract tests passing, a Vite/PWA build of 1,911 modules with 68 precache entries, OCR environment isolation and doctor checks passing, and a strict Frontend Premium audit with zero findings.
+- **Remaining risks or handoff:** Authenticated real-camera, physical presentation-attack, concurrent network-request, and Mini-PC load testing remain the required Preview acceptance work described in `docs/LIVENESS_PROTOCOL_V4_TEST_PLAN_TH.md`.

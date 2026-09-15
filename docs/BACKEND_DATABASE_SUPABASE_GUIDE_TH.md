@@ -43,7 +43,7 @@ Frontend ไม่ควรใช้ server key และไม่ควรเ�
 | `frontend/src/features/auth/Login.tsx` | เริ่ม Google OAuth และกำหนด redirect กลับ origin ปัจจุบัน |
 | `frontend/src/features/student/StudentHome.tsx` | ควบคุม flow เช็คชื่อ QR → ใบหน้า → ส่งผล |
 | `frontend/src/features/student/QRScanner.tsx` | เปิดกล้องหลังเต็มจอ อ่าน QR และขอ challenge จาก Backend |
-| `frontend/src/features/student/LivenessScanner.tsx` | เก็บหลักฐาน Passive Liveness 3 เฟรมและ mirror กล้องหน้า |
+| `frontend/src/features/student/LivenessScanner.tsx` | เก็บ Passive 3 เฟรม, signed random action และ recovery frame พร้อม mirror กล้องหน้า |
 | `backend/main.py` | FastAPI app และ API หลัก เช่น Auth, OCR, Face, NFC, Session และ Course |
 | `backend/core/config.py` | โหลด environment, สร้าง Supabase server client และ validate config |
 | `backend/core/security.py` | ตรวจ Supabase access token, อีเมล, profile และ role |
@@ -187,22 +187,22 @@ TRUSTED_HOSTS=api.example.ac.th,127.0.0.1,localhost
    - นักศึกษาลงทะเบียนในรายวิชา;
    - ยังไม่มี attendance record ของคาบนี้;
    - ไม่สร้าง challenge ถี่เกินกำหนด.
-7. Backend สร้าง `attendance_checkin_challenges` ที่มีอายุจำกัด แล้วส่ง signed liveness token แบบ protocol 3, mode `passive`, จำนวน 3 sample กลับมา.
+7. Backend สร้าง `attendance_checkin_challenges` ที่มีอายุจำกัด แล้วส่ง signed attendance liveness token แบบ protocol 4 ซึ่งผูกบัญชี/session พร้อมคำสั่งสุ่มและเวลาหน่วงกลับมา.
 8. หน้าจอแจ้งชื่อวิชา แล้วไปขั้นตอนกล้องหน้า.
 
-### 5.3 Passive Liveness และ Face Matching
+### 5.3 Hybrid Liveness และ Face Matching
 
-1. Frontend เก็บภาพต่อเนื่อง 3 เฟรมและหลักฐานการเคลื่อนไหว/ตำแหน่งใบหน้า; preview กล้องหน้าถูก mirror เพื่อให้ผู้ใช้ขยับตามธรรมชาติ.
-2. Frontend ส่งภาพ 3 ไฟล์, `challenge_id`, signed `liveness_token` และ `liveness_evidence` ไป `POST /api/v1/attendance/verify`.
+1. Frontend เก็บ Passive frame 3 เฟรม แล้วให้กะพริบตาหรือขยับเข้าใกล้ตามคำสั่งสุ่มหนึ่งครั้ง จากนั้นเก็บ Recovery frame; preview กล้องหน้าถูก mirror เพื่อให้ผู้ใช้ขยับตามธรรมชาติ.
+2. Frontend ส่งภาพ 5 ไฟล์, `challenge_id`, signed `liveness_token` และ `liveness_evidence` ไป `POST /api/v1/attendance/verify`.
 3. Backend ตรวจ signature, audience/user, challenge, วันหมดอายุ, session และ enrollment ซ้ำ.
 4. RPC `claim_face_attendance_challenge` ล็อก challenge พร้อม processing token เพื่อกัน double-submit และ concurrent replay; งานยาวมีการ renew lease.
 5. ทุกภาพผ่านการตรวจชนิดไฟล์, byte limit, dimension/pixel limit และ decode ก่อนเข้าโมเดล.
-6. Passive PAD ตรวจทั้ง 3 เฟรมเพื่อคัดกรองภาพถ่ายหรือหน้าจอ ตาม threshold ที่ตั้งไว้.
+6. Passive PAD ตรวจ 3 เฟรมแรกเพื่อคัดกรองภาพถ่ายหรือหน้าจอ และ Backend ตรวจ Action/Recovery จากภาพจริงเพื่อเพิ่มการป้องกันวิดีโอ Replay.
 7. InsightFace สกัด embedding จากภาพสด แล้วคำนวณ similarity กับ `profiles.face_embedding` ของผู้ใช้ที่ล็อกอินเท่านั้น.
 8. ถ้าผ่านเกณฑ์ Backend คำนวณ `present`, `late` หรือ `absent` จากเวลาเปิดคาบและค่ารายวิชา.
 9. RPC `finalize_face_attendance` บันทึก attendance แบบ atomic และ consume challenge; ถ้างานล้มเหลวก่อนจบจะ release claim ให้ลองใหม่ได้.
 
-Passive Liveness ลด friction แต่ไม่มีระบบใดป้องกันการโกงได้ 100%. ควรทดสอบด้วยโทรศัพท์จริงหลายรุ่น, แสงต่างกัน, replay จากจอ, ภาพพิมพ์ และติดตาม false accept/false reject ก่อนใช้จริง
+Hybrid Liveness ใช้คำสั่งเพียงหนึ่งครั้งเพื่อลด friction แต่ไม่มีระบบ RGB Browser ใดป้องกันการโกงได้ 100%. ควรทดสอบด้วยโทรศัพท์จริงหลายรุ่น, แสงต่างกัน, replay จากจอ, ภาพพิมพ์ และติดตาม false accept/false reject ก่อนใช้จริง
 
 ## 6. การลงทะเบียนใบหน้า
 
@@ -538,7 +538,7 @@ curl http://127.0.0.1:8000/health/ready
 - หน้านักศึกษาหลักใช้ `student-page` ร่วมกัน มี padding แบบ responsive, safe-area และความกว้างสูงสุด 480px เพื่อให้สมดุลบนโทรศัพท์หลายรุ่น.
 - หน้าสแกน QR เปิดเต็ม viewport, ใช้กล้องหลัง, pause ระหว่างตรวจ API, มีสถานะ success/error และ retry.
 - กด Back/Escape เพื่อปิดกล้องได้, focus กลับปุ่มเปิดกล้อง, dialog มี focus trap และข้อความสำหรับ assistive technology.
-- ไม่ได้แก้ schema, Backend endpoint หรือ database contract สำหรับการ redesign หน้าสแกน; payload เดิมยังเป็น `session_id` + `token` และขั้นตอนต่อไปยังเป็น Passive Liveness.
+- รอบ redesign เดิมไม่ได้แก้ schema; branch `livenessFeature` เพิ่ม contract ของ Backend/Frontend สำหรับ Hybrid Liveness v4 โดยยังใช้ตารางและ RPC เดิม.
 
 ## 16. เอกสารอ้างอิง Supabase
 
@@ -549,4 +549,3 @@ curl http://127.0.0.1:8000/health/ready
 - [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Storage Access Control](https://supabase.com/docs/guides/storage/security/access-control)
 - [Database Migrations](https://supabase.com/docs/guides/deployment/database-migrations)
-

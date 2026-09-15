@@ -41,6 +41,107 @@ def verify_passive_liveness_frames(images: Sequence[np.ndarray]) -> VerifiedLive
     return VerifiedLivenessFrames(final_embedding=observations[-1].embedding)
 
 
+def verify_hybrid_attendance_frames(
+    passive_images: Sequence[np.ndarray],
+    action_image: np.ndarray,
+    recovery_image: np.ndarray,
+    action: str,
+) -> VerifiedLivenessFrames:
+    """Verify passive PAD plus one server-selected temporal action.
+
+    The signed metadata decides which action is required. Geometry and identity
+    are recomputed from the uploaded frames, so a browser cannot claim that an
+    action happened without supplying matching visual evidence.
+    """
+
+    if action not in ("blink", "move_closer"):
+        raise HTTPException(status_code=422, detail="คำสั่งสุ่มสำหรับ Liveness ไม่ถูกต้อง")
+    if len(passive_images) != 3:
+        raise HTTPException(status_code=422, detail="หลักฐาน Passive Liveness ต้องมี 3 เฟรม")
+
+    passive_observations = [
+        _extract(image, f"ภาพต่อเนื่องลำดับที่ {index}")
+        for index, image in enumerate(passive_images, start=1)
+    ]
+    reference = passive_observations[0]
+    if not 0.17 <= reference.face_width_ratio <= 0.84 or reference.center_offset > 0.30:
+        raise HTTPException(status_code=422, detail="โปรดมองตรงและให้ใบหน้าอยู่ในกรอบตลอดการสแกน")
+    for observation in passive_observations[1:]:
+        _same_person(reference, observation)
+        if not _frontal(reference, observation, scale_tolerance=0.22):
+            raise HTTPException(status_code=422, detail="โปรดมองตรงและให้ใบหน้าอยู่ในกรอบตลอดการสแกน")
+
+    action_observation = _extract(action_image, "ภาพขณะทำคำสั่งสุ่ม")
+    recovery_observation = _extract(recovery_image, "ภาพหลังกลับสู่ท่าปกติ")
+    _same_person(reference, action_observation, blink=action == "blink")
+    _same_person(reference, recovery_observation)
+
+    passive_pad_service.assert_live(
+        passive_images,
+        [observation.bbox for observation in passive_observations],
+    )
+    passive_differences = [
+        _frame_difference(first, second)
+        for first, second in zip(passive_images, passive_images[1:])
+    ]
+    if any(difference < 0.35 for difference in passive_differences):
+        raise HTTPException(
+            status_code=422,
+            detail="ตรวจพบภาพซ้ำหรือภาพนิ่ง กรุณาใช้บุคคลจริงหน้ากล้อง",
+        )
+    if (
+        _frame_difference(passive_images[-1], action_image) < 0.8
+        or _frame_difference(action_image, recovery_image) < 0.8
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="ภาพคำสั่งสุ่มซ้ำหรือไม่ต่อเนื่อง กรุณาใช้กล้องกับบุคคลจริง",
+        )
+
+    if action == "blink":
+        open_left = float(np.median([
+            observation.left_eye_aperture_proxy
+            for observation in passive_observations
+        ]))
+        open_right = float(np.median([
+            observation.right_eye_aperture_proxy
+            for observation in passive_observations
+        ]))
+        if (
+            action_observation.left_eye_aperture_proxy / max(open_left, 0.001) > 0.78
+            or action_observation.right_eye_aperture_proxy / max(open_right, 0.001) > 0.78
+            or recovery_observation.left_eye_aperture_proxy / max(open_left, 0.001) < 0.78
+            or recovery_observation.right_eye_aperture_proxy / max(open_right, 0.001) < 0.78
+            or abs(action_observation.yaw_proxy - reference.yaw_proxy) > 0.15
+            or abs(action_observation.pitch_proxy - reference.pitch_proxy) > 0.20
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="คำสั่งกะพริบตาไม่ผ่าน กรุณาหลับและลืมตาทั้งสองข้างโดยมองตรง",
+            )
+    else:
+        scale_ratio = action_observation.face_width_ratio / max(
+            reference.face_width_ratio, 0.001
+        )
+        if (
+            not 1.08 <= scale_ratio <= 1.70
+            or action_observation.center_offset > 0.30
+            or abs(action_observation.yaw_proxy - reference.yaw_proxy) > 0.15
+            or abs(action_observation.pitch_proxy - reference.pitch_proxy) > 0.20
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="คำสั่งขยับเข้าใกล้ไม่ผ่าน กรุณาเคลื่อนใบหน้าเข้าใกล้กล้องเล็กน้อยโดยมองตรง",
+            )
+
+    if not _frontal(reference, recovery_observation, scale_tolerance=0.20):
+        raise HTTPException(
+            status_code=422,
+            detail="ภาพหลังทำคำสั่งต้องกลับมามองตรงและอยู่ในกรอบเดิม",
+        )
+    return VerifiedLivenessFrames(final_embedding=recovery_observation.embedding)
+
+
 def _frame_difference(first: np.ndarray, second: np.ndarray) -> float:
     first_gray = cv2.resize(cv2.cvtColor(first, cv2.COLOR_BGR2GRAY), (160, 120))
     second_gray = cv2.resize(cv2.cvtColor(second, cv2.COLOR_BGR2GRAY), (160, 120))
