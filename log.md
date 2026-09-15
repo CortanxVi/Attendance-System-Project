@@ -1262,3 +1262,59 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - If the institution needs excused absence, make-up classes, multiple sessions in one week, a separate attendance-grade weight, or a fixed calendar-week mapping, add explicit schema/business rules before changing report semantics; the current data contract supports only present, late, and absent session outcomes.
 - Large rosters and unusually high configured session counts can make the browser-generated workbook/PDF wide or memory-intensive. The PDF automatically moves from A3 to A2 above 18 weeks, but representative high-volume acceptance remains necessary.
 - Review and commit the complete working tree before deployment, then deploy Backend and Frontend together and clear/update installed PWA service workers during Production acceptance.
+
+## 2026-09-14 — Documented and Templated the Vercel/Nginx/Docker Mini-PC Production Deployment
+
+- **Status:** Completed and verified in the working tree. Documentation and production runtime templates are ready for operator review; no public deployment was performed.
+- **Actor:** Codex primary agent.
+- **Objective:** Provide a detailed Thai, step-by-step Production runbook from Git promotion and build verification through Vercel Frontend hosting, Supabase configuration, Mini-PC preparation, Nginx HTTPS ingress, Dockerized FastAPI/OCR operation, URL linkage, acceptance, monitoring, update, and rollback.
+
+### Files and components changed
+
+- Replaced `docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md` with a Production-focused runbook covering architecture, prerequisites, Git Preview-to-Production promotion, release tags, local verification, Supabase migrations/Auth/RLS, Ubuntu/Docker installation, external secret files, model provisioning, Docker Compose operation, DNS/NAT, ACME/TLS bootstrap, Nginx, Vercel import/environment/domain configuration, exact URL mappings, CORS diagnosis, acceptance tests, go-live ordering, updates, rollback, monitoring, backups, outage behavior, and security/privacy checks.
+- Added `deployment/docker/compose.production.yml` for the FastAPI and Light OCR services. FastAPI is published only on host loopback; OCR remains internal to the Compose network; both services use non-root images, health checks, restart policies, resource limits, capability drops, no-new-privileges, bounded rotating logs, and externally stored environment files.
+- Added `deployment/docker/production.compose.env.example` for release identity, exact Frontend origin allowlists, API hostname, model path, loopback binding, and conservative four-core/eight-gigabyte resource controls.
+- Expanded `deployment/docker/README_TH.md` to distinguish the existing development Staging stack from the new Mini-PC Production stack and provide the safe Production command sequence.
+- Updated `deployment/nginx/attendance-api-only.conf.example` so the HTTP site serves the ACME challenge path before redirecting other requests to HTTPS, enabling deterministic certificate issuance and renewal.
+
+### Implementation rationale
+
+- The former hybrid guide installed Backend/OCR directly as systemd services, which no longer matched the requested container runtime. The new design keeps host Nginx as the sole Internet-facing TLS boundary while Docker Compose owns FastAPI and OCR.
+- Deployment secrets live under `/etc/km-attendance` instead of the repository or Docker build context. Compose topology values override CORS, trusted-host, service-discovery, and release metadata so the running network contract is explicit and reviewable.
+- One canonical Frontend origin is recommended; multiple required Production origins can be listed explicitly without wildcard CORS. Preview is routed to separate Staging services to avoid exposing Production data to unreviewed builds.
+- Image names include an immutable release identifier, and the runbook uses Git tags/detached checkouts so operators can identify and restore the exact application revision.
+- Nginx does not duplicate CORS headers. FastAPI remains the single CORS owner, avoiding conflicting allow-origin responses while Nginx provides TLS, request/connection limits, upload limits, proxy headers, and loopback isolation.
+
+### Security and privacy impact
+
+- The templates do not contain credentials, private endpoints, student records, biometric data, or raw images. All example domains and keys are placeholders.
+- Backend and OCR secrets are explicitly excluded from Vercel and Git; the runbook treats every `VITE_*` value as browser-visible and restricts the privileged Supabase key to the Backend environment.
+- FastAPI binds to `127.0.0.1:8000`, OCR has no published host port, and the guide instructs operators never to expose ports 8000, 3001, or public SSH through the router.
+- The guide retains exact HTTPS CORS origins, exact trusted hosts, Supabase RLS/advisor checks, server-side authorization, TLS renewal testing, restricted monitoring data, encrypted secret backup, and biometric/model-governance requirements.
+- Current official Supabase documentation and the complete current changelog were reviewed. The runbook records the Node.js 20 client-library support removal and the upcoming all-project Data API table auto-exposure change without broadening existing table grants.
+
+### Database and deployment impact
+
+- No Supabase Auth setting, migration, schema, RLS policy, Storage object, database row, Vercel project, DNS record, router rule, Nginx host service, public endpoint, or running application container was changed.
+- Two local Docker images were built from the new Production Compose definition for verification; no Production containers were created or started.
+- The guide replaces the stale migration warning with the current repository state: 19 local migrations were previously verified aligned with remote history. Every future release must still rerun the migration, lint, and advisor gates.
+- The existing native systemd `--api-only` installer remains available but is documented as mutually exclusive with the Docker Compose runtime on port 8000.
+
+### Verification performed
+
+- Docker Compose v5.1.4 parsed `compose.production.yml` successfully with environment resolution and with `config --quiet` returning exit code 0.
+- `docker compose build --pull` completed successfully for both `km-attendance-backend:v1.0.0` and `km-attendance-ocr:v1.0.0`, using the existing build cache where applicable.
+- Ephemeral image inspections confirmed that neither image contains `/app/.env` and both configured runtime users have non-zero UIDs.
+- Every repository file referenced by the runbook's file inventory was checked for existence.
+- The first aggregate release check correctly stopped under unsupported system Node.js 18.19.1. The supported Node.js 22.23.2 rerun initially exposed the deployment-guide regression assertion for the native `--api-only` path; the guide was clarified and the complete rerun passed.
+- The final `scripts/verify_release.sh` run passed: all required InsightFace checksums matched, 94 Backend tests passed, Python dependency validation passed, Frontend lint and all contract/security tests passed, the Vite/PWA Production build completed with 1,910 modules and 68 precache entries, Frontend/OCR dependency audits reported zero moderate-or-higher vulnerabilities, OCR security/doctor checks passed, and the strict Frontend design audit reported zero findings.
+- Final Compose validation, image secret/user checks, file-reference checks, and `git diff --check` all completed with exit code 0 before this log append.
+
+### Remaining risks and handoff work
+
+- Replace every placeholder with approved real domains, keys, paths, management network, deploy identity, Git remote, and unique release tag before following the runbook. Do not copy example values into Production.
+- Install and run `nginx -t` on the target Ubuntu Mini PC after rendering the real hostname and obtaining its certificate; Nginx is not installed on the development workstation, so host-level Nginx syntax/runtime validation was not performed here.
+- Confirm whether the installation has a static public IP, dynamic public IP requiring DDNS, or CGNAT requiring an institutionally approved ingress alternative. Direct port forwarding cannot bypass CGNAT.
+- Review the existing Supabase leaked-password-protection warning as an Auth policy decision and verify future new-table Data API exposure explicitly before the October 2026 enforcement date.
+- Complete real Production operations: provision the Mini PC/UPS, store secrets, verify model licensing, configure DNS/router/TLS, deploy the Docker stack and Vercel build, run physical-device and representative 30–40-user load tests, verify backup/restore and rollback, and establish external monitoring.
+- Review and commit the deployment files and this log entry. The pre-existing untracked `outputs/` directory was preserved and not modified by this deployment task.

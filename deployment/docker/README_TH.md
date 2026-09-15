@@ -1,4 +1,35 @@
-# Docker Staging บนเครื่องพัฒนา
+# Docker สำหรับ Staging และ Production
+
+โฟลเดอร์นี้มี Compose แยกสองวัตถุประสงค์:
+
+| ไฟล์ | ใช้เมื่อใด |
+|---|---|
+| `compose.staging.yml` | ทดสอบ `demo3.1` บนเครื่องพัฒนาและ Supabase Staging |
+| `compose.production.yml` | รัน FastAPI และ Light OCR บน Mini PC หลัง Nginx โดยใช้ Supabase Production |
+
+Production ใช้ secret จาก `/etc/km-attendance/backend.env` และ
+`/etc/km-attendance/ocr.env` ไม่อ่าน `.env` ใน source tree และ publish FastAPI เฉพาะ
+`127.0.0.1:8000` ส่วน OCR ไม่ publish host port ดูขั้นตอนทั้งหมดใน
+`docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md`
+
+ตัวอย่างคำสั่ง Production หลังเตรียมไฟล์ env และโมเดลแล้ว:
+
+```bash
+sudo docker compose \
+  --env-file /etc/km-attendance/compose.env \
+  -f deployment/docker/compose.production.yml \
+  config --quiet
+sudo docker compose \
+  --env-file /etc/km-attendance/compose.env \
+  -f deployment/docker/compose.production.yml \
+  build --pull
+sudo docker compose \
+  --env-file /etc/km-attendance/compose.env \
+  -f deployment/docker/compose.production.yml \
+  up -d --remove-orphans
+```
+
+## Docker Staging บนเครื่องพัฒนา
 
 ชุดนี้ใช้ทดสอบ `demo3.1` ก่อน Production โดยรัน FastAPI และ Light OCR ใน Docker
 บนเครื่องพัฒนา ส่วน Frontend จะรันในเครื่องหรือ deploy เป็น Preview บน Vercel/Netlify

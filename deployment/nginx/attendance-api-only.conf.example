@@ -5,7 +5,16 @@ server {
     listen 80;
     listen [::]:80;
     server_name api.attendance.example.ac.th;
-    return 301 https://$host$request_uri;
+
+    # Keep ACME renewal reachable over HTTP. Create /var/www/certbot before use.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
 }
 
 server {

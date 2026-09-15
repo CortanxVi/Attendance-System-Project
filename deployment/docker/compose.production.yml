@@ -1,0 +1,100 @@
+name: km-attendance-production
+
+services:
+  ocr:
+    image: km-attendance-ocr:${RELEASE_ID:?Set RELEASE_ID in the Compose environment file}
+    build:
+      context: ../../ocr-service
+      dockerfile: Dockerfile
+    env_file:
+      - ${ATTENDANCE_CONFIG_DIR:-/etc/km-attendance}/ocr.env
+    environment:
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      PORT: 3001
+      OCR_INCLUDE_RAW_TEXT: "false"
+    expose:
+      - "3001"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: ${OCR_MEMORY_LIMIT:-2g}
+    cpus: ${OCR_CPU_LIMIT:-2.0}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - application
+
+  backend:
+    image: km-attendance-backend:${RELEASE_ID:?Set RELEASE_ID in the Compose environment file}
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    env_file:
+      - ${ATTENDANCE_CONFIG_DIR:-/etc/km-attendance}/backend.env
+    environment:
+      APP_ENV: production
+      APP_VERSION: ${RELEASE_ID}
+      OCR_SERVICE_URL: http://ocr:3001
+      INSIGHTFACE_MODEL_ROOT: /models/insightface
+      CORS_ORIGINS: ${FRONTEND_ORIGINS:?Set FRONTEND_ORIGINS to the exact HTTPS frontend origin list}
+      TRUSTED_HOSTS: ${API_HOST:?Set API_HOST to the public API hostname},127.0.0.1,localhost
+      FACE_INFERENCE_CONCURRENCY: ${FACE_INFERENCE_CONCURRENCY:-2}
+      LIVENESS_PAD_CONCURRENCY: ${LIVENESS_PAD_CONCURRENCY:-2}
+    depends_on:
+      ocr:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ${INSIGHTFACE_MODEL_ROOT_HOST:?Set INSIGHTFACE_MODEL_ROOT_HOST to an absolute host path}
+        target: /models/insightface
+        read_only: true
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-4g}
+    cpus: ${BACKEND_CPU_LIMIT:-3.0}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - application
+
+networks:
+  application:
+    driver: bridge
