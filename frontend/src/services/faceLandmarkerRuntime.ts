@@ -73,6 +73,7 @@ function userFacingLoadError(error?: unknown): string {
   ) {
     return 'เบราว์เซอร์นี้ไม่รองรับระบบตรวจจับใบหน้าที่ใช้อยู่ กรุณาอัปเดต iOS, Safari หรือ Chrome แล้วลองใหม่';
   }
+  console.error(message);
   return 'เตรียมระบบตรวจจับใบหน้าไม่สำเร็จ กรุณาตรวจสอบเครือข่ายแล้วลองใหม่';
 }
 
