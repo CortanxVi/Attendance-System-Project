@@ -296,8 +296,8 @@ export default function StudentHome() {
                   {faceRuntime.status === 'ready'
                     ? 'สามารถสแกน QR แล้วเริ่มตรวจใบหน้าได้ทันที'
                     : faceRuntime.status === 'error'
-                      ? 'ตรวจสอบเครือข่าย แล้วกดลองใหม่ก่อนสแกน QR'
-                      : 'ระบบจะเปิดปุ่มสแกน QR เมื่อโมเดลพร้อม'}
+                      ? faceRuntime.error
+                      : 'ครั้งแรกอาจต้องดาวน์โหลดประมาณ 15 MB ระบบจะเปิดปุ่มสแกน QR เมื่อโมเดลพร้อม'}
                 </p>
               </div>
               {faceRuntime.status === 'error' && (

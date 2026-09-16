@@ -31,8 +31,15 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       // This worker is an ES module, so the Emscripten module loader must also
       // be selected. The classic loader cannot install ModuleFactory here.
       const fileset = await FilesetResolver.forVisionTasks(message.wasmRoot, true);
+      const modelResponse = await fetch(message.modelUrl, { cache: 'force-cache' });
+      if (!modelResponse.ok) {
+        throw new Error(`Face Landmarker model request failed (${modelResponse.status})`);
+      }
+      const modelAssetBuffer = new Uint8Array(await modelResponse.arrayBuffer());
       landmarker = await FaceLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: message.modelUrl },
+        // Supplying the already downloaded bytes avoids a second SDK-owned
+        // request and follows MediaPipe's worker-safe model loading pattern.
+        baseOptions: { modelAssetBuffer },
         runningMode: 'VIDEO',
         numFaces: 2,
         minFaceDetectionConfidence: 0.65,

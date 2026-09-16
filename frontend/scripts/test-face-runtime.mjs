@@ -10,11 +10,22 @@ assert.match(
   /FilesetResolver\.forVisionTasks\(message\.wasmRoot, true\)/,
   'The ES-module worker must select the ES-module WASM loader.',
 );
+assert.match(
+  worker,
+  /modelAssetBuffer/,
+  'The worker must fetch the local model into a buffer before MediaPipe initialization.',
+);
 assert.equal(
   (runtime.match(/new Worker\(/g) ?? []).length,
   1,
   'The shared runtime must own exactly one worker constructor.',
 );
+assert.match(runtime, /const INITIALIZATION_TIMEOUT_MS = 120_000/);
+assert.match(runtime, /needsAppleMobileMainThreadFallback/);
+assert.match(runtime, /initializeMainThread/);
+assert.match(runtime, /modelAssetBuffer/);
+assert.match(runtime, /document\.createElement\('canvas'\)/);
+assert.match(runtime, /worker !== null \|\| mainThreadLandmarker !== null/);
 assert.match(runtime, /preloadFaceLandmarker/);
 assert.match(runtime, /openFaceLandmarkerClient/);
 assert.match(studentHome, /void preloadFaceLandmarker\(\)/);
@@ -25,4 +36,3 @@ assert.match(
 );
 
 console.log('Face runtime contract: module WASM, singleton preload, and QR readiness gate pass.');
-

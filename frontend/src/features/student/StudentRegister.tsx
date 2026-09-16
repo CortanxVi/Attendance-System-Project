@@ -135,6 +135,7 @@ export default function StudentRegister() {
             {runtimeReady ? <ShieldCheck className="shrink-0" aria-hidden="true" /> : <Loader2 className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             <div className="min-w-0 flex-1">
               <p className="font-semibold">{runtimeReady ? 'โมเดลตรวจจับใบหน้าพร้อมใช้งาน' : faceRuntime.status === 'error' ? 'โหลดโมเดลตรวจจับใบหน้าไม่สำเร็จ' : 'กำลังเตรียมโมเดลตรวจจับใบหน้า...'}</p>
+              {faceRuntime.status === 'error' && <p className="mt-1 text-sm">{faceRuntime.error}</p>}
               <p className="mt-0.5 text-xs opacity-80">ระบบเตรียมโมเดลไว้ก่อนเริ่มกล้องและไม่ส่งวิดีโอทั้งชุดไปยังเซิร์ฟเวอร์</p>
             </div>
             {faceRuntime.status === 'error' && (
