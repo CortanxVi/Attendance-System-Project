@@ -13,6 +13,7 @@ from core.config import SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE, supabase_db as supa
 from core.security import AuthenticatedUser, get_current_user, require_roles
 from services.student_support_service import (
     ValidatedSupportAttachment,
+    attachment_content_disposition,
     inline_content_disposition,
     read_validated_support_attachment,
 )
@@ -115,6 +116,7 @@ def _load_request_detail(request_id: str, user: AuthenticatedUser) -> dict:
         )
         for attachment in attachments_response.data or []:
             attachment["preview_url"] = f"/api/v1/support/attachments/{attachment['id']}/preview"
+            attachment["download_url"] = f"/api/v1/support/attachments/{attachment['id']}/download"
             attachments_by_message[attachment["message_id"]].append(attachment)
     profile_map = _profile_map({row["sender_id"] for row in messages})
     for message in messages:
@@ -439,50 +441,71 @@ async def update_support_request_status(
     return {"status": "success", "request": await run_in_threadpool(update)}
 
 
-@support_router.get("/attachments/{attachment_id}/preview")
-async def preview_support_attachment(
-    attachment_id: UUID,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-):
-    def load() -> tuple[dict, bytes]:
-        response = (
-            supabase.table("student_support_attachments")
-            .select("id, message_id, storage_path, original_name, content_type, size_bytes")
-            .eq("id", str(attachment_id))
-            .limit(1)
-            .execute()
-        )
-        if not response.data:
-            raise HTTPException(status_code=404, detail="ไม่พบไฟล์แนบ")
-        attachment = response.data[0]
-        message = (
-            supabase.table("student_support_messages")
-            .select("request_id")
-            .eq("id", attachment["message_id"])
-            .limit(1)
-            .execute()
-        )
-        if not message.data:
-            raise HTTPException(status_code=404, detail="ไม่พบข้อความของไฟล์แนบ")
-        _load_request_for_participant(message.data[0]["request_id"], current_user)
-        content = supabase.storage.from_(BUCKET).download(attachment["storage_path"])
-        return attachment, content
+def _load_attachment_for_participant(attachment_id: UUID, current_user: AuthenticatedUser) -> tuple[dict, bytes]:
+    response = (
+        supabase.table("student_support_attachments")
+        .select("id, message_id, storage_path, original_name, content_type, size_bytes")
+        .eq("id", str(attachment_id))
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์แนบ")
+    attachment = response.data[0]
+    message = (
+        supabase.table("student_support_messages")
+        .select("request_id")
+        .eq("id", attachment["message_id"])
+        .limit(1)
+        .execute()
+    )
+    if not message.data:
+        raise HTTPException(status_code=404, detail="ไม่พบข้อความของไฟล์แนบ")
+    _load_request_for_participant(message.data[0]["request_id"], current_user)
+    content = supabase.storage.from_(BUCKET).download(attachment["storage_path"])
+    return attachment, content
 
+
+async def _stream_support_attachment(
+    attachment_id: UUID,
+    current_user: AuthenticatedUser,
+    *,
+    download: bool,
+):
     try:
-        attachment, content = await run_in_threadpool(load)
+        attachment, content = await run_in_threadpool(_load_attachment_for_participant, attachment_id, current_user)
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Support attachment preview failed")
-        raise HTTPException(status_code=503, detail="เปิดตัวอย่างไฟล์ไม่สำเร็จ") from exc
+        logger.exception("Support attachment access failed")
+        raise HTTPException(status_code=503, detail="เรียกไฟล์แนบไม่สำเร็จ") from exc
     return StreamingResponse(
         io.BytesIO(content),
         media_type=attachment["content_type"],
         headers={
-            "Content-Disposition": inline_content_disposition(attachment["original_name"]),
+            "Content-Disposition": (
+                attachment_content_disposition(attachment["original_name"])
+                if download else inline_content_disposition(attachment["original_name"])
+            ),
             "Cache-Control": "private, no-store, max-age=0",
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "sandbox; default-src 'none'",
             "Cross-Origin-Resource-Policy": "same-origin",
         },
     )
+
+
+@support_router.get("/attachments/{attachment_id}/preview")
+async def preview_support_attachment(
+    attachment_id: UUID,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    return await _stream_support_attachment(attachment_id, current_user, download=False)
+
+
+@support_router.get("/attachments/{attachment_id}/download")
+async def download_support_attachment(
+    attachment_id: UUID,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    return await _stream_support_attachment(attachment_id, current_user, download=True)

@@ -12,6 +12,7 @@ onnxruntime==1.26.0
 opencv-python==4.13.0.92
 openpyxl==3.1.5
 pillow==12.3.0
+pillow-heif==1.7.0
 python-dotenv==1.2.2
 python-multipart==0.0.31
 requests==2.34.2

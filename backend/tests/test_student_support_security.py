@@ -14,9 +14,12 @@ os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 
 from core.security import trusted_google_avatar_url
 from core.security import AuthenticatedUser
-from routers.support import _load_request_for_participant
+from routers.support import _load_attachment_for_participant, _load_request_for_participant
+from routers.support import download_support_attachment, preview_support_attachment
 from services.student_support_service import (
+    attachment_content_disposition,
     inline_content_disposition,
+    normalized_image_name,
     read_validated_support_attachment,
     safe_original_name,
 )
@@ -38,8 +41,60 @@ class StudentSupportAttachmentTests(unittest.IsolatedAsyncioTestCase):
         result = await read_validated_support_attachment(
             upload(buffer.getvalue(), "evidence.png", "image/png")
         )
+        self.assertEqual(result.content_type, "image/jpeg")
+        self.assertEqual(result.extension, ".jpg")
+
+    async def test_converts_common_raster_images_to_browser_safe_stills(self):
+        for image_format, filename, mime in (
+            ("GIF", "moving.gif", "image/gif"),
+            ("BMP", "diagram.bmp", "image/bmp"),
+            ("TIFF", "scan.tiff", "image/tiff"),
+            ("AVIF", "scan.avif", "image/avif"),
+            ("HEIF", "phone.heic", "image/heic"),
+            ("ICO", "icon.ico", "image/x-icon"),
+        ):
+            with self.subTest(image_format=image_format):
+                buffer = io.BytesIO()
+                Image.new("RGB", (64, 64), color="white").save(buffer, format=image_format)
+                result = await read_validated_support_attachment(
+                    upload(buffer.getvalue(), filename, mime)
+                )
+                self.assertEqual(result.content_type, "image/jpeg")
+                self.assertTrue(result.original_name.endswith(".jpg"))
+                with Image.open(io.BytesIO(result.content)) as decoded:
+                    self.assertEqual(decoded.format, "JPEG")
+
+    async def test_strips_image_metadata_and_keeps_transparency(self):
+        buffer = io.BytesIO()
+        Image.new("RGBA", (64, 64), (255, 0, 0, 100)).save(
+            buffer, format="PNG", pnginfo=self._private_png_metadata()
+        )
+        result = await read_validated_support_attachment(
+            upload(buffer.getvalue(), "evidence.png", "image/png")
+        )
         self.assertEqual(result.content_type, "image/png")
-        self.assertEqual(result.extension, ".png")
+        with Image.open(io.BytesIO(result.content)) as decoded:
+            self.assertEqual(decoded.mode, "RGBA")
+            self.assertNotIn("student", decoded.info)
+
+    @staticmethod
+    def _private_png_metadata():
+        from PIL.PngImagePlugin import PngInfo
+        metadata = PngInfo()
+        metadata.add_text("student", "private")
+        return metadata
+
+    async def test_rejects_svg_even_with_image_mime(self):
+        with self.assertRaises(HTTPException) as caught:
+            await read_validated_support_attachment(
+                upload(b"<svg><script>alert(1)</script></svg>", "unsafe.svg", "image/svg+xml")
+            )
+        self.assertEqual(caught.exception.status_code, 415)
+
+    def test_normalized_image_name_respects_database_length_limit(self):
+        name = normalized_image_name("a" * 255, ".jpg")
+        self.assertEqual(len(name), 255)
+        self.assertTrue(name.endswith(".jpg"))
 
     async def test_rejects_mime_type_that_does_not_match_image(self):
         buffer = io.BytesIO()
@@ -82,6 +137,10 @@ class StudentSupportAttachmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("\r", header)
         self.assertNotIn("\n", header)
         self.assertIn("filename*=UTF-8''", header)
+        download_header = attachment_content_disposition('หลักฐาน\r\n".pdf')
+        self.assertTrue(download_header.startswith("attachment;"))
+        self.assertNotIn("\r", download_header)
+        self.assertNotIn("\n", download_header)
 
 
 class GoogleAvatarUrlTests(unittest.TestCase):
@@ -95,7 +154,7 @@ class GoogleAvatarUrlTests(unittest.TestCase):
         self.assertIsNone(trusted_google_avatar_url({"avatar_url": "https://evil.example/tracker"}))
 
 
-class SupportParticipantAuthorizationTests(unittest.TestCase):
+class SupportParticipantAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.user = AuthenticatedUser(
             id="11111111-1111-1111-1111-111111111111",
@@ -124,6 +183,36 @@ class SupportParticipantAuthorizationTests(unittest.TestCase):
         }
         with patch("routers.support._request_query", return_value=SimpleNamespace(data=[row])):
             self.assertEqual(_load_request_for_participant("request-id", self.user), row)
+
+    async def test_download_uses_same_participant_gate_as_preview(self):
+        import uuid
+        attachment_id = uuid.uuid4()
+        attachment = {"content_type": "application/pdf", "original_name": "evidence.pdf"}
+        with patch(
+            "routers.support._load_attachment_for_participant",
+            return_value=(attachment, b"%PDF-1.4\n%%EOF"),
+        ) as load:
+            download = await download_support_attachment(attachment_id, self.user)
+            preview = await preview_support_attachment(attachment_id, self.user)
+        self.assertEqual(load.call_count, 2)
+        self.assertTrue(download.headers["content-disposition"].startswith("attachment;"))
+        self.assertTrue(preview.headers["content-disposition"].startswith("inline;"))
+
+    def test_attachment_bytes_are_not_loaded_for_nonparticipant(self):
+        import uuid
+        attachment_id = uuid.uuid4()
+        with patch("routers.support.supabase") as supabase_client, patch(
+            "routers.support._load_request_for_participant",
+            side_effect=HTTPException(status_code=403, detail="forbidden"),
+        ):
+            supabase_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = [
+                SimpleNamespace(data=[{"message_id": "message-id", "storage_path": "private/path"}]),
+                SimpleNamespace(data=[{"request_id": "request-id"}]),
+            ]
+            with self.assertRaises(HTTPException) as caught:
+                _load_attachment_for_participant(attachment_id, self.user)
+            self.assertEqual(caught.exception.status_code, 403)
+            supabase_client.storage.from_.assert_not_called()
 
 
 class SupportUploadLimitMiddlewareTests(unittest.IsolatedAsyncioTestCase):

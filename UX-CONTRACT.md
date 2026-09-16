@@ -18,7 +18,7 @@
 | Attendance data lifecycle | `attendance_records` constraints/migration | Database | 2026-08-24 |
 | OCR policy | `ocr-service/ocr-server.js`, `backend/services/light_ocr_service.py` | Service contract | 2026-08-24 |
 | Temporary admin | `backend/routers/temporary_admin.py`, migration `20260828111609` | API/schema policy | 2026-08-28 |
-| Student support requests | `backend/routers/support.py`, migrations `20260830072753`, `20260830072951` และ `20260830075957` | API/schema/storage policy | 2026-08-30 |
+| Student support requests | `backend/routers/support.py`, `backend/services/student_support_service.py`, migrations `20260830072753`, `20260830072951` และ `20260830075957` | API/schema/storage policy | 2026-09-16 |
 | Student self-profile | `backend/routers/student.py`, `profiles.academic_year` check constraint | API/schema policy | 2026-08-30 |
 | Course join codes and approval | `backend/routers/course_membership.py`, migration `20260831165330` | API/schema policy | 2026-08-31 |
 | Course roster import and paging | `backend/services/roster_import_service.py`, migration `20260901160534` | API/schema policy | 2026-09-01 |
@@ -41,7 +41,7 @@
 | Form | screen form + backend schema | API/Pydantic | create/edit/upload | build + browser |
 | Scrollbar | global application stylesheet | `frontend/src/index.css` | thin baseline; geometry exception only | computed style + browser |
 | Toast | `NotificationProvider` | shared component | success/info/error | live region + browser |
-| Upload | screen-owned accessible file input + shared preview/validation | `imageUtils.prepareStudentCardImage`, `SupportCenter`, `roster_import_service`, backend validators | card image/XLSX/CSV/support attachment | client + server validation |
+| Upload | screen-owned accessible file input + shared preview/validation | `imageUtils.prepareStudentCardImage`, `SupportCenter`, `roster_import_service`, backend validators | card image/XLSX/CSV/support attachment; request PDF/common raster images, normalized to JPEG/PNG | client + server validation |
 | CRUD | backend-authorized screen flows | API routes | stay/refresh | API + browser |
 | Presentation mode | `usePresentationMode` | Fullscreen API + app viewport fallback | Dynamic QR/class code | keyboard/touch/browser |
 | Student QR camera | `QRScanner` fullscreen dialog | Dynamic QR API contract + layer tokens | rear-camera scan/error/retry | keyboard/touch/camera/browser |
@@ -76,6 +76,8 @@
 | Reply to request | thread composer | disabled + spinner | remain/refetch | toast | preserve text/files and retry | composer | `SupportCenter.tsx`, `routers/support.py` |
 | Switch away from request thread | route/tab navigation | n/a | selected thread and unsent in-memory reply restore on return within the authenticated role session | none | draft clears after successful send or logout/role-provider unmount | composer | `SupportWorkspaceProvider.tsx`, `SupportCenter.tsx` |
 | Preview support file | explicit preview button | inline spinner | inline image/PDF | inline state | retry same button | preview control | `SupportCenter.tsx`, `routers/support.py` |
+| Download support file | explicit download button on an authorized request | button spinner | browser file download | none | inline error and retry; preview state retained | download control | `SupportCenter.tsx`, `routers/support.py` |
+| Change teacher request text size | labeled decrease/increase buttons | none | selected size applied to request subject, details, messages and composer | live size label | boundary button disabled at 14/22 px | size control | `SupportCenter.tsx` |
 | Resolve/reopen request | teacher status action/student reply | disabled | remain/refetch | toast/status badge | retain thread and retry | status action | `SupportCenter.tsx`, `routers/support.py` |
 | Open course management | course-card action | route loading | selected management tab | none | retry/back to course list | page heading | `CourseManagement.tsx` |
 | Request course join | student submits class code | disabled + spinner | remain/refetch requests | toast + pending card | retain code and show inline error | join-code input | `StudentCourses.tsx`, `course_membership.py` |
@@ -121,6 +123,7 @@
 - Schema/validation layer: Pydantic + PostgreSQL constraints/RLS; client validation is advisory
 - Student academic year: the student profile API derives a year from the authenticated account's 13-digit student ID in Asia/Bangkok time; the student PATCH route fails closed with 403 and the UI provides no edit control
 - Trigger timing: file validation on selection and again on server; QR/token/challenge at each server boundary
+- Support attachment handling: client may select PDF or common raster image types, but the Backend detects/decodes the actual image and stores a static JPEG or PNG without source metadata. SVG and unrecognized/corrupt image data fail closed. The private Storage bucket and attachment table stay Backend-only; preview and download both re-check request-participant authorization.
 - Server error mapping: Thai `detail` shown inline/toast without leaking secrets
 - Sensitive-value handling: no service key, embedding, raw OCR or QR token in notifications/logs
 - Temporary-admin handling: PIN uses Argon2id plus server pepper; grants are memory-only, session-bound, hashed at rest, short-lived and revocable; permanent-admin operations fail closed on the server

@@ -6,7 +6,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import HTTPException, UploadFile
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
 
 from core.config import (
     MAX_IMAGE_HEIGHT,
@@ -17,16 +18,23 @@ from core.config import (
 )
 
 
-ALLOWED_IMAGE_FORMATS = {
-    "JPEG": ("image/jpeg", ".jpg"),
-    "PNG": ("image/png", ".png"),
-    "WEBP": ("image/webp", ".webp"),
-}
-ALLOWED_CONTENT_TYPES = {
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "application/pdf",
+# Decode common still/raster formats (including iPhone HEIC), then store only
+# browser-safe JPEG/PNG with EXIF/metadata removed. SVG is intentionally excluded:
+# it may contain script or external resource references.
+register_heif_opener()
+ALLOWED_IMAGE_FORMATS = frozenset({
+    "JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF", "AVIF", "HEIF", "ICO",
+})
+IMAGE_EXTENSIONS = frozenset({
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff",
+    ".avif", ".heic", ".heif", ".ico",
+})
+DECLARED_IMAGE_FORMATS = {
+    "image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP",
+    "image/gif": "GIF", "image/bmp": "BMP", "image/x-ms-bmp": "BMP",
+    "image/tiff": "TIFF", "image/avif": "AVIF",
+    "image/heic": "HEIF", "image/heif": "HEIF", "image/x-icon": "ICO",
+    "image/vnd.microsoft.icon": "ICO",
 }
 PDF_ACTIVE_CONTENT_MARKERS = (
     b"/JavaScript",
@@ -58,14 +66,32 @@ def inline_content_disposition(filename: str | None) -> str:
     return f"inline; filename=\"{fallback[:120]}\"; filename*=UTF-8''{quote(original, safe='')}"
 
 
+def attachment_content_disposition(filename: str | None) -> str:
+    return inline_content_disposition(filename).replace("inline;", "attachment;", 1)
+
+
+def normalized_image_name(filename: str | None, extension: str) -> str:
+    stem = Path(safe_original_name(filename)).stem or "attachment"
+    return f"{stem[:255 - len(extension)]}{extension}"
+
+
 async def read_validated_support_attachment(
     upload: UploadFile,
 ) -> ValidatedSupportAttachment:
     claimed_type = (upload.content_type or "").lower()
-    if claimed_type not in ALLOWED_CONTENT_TYPES:
+    extension = Path(safe_original_name(upload.filename)).suffix.lower()
+    is_pdf = claimed_type == "application/pdf" or (
+        claimed_type in {"", "application/octet-stream"} and extension == ".pdf"
+    )
+    is_image = (
+        claimed_type.startswith("image/") and claimed_type != "image/svg+xml"
+    ) or (
+        claimed_type in {"", "application/octet-stream"} and extension in IMAGE_EXTENSIONS
+    )
+    if not (is_pdf or is_image):
         raise HTTPException(
             status_code=415,
-            detail="รองรับเฉพาะไฟล์ JPEG, PNG, WebP และ PDF",
+            detail="รองรับ PDF และภาพนิ่ง JPG, PNG, WebP, GIF, BMP, TIFF, AVIF, HEIC/HEIF หรือ ICO เท่านั้น (ไม่รองรับ SVG)",
         )
 
     content = await upload.read(SUPPORT_ATTACHMENT_MAX_BYTES + 1)
@@ -75,7 +101,7 @@ async def read_validated_support_attachment(
     if len(content) > SUPPORT_ATTACHMENT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="ไฟล์แนบต้องมีขนาดไม่เกิน 10 MB")
 
-    if claimed_type == "application/pdf":
+    if is_pdf:
         if not content.startswith(b"%PDF-") or b"%%EOF" not in content[-2048:]:
             raise HTTPException(status_code=400, detail="ไฟล์ PDF เสียหรือรูปแบบไม่ถูกต้อง")
         if any(marker in content for marker in PDF_ACTIVE_CONTENT_MARKERS):
@@ -103,8 +129,27 @@ async def read_validated_support_attachment(
                                 f"{MAX_IMAGE_PIXELS:,} พิกเซล)"
                             ),
                         )
+                    if image.format not in ALLOWED_IMAGE_FORMATS:
+                        raise HTTPException(status_code=415, detail="รูปภาพชนิดนี้ยังไม่รองรับการแปลงอย่างปลอดภัย")
+                    expected_format = DECLARED_IMAGE_FORMATS.get(claimed_type)
+                    if expected_format and expected_format != image.format:
+                        raise HTTPException(status_code=400, detail="ชนิดไฟล์ไม่ตรงกับข้อมูลจริงภายในไฟล์")
                     image.verify()
-                    detected = ALLOWED_IMAGE_FORMATS.get(image.format or "")
+                with Image.open(io.BytesIO(content)) as image:
+                    image.seek(0)  # Animated images are intentionally stored as one still frame.
+                    oriented = ImageOps.exif_transpose(image)
+                    has_alpha = "A" in oriented.getbands() or "transparency" in oriented.info
+                    normalized = oriented.convert("RGBA" if has_alpha else "RGB")
+                    clean = Image.new(normalized.mode, normalized.size)
+                    clean.paste(normalized)
+                    encoded = io.BytesIO()
+                    if has_alpha:
+                        clean.save(encoded, format="PNG", optimize=True)
+                        detected_type, extension = "image/png", ".png"
+                    else:
+                        clean.save(encoded, format="JPEG", quality=88, optimize=True)
+                        detected_type, extension = "image/jpeg", ".jpg"
+                    content = encoded.getvalue()
         except HTTPException:
             raise
         except (
@@ -114,18 +159,20 @@ async def read_validated_support_attachment(
             OSError,
             ValueError,
         ):
-            detected = None
-        if detected is None:
+            raise HTTPException(status_code=400, detail="ไฟล์รูปภาพเสียหรือรูปแบบไม่ถูกต้อง") from None
+        if not content:
             raise HTTPException(status_code=400, detail="ไฟล์รูปภาพเสียหรือรูปแบบไม่ถูกต้อง")
-        detected_type, extension = detected
-        if claimed_type != detected_type:
-            raise HTTPException(status_code=400, detail="ชนิดไฟล์ไม่ตรงกับข้อมูลจริงภายในไฟล์")
+        if len(content) > SUPPORT_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="ภาพหลังแปลงมีขนาดเกิน 10 MB")
 
     return ValidatedSupportAttachment(
         content=content,
         content_type=detected_type,
         extension=extension,
-        original_name=safe_original_name(upload.filename),
+        original_name=(
+            safe_original_name(upload.filename) if is_pdf
+            else normalized_image_name(upload.filename, extension)
+        ),
     )
 
 
