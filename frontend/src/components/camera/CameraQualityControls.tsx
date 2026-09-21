@@ -1,3 +1,4 @@
+import { useId, useState } from 'react';
 import { Camera, Focus, SlidersHorizontal } from 'lucide-react';
 import type { CameraNumericCapability } from '../../hooks/useCameraQuality';
 
@@ -14,6 +15,7 @@ interface CameraQualityControlsProps {
   onCameraChange: (deviceId: string) => void;
   onSharpnessChange: (value: number) => void;
   onZoomChange: (value: number) => void;
+  compact?: boolean;
   className?: string;
 }
 
@@ -62,29 +64,29 @@ export default function CameraQualityControls({
   onCameraChange,
   onSharpnessChange,
   onZoomChange,
+  compact = false,
   className = '',
 }: CameraQualityControlsProps) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
   const hasAdjustments = Boolean(sharpnessRange && sharpness !== null)
     || Boolean(zoomRange && zoom !== null);
 
-  return (
-    <section
-      aria-label="ตั้งค่าคุณภาพกล้อง"
-      className={`rounded-2xl border border-white/20 bg-slate-950/80 p-3 text-white shadow-xl backdrop-blur ${className}`}
-    >
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/75">
-        <span className="inline-flex items-center gap-1.5 font-bold text-white"><SlidersHorizontal size={14} aria-hidden="true" />ตั้งค่ากล้อง</span>
-        {resolution && <span className="rounded-md bg-white/10 px-2 py-1 font-mono">{resolution}</span>}
-        {continuousFocus && <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-emerald-200"><Focus size={12} aria-hidden="true" />โฟกัสต่อเนื่อง</span>}
+  const controls = (
+    <>
+      <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-white/70">
+        <span className="inline-flex items-center gap-1 font-bold text-white"><SlidersHorizontal size={13} aria-hidden="true" />ตั้งค่ากล้อง</span>
+        {resolution && <span className="rounded-md bg-white/10 px-1.5 py-0.5 font-mono">{resolution}</span>}
+        {continuousFocus && <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-emerald-200"><Focus size={11} aria-hidden="true" />โฟกัสอัตโนมัติ</span>}
       </div>
 
       {cameras.length > 1 && (
-        <label className="mt-2 grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-2 text-xs font-semibold">
+        <label className="mt-2 grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-2 text-xs font-semibold">
           <span className="inline-flex items-center gap-1"><Camera size={14} aria-hidden="true" />เลนส์</span>
           <select
             value={selectedCameraId}
             onChange={(event) => onCameraChange(event.target.value)}
-            className="min-h-10 w-full cursor-pointer rounded-xl border border-white/20 bg-slate-900 px-3 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+            className="min-h-9 w-full cursor-pointer rounded-lg border border-white/20 bg-slate-900 px-2 text-xs text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
           >
             <option value="">{defaultCameraLabel}</option>
             {cameras.map((camera, index) => (
@@ -95,7 +97,7 @@ export default function CameraQualityControls({
       )}
 
       {hasAdjustments && (
-        <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+        <div className="mt-2 space-y-0.5 border-t border-white/10 pt-1.5">
           {sharpnessRange && sharpness !== null && (
             <RangeControl label="ความคม" range={sharpnessRange} value={sharpness} onChange={onSharpnessChange} />
           )}
@@ -106,8 +108,43 @@ export default function CameraQualityControls({
       )}
 
       {!hasAdjustments && cameras.length <= 1 && (
-        <p className="mt-2 text-[11px] leading-4 text-white/60">ระบบเลือกความละเอียดสูงและโฟกัสที่เหมาะสมให้อัตโนมัติ</p>
+        <p className="mt-1.5 text-[10px] leading-4 text-white/60">ระบบเลือกความละเอียดและโฟกัสให้อัตโนมัติ</p>
       )}
+    </>
+  );
+
+  if (compact) {
+    return (
+      <section aria-label="ตั้งค่าคุณภาพกล้อง" className={`relative flex flex-col items-end ${className}`}>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={() => setExpanded((value) => !value)}
+          className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full border border-white/20 bg-black/55 px-3 text-xs font-bold text-white shadow-lg backdrop-blur transition-colors hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+        >
+          <SlidersHorizontal size={16} aria-hidden="true" />
+          <span>กล้อง</span>
+          {resolution && <span className="hidden rounded-md bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-normal text-white/75 min-[360px]:inline">{resolution}</span>}
+        </button>
+        {expanded && (
+          <div
+            id={panelId}
+            className="absolute right-0 top-[calc(100%+0.5rem)] w-[min(18rem,calc(100vw-1.5rem))] rounded-xl border border-white/20 bg-slate-950/92 p-2.5 text-white shadow-2xl backdrop-blur"
+          >
+            {controls}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      aria-label="ตั้งค่าคุณภาพกล้อง"
+      className={`rounded-2xl border border-white/20 bg-slate-950/80 p-3 text-white shadow-xl backdrop-blur ${className}`}
+    >
+      {controls}
     </section>
   );
 }

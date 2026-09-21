@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import axios from 'axios';
 import {
   Scanner,
@@ -94,8 +95,17 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
+    const previousDocumentOverflow = document.documentElement.style.overflow;
+    const appRoot = document.getElementById('root');
+    const rootWasInert = appRoot?.inert ?? false;
+    const previousAriaHidden = appRoot?.getAttribute('aria-hidden') ?? null;
     document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
     closeButtonRef.current?.focus();
+    if (appRoot) {
+      appRoot.inert = true;
+      appRoot.setAttribute('aria-hidden', 'true');
+    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -124,6 +134,12 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = previousOverflow;
+      document.documentElement.style.overflow = previousDocumentOverflow;
+      if (appRoot) {
+        appRoot.inert = rootWasInert;
+        if (previousAriaHidden === null) appRoot.removeAttribute('aria-hidden');
+        else appRoot.setAttribute('aria-hidden', previousAriaHidden);
+      }
       clearPendingWork();
     };
   }, [clearPendingWork, onClose]);
@@ -248,7 +264,7 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
 
   const scannerPaused = status !== 'scanning';
 
-  return (
+  return createPortal(
     <div
       ref={dialogRef}
       role="dialog"
@@ -271,6 +287,7 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
           formats={['qr_code']}
           paused={scannerPaused}
           allowMultiple={false}
+          sound={false}
           components={{ finder: false, torch: true, zoom: false, onOff: false }}
           startTimeoutMs={8_000}
           styles={{
@@ -290,33 +307,33 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
         >
           <ArrowLeft aria-hidden="true" size={22} />
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h2 id="qr-scanner-title" className="truncate text-base font-bold min-[375px]:text-lg">สแกน QR หน้าห้องเรียน</h2>
           <p className="truncate text-xs text-white/75">ใช้กล้องหลังเล็งไปยัง QR ของอาจารย์</p>
         </div>
+        {status === 'scanning' && (
+          <CameraQualityControls
+            cameras={cameras}
+            selectedCameraId={selectedCameraId}
+            defaultCameraLabel="กล้องหลัง (อัตโนมัติ)"
+            resolution={cameraQuality.resolution}
+            continuousFocus={cameraQuality.continuousFocus}
+            sharpnessRange={cameraQuality.sharpnessRange}
+            sharpness={cameraQuality.sharpness}
+            zoomRange={cameraQuality.zoomRange}
+            zoom={cameraQuality.zoom}
+            onCameraChange={(deviceId) => {
+              cameraQuality.clear();
+              setSelectedCameraId(deviceId);
+              setCameraAttempt((attempt) => attempt + 1);
+            }}
+            onSharpnessChange={(value) => { void cameraQuality.applySharpness(value); }}
+            onZoomChange={(value) => { void cameraQuality.applyZoom(value); }}
+            compact
+            className="ml-auto shrink-0"
+          />
+        )}
       </header>
-
-      {status === 'scanning' && (
-        <CameraQualityControls
-          cameras={cameras}
-          selectedCameraId={selectedCameraId}
-          defaultCameraLabel="กล้องหลัง (อัตโนมัติ)"
-          resolution={cameraQuality.resolution}
-          continuousFocus={cameraQuality.continuousFocus}
-          sharpnessRange={cameraQuality.sharpnessRange}
-          sharpness={cameraQuality.sharpness}
-          zoomRange={cameraQuality.zoomRange}
-          zoom={cameraQuality.zoom}
-          onCameraChange={(deviceId) => {
-            cameraQuality.clear();
-            setSelectedCameraId(deviceId);
-            setCameraAttempt((attempt) => attempt + 1);
-          }}
-          onSharpnessChange={(value) => { void cameraQuality.applySharpness(value); }}
-          onZoomChange={(value) => { void cameraQuality.applyZoom(value); }}
-          className="absolute left-3 right-3 top-[max(5.25rem,calc(env(safe-area-inset-top)+4.5rem))] z-20 mx-auto max-w-md"
-        />
-      )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center pb-[12dvh]">
         <div className="relative aspect-square w-[min(76vw,44dvh,21rem)] rounded-[1.75rem] border border-white/35 shadow-[0_0_0_999px_rgba(2,6,23,0.48)]">
@@ -381,6 +398,7 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
