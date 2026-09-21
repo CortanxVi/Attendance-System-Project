@@ -39,7 +39,9 @@ interface UserProfile {
   full_name: string;
   role: string;
   base_role?: string;
+  student_id?: string | null;
   academic_year?: number | null;
+  admission_year?: number | null;
   class_level?: string | null;
   avatar_url?: string | null;
 }

@@ -21,6 +21,8 @@ interface Profile {
   student_id: string;
   full_name: string;
   academic_year?: number | null;
+  admission_year?: number | null;
+  academic_year_source?: 'student_id';
   class_level?: string | null;
   face_registered: boolean;
   nfc_registered: boolean;
@@ -95,6 +97,7 @@ export default function StudentProfile() {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-slate-800">ข้อมูลการศึกษา</p>
               <p className="mt-0.5 break-words text-xs text-slate-500">{profile.academic_year ? `ชั้นปี ${profile.academic_year}` : 'ไม่สามารถคำนวณชั้นปีจากรหัสนักศึกษาได้'}{profile.class_level ? ` · ${profile.class_level}` : ''}</p>
+              {profile.admission_year && <p className="mt-1 text-[11px] leading-4 text-slate-400">คำนวณอัตโนมัติจากปีรับเข้า พ.ศ. {profile.admission_year} ในรหัสนักศึกษา</p>}
             </div>
           </div>
         </li>

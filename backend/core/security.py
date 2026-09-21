@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from core.config import supabase_db
 from services.temporary_admin_service import extract_verified_session_id, load_valid_grant
+from services.student_year_service import derive_admission_year, derive_study_year
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class AuthenticatedUser(BaseModel):
     student_id: str | None = None
     full_name: str | None = None
     academic_year: int | None = None
+    admission_year: int | None = None
     class_level: str | None = None
     avatar_url: str | None = None
     base_role: str
@@ -164,7 +166,16 @@ async def get_current_user(
         auth_session_id=auth_session_id,
         student_id=profile.get("student_id"),
         full_name=profile.get("full_name"),
-        academic_year=profile.get("academic_year"),
+        academic_year=(
+            derive_study_year(profile.get("student_id"))
+            if base_role == "student"
+            else profile.get("academic_year")
+        ),
+        admission_year=(
+            derive_admission_year(profile.get("student_id"))
+            if base_role == "student"
+            else None
+        ),
         class_level=profile.get("class_level"),
         avatar_url=avatar_url,
     )

@@ -15,6 +15,7 @@ from services.roster_import_service import (
     parse_roster_file,
     resolve_roster_actions,
 )
+from services.student_year_service import with_derived_study_year
 from core.authorization import (
     require_course_enrollment,
     require_course_management_permission,
@@ -346,6 +347,10 @@ async def get_course_roster(
         }).execute()
     )
     result = response.data or {}
+    result["students"] = [
+        with_derived_study_year(student)
+        for student in result.get("students", [])
+    ]
     return {"status": "success", **result}
 
 

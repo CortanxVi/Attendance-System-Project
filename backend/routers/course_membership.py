@@ -18,6 +18,7 @@ from services.course_join_service import (
     normalize_join_code,
     rotate_join_code,
 )
+from services.student_year_service import with_derived_study_year
 
 
 logger = logging.getLogger(__name__)
@@ -203,7 +204,10 @@ async def list_course_join_requests(
             profile_response = supabase.table("profiles").select(
                 "id, student_id, full_name, email, academic_year, class_level"
             ).in_("id", student_ids).execute()
-            profiles = {row["id"]: row for row in (profile_response.data or [])}
+            profiles = {
+                row["id"]: with_derived_study_year(row)
+                for row in (profile_response.data or [])
+            }
         for row in rows:
             row["student"] = profiles.get(row["student_id"])
         return rows, response.count or 0

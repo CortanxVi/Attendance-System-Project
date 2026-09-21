@@ -1,27 +1,16 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from core.config import supabase_db as supabase
 from core.security import AuthenticatedUser, require_roles
+from services.student_year_service import with_derived_study_year
 
 student_router = APIRouter(
     prefix="/api/v1/students",
     tags=["Student"],
     dependencies=[Depends(require_roles("student", "admin"))],
 )
-
-
-def derive_study_year(student_id: str | None, *, now: datetime | None = None) -> int | None:
-    """Derive study year from the two-digit Buddhist admission year in a 13-digit student ID."""
-    if not student_id or len(student_id) != 13 or not student_id.isdigit():
-        return None
-    bangkok_now = now or datetime.now(ZoneInfo("Asia/Bangkok"))
-    current_short_year = (bangkok_now.year + 543) % 100
-    derived = (current_short_year - int(student_id[:2])) % 100 + 1
-    return derived if 1 <= derived <= 8 else None
 
 
 @student_router.get("/me/profile")
@@ -38,8 +27,7 @@ def get_my_student_profile(
         enrollment_response = supabase.table("enrollments").select(
             "course_id", count="exact"
         ).eq("student_id", current_user.id).execute()
-        profile = profile_response.data[0]
-        profile["academic_year"] = derive_study_year(profile.get("student_id"))
+        profile = with_derived_study_year(profile_response.data[0])
         profile["nfc_registered"] = bool(profile.pop("nfc_uid", None))
         profile["enrolled_course_count"] = enrollment_response.count or 0
         profile["avatar_url"] = current_user.avatar_url

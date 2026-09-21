@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, Loader2, ScanFace, Settings, ShieldCheck } from 'lucide-react';
+import { Camera, Loader2, ScanFace, ShieldCheck } from 'lucide-react';
+import CameraQualityControls from '../../components/camera/CameraQualityControls';
+import { useCameraQuality } from '../../hooks/useCameraQuality';
 import { openFaceLandmarkerClient, type FaceLandmarkerClient, type FaceLandmarkerClientEvent } from '../../services/faceLandmarkerRuntime';
 import type {
   HybridLivenessAction,
@@ -49,6 +51,12 @@ function frameToJpeg(frame: ImageBitmap): string {
   return canvas.toDataURL('image/jpeg', 0.84);
 }
 
+function isRearCamera(facingMode: string | undefined, selectedCamera: MediaDeviceInfo | undefined): boolean {
+  if (facingMode === 'environment') return true;
+  const label = selectedCamera?.label.toLowerCase() ?? '';
+  return /back|rear|environment|ultra|telephoto|กล้องหลัง/.test(label);
+}
+
 export default function LivenessScanner({ onCaptureSuccess, challenge }: LivenessScannerProps) {
   const webcamRef = useRef<Webcam>(null);
   const callbackRef = useRef(onCaptureSuccess);
@@ -60,18 +68,31 @@ export default function LivenessScanner({ onCaptureSuccess, challenge }: Livenes
   const [mirrorPreview, setMirrorPreview] = useState(true);
   const [error, setError] = useState('');
   const [attemptKey, setAttemptKey] = useState(0);
+  const cameraQuality = useCameraQuality();
 
   useEffect(() => { callbackRef.current = onCaptureSuccess; }, [onCaptureSuccess]);
   const videoConstraints = useMemo<MediaTrackConstraints>(() => selectedCameraId
-    ? { deviceId: { exact: selectedCameraId }, width: { ideal: 640 }, height: { ideal: 480 } }
-    : { facingMode: { ideal: 'user' }, width: { ideal: 640 }, height: { ideal: 480 } }, [selectedCameraId]);
+    ? {
+      deviceId: { exact: selectedCameraId },
+      width: { ideal: 1280, min: 640 },
+      height: { ideal: 720, min: 480 },
+      frameRate: { ideal: 30, max: 30 },
+    }
+    : {
+      facingMode: { ideal: 'user' },
+      width: { ideal: 1280, min: 640 },
+      height: { ideal: 720, min: 480 },
+      frameRate: { ideal: 30, max: 30 },
+    }, [selectedCameraId]);
 
   const handleStreamReady = async () => {
     setError('');
     const stream = webcamRef.current?.video?.srcObject;
     if (stream instanceof MediaStream) {
       const facingMode = stream.getVideoTracks()[0]?.getSettings().facingMode;
-      setMirrorPreview(facingMode !== 'environment');
+      const selectedCamera = cameras.find((camera) => camera.deviceId === selectedCameraId);
+      setMirrorPreview(!isRearCamera(facingMode, selectedCamera));
+      await cameraQuality.inspectStream(stream);
     }
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -234,8 +255,28 @@ export default function LivenessScanner({ onCaptureSuccess, challenge }: Livenes
 
   return <div className="relative flex min-h-[clamp(20rem,64dvh,27rem)] w-full flex-col items-center justify-center overflow-hidden rounded-2xl bg-gray-950">
     {isLoading && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 px-5 text-center text-white"><Loader2 className="mb-4 animate-spin motion-reduce:animate-none" size={44} /><p className="font-semibold">กำลังเตรียมระบบตรวจสอบใบหน้า...</p><p className="mt-1 text-xs text-gray-300">โมเดลทำงานบนอุปกรณ์และไม่บันทึกวิดีโอถาวร</p></div>}
-    {error && <div role="alert" className="absolute left-4 right-4 top-16 z-30 rounded-xl bg-red-700 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg"><p>{error}</p><button type="button" onClick={() => { setError(''); setProgress(0); setIsLoading(true); setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...'); setAttemptKey((value) => value + 1); }} className="mt-3 min-h-11 rounded-lg bg-white px-4 font-bold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-white">ลองตรวจอีกครั้ง</button></div>}
-    {cameras.length > 1 && <label className="absolute left-3 top-3 z-10 flex min-h-11 items-center gap-2 rounded-lg border border-white/20 bg-black/75 px-3 text-white"><Settings className="size-4" /><span className="sr-only">เลือกกล้อง</span><select className="max-w-48 cursor-pointer bg-transparent py-2 text-sm focus:outline-none" value={selectedCameraId} onChange={(event) => { setIsLoading(true); setProgress(0); setError(''); setSelectedCameraId(event.target.value); }}><option value="" className="bg-gray-950">กล้องหน้า (อัตโนมัติ)</option>{cameras.map((camera, index) => <option key={camera.deviceId} value={camera.deviceId} className="bg-gray-950">{camera.label || `กล้องตัวที่ ${index + 1}`}</option>)}</select></label>}
+    {error && <div role="alert" className="absolute left-4 right-4 top-36 z-30 rounded-xl bg-red-700 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg"><p>{error}</p><button type="button" onClick={() => { setError(''); setProgress(0); setIsLoading(true); setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...'); setAttemptKey((value) => value + 1); }} className="mt-3 min-h-11 rounded-lg bg-white px-4 font-bold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-white">ลองตรวจอีกครั้ง</button></div>}
+    <CameraQualityControls
+      cameras={cameras}
+      selectedCameraId={selectedCameraId}
+      defaultCameraLabel="กล้องหน้า (อัตโนมัติ)"
+      resolution={cameraQuality.resolution}
+      continuousFocus={cameraQuality.continuousFocus}
+      sharpnessRange={cameraQuality.sharpnessRange}
+      sharpness={cameraQuality.sharpness}
+      zoomRange={cameraQuality.zoomRange}
+      zoom={cameraQuality.zoom}
+      onCameraChange={(deviceId) => {
+        cameraQuality.clear();
+        setIsLoading(true);
+        setProgress(0);
+        setError('');
+        setSelectedCameraId(deviceId);
+      }}
+      onSharpnessChange={(value) => { void cameraQuality.applySharpness(value); }}
+      onZoomChange={(value) => { void cameraQuality.applyZoom(value); }}
+      className="absolute left-3 right-3 top-3 z-40"
+    />
     <Webcam key={selectedCameraId || 'front-camera'} ref={webcamRef} audio={false} mirrored={mirrorPreview} videoConstraints={videoConstraints} onUserMedia={() => void handleStreamReady()} onUserMediaError={() => { setIsLoading(false); setError('เปิดกล้องไม่ได้ กรุณาอนุญาตสิทธิ์กล้องและตรวจสอบว่าไม่มีโปรแกรมอื่นใช้งานอยู่'); }} className="max-h-[min(35rem,64dvh)] w-full object-contain" />
     <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-[55%] w-[62%] -translate-x-1/2 -translate-y-[56%] rounded-[48%] border-4 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.18)]" />
     <div className="absolute bottom-5 left-4 right-4 z-10 rounded-2xl bg-white/95 p-4 text-gray-900 shadow-xl backdrop-blur"><div className="mb-3 h-2 overflow-hidden rounded-full bg-gray-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="ความคืบหน้าการตรวจสอบ"><div className="h-full rounded-full bg-green-600 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.max(6, progress * 100)}%` }} /></div><div className="flex items-center justify-center gap-3 text-center">{progress >= 1 ? <ShieldCheck className="shrink-0 text-green-700" /> : progress > 0 ? <ScanFace className="shrink-0 text-green-700" /> : <Camera className="shrink-0 text-green-700" />}<span role="status" aria-live="polite" className="font-bold">{instruction}</span></div><p className="mt-2 text-center text-xs text-gray-500">ระบบตรวจภาพต่อเนื่องและอาจให้ทำคำสั่งง่าย ๆ 1 ครั้งเพื่อป้องกันการเปิดวิดีโอแทนบุคคลจริง</p></div>

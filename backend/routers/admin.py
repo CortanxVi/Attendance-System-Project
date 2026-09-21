@@ -14,6 +14,7 @@ from core.security import (
 )
 from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
 from services.attendance_export_service import export_service
+from services.student_year_service import with_derived_study_year
 
 
 logger = logging.getLogger(__name__)
@@ -121,11 +122,17 @@ def get_all_users():
     try:
         response = supabase.table("profiles").select("id, email, student_id, full_name, role, academic_year, class_level, face_registered, nfc_uid").execute()
         invites = supabase.table("profile_invites").select("id, email, student_id, full_name, role, academic_year, class_level, claimed_at").is_("claimed_at", "null").execute()
+        active_users = [
+            with_derived_study_year(profile) if profile.get("role") == "student" else profile
+            for profile in (response.data or [])
+        ]
         pending_users = [
-            {**invite, "face_registered": False, "nfc_uid": None, "pending_invite": True}
+            with_derived_study_year({**invite, "face_registered": False, "nfc_uid": None, "pending_invite": True})
+            if invite.get("role") == "student"
+            else {**invite, "face_registered": False, "nfc_uid": None, "pending_invite": True}
             for invite in (invites.data or [])
         ]
-        return {"status": "success", "users": [*(response.data or []), *pending_users]}
+        return {"status": "success", "users": [*active_users, *pending_users]}
     except Exception as e:
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 

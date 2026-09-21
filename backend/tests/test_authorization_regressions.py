@@ -11,7 +11,8 @@ os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 
 from core.authorization import require_course_delete_permission, require_course_enrollment
 from core.security import AuthenticatedUser
-from routers.student import derive_study_year, reject_student_profile_override
+from routers.student import reject_student_profile_override
+from services.student_year_service import derive_study_year
 from routers.teacher import RosterStudentUpdate, update_course_roster_student
 
 

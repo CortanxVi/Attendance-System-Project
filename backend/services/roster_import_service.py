@@ -12,6 +12,7 @@ from zipfile import BadZipFile, ZipFile
 from openpyxl import load_workbook
 
 from core.config import supabase_db as supabase
+from services.student_year_service import derive_study_year
 
 
 MAX_ROSTER_FILE_BYTES = 5 * 1024 * 1024
@@ -168,12 +169,9 @@ def _extract_metadata(rows: list[list[Any]]) -> tuple[str | None, str | None, in
 
 
 def _derive_study_year(student_id: str, academic_year: int | None) -> int | None:
-    if academic_year is None or len(student_id) != 13:
+    if academic_year is None:
         return None
-    admission_year = int(student_id[:2])
-    current_short_year = academic_year % 100
-    derived = (current_short_year - admission_year) % 100 + 1
-    return derived if 1 <= derived <= 8 else None
+    return derive_study_year(student_id, buddhist_year=academic_year)
 
 
 def _parse_academic_year(value: Any) -> int | None:

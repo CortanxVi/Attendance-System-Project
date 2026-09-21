@@ -13,6 +13,7 @@
     "test:liveness": "node --experimental-strip-types scripts/test-liveness.mts",
     "test:sidebar-account": "node --experimental-strip-types scripts/test-sidebar-account.mts",
     "test:face-runtime": "node scripts/test-face-runtime.mjs",
+    "test:camera-quality": "node --experimental-strip-types scripts/test-camera-quality.mts",
     "test:api-origin": "node --experimental-strip-types scripts/test-api-origin.mts",
     "preview": "vite preview"
   },

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Scanner,
+  useDevices,
   type IDetectedBarcode,
   type IScannerError,
+  type IScannerHandle,
 } from '@yudiel/react-qr-scanner';
 import {
   ArrowLeft,
@@ -14,6 +16,8 @@ import {
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
+import CameraQualityControls from '../../components/camera/CameraQualityControls';
+import { useCameraQuality } from '../../hooks/useCameraQuality';
 import { apiErrorMessage } from '../../services/apiError';
 import type { HybridLivenessAction } from '../../utils/liveness';
 
@@ -56,10 +60,28 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
   const [errorMessage, setErrorMessage] = useState('');
   const [courseNamePreview, setCourseNamePreview] = useState('');
   const [cameraAttempt, setCameraAttempt] = useState(0);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const cameras = useDevices();
+  const cameraQuality = useCameraQuality();
+  const inspectCameraStream = cameraQuality.inspectStream;
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const scannerRef = useRef<IScannerHandle>(null);
   const timerRef = useRef<number | null>(null);
   const requestControllerRef = useRef<AbortController | null>(null);
+  const scannerConstraints = useMemo<MediaTrackConstraints>(() => selectedCameraId
+    ? {
+      deviceId: { exact: selectedCameraId },
+      width: { ideal: 1920, min: 640 },
+      height: { ideal: 1080, min: 480 },
+      frameRate: { ideal: 30, max: 30 },
+    }
+    : {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920, min: 640 },
+      height: { ideal: 1080, min: 480 },
+      frameRate: { ideal: 30, max: 30 },
+    }, [selectedCameraId]);
 
   const clearPendingWork = useCallback(() => {
     if (timerRef.current !== null) {
@@ -105,6 +127,27 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
       clearPendingWork();
     };
   }, [clearPendingWork, onClose]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer = 0;
+    let attempts = 0;
+    const inspectWhenReady = () => {
+      if (cancelled) return;
+      const stream = scannerRef.current?.getStream() ?? null;
+      if (stream?.getVideoTracks().some((track) => track.readyState === 'live')) {
+        void inspectCameraStream(stream);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 40) retryTimer = window.setTimeout(inspectWhenReady, 100);
+    };
+    inspectWhenReady();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+    };
+  }, [cameraAttempt, inspectCameraStream, selectedCameraId]);
 
   const resetScanner = () => {
     clearPendingWork();
@@ -220,14 +263,16 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
       </p>
       <div className="absolute inset-0 bg-slate-950">
         <Scanner
-          key={cameraAttempt}
+          key={`${cameraAttempt}:${selectedCameraId || 'rear-auto'}`}
+          ref={scannerRef}
           onScan={handleScan}
           onError={handleCameraError}
-          constraints={{ facingMode: { ideal: 'environment' } }}
+          constraints={scannerConstraints}
           formats={['qr_code']}
           paused={scannerPaused}
           allowMultiple={false}
           components={{ finder: false, torch: true, zoom: false, onOff: false }}
+          startTimeoutMs={8_000}
           styles={{
             container: { position: 'absolute', inset: 0, width: '100%', height: '100%', background: '#020617' },
             video: { width: '100%', height: '100%', objectFit: 'cover' },
@@ -250,6 +295,28 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
           <p className="truncate text-xs text-white/75">ใช้กล้องหลังเล็งไปยัง QR ของอาจารย์</p>
         </div>
       </header>
+
+      {status === 'scanning' && (
+        <CameraQualityControls
+          cameras={cameras}
+          selectedCameraId={selectedCameraId}
+          defaultCameraLabel="กล้องหลัง (อัตโนมัติ)"
+          resolution={cameraQuality.resolution}
+          continuousFocus={cameraQuality.continuousFocus}
+          sharpnessRange={cameraQuality.sharpnessRange}
+          sharpness={cameraQuality.sharpness}
+          zoomRange={cameraQuality.zoomRange}
+          zoom={cameraQuality.zoom}
+          onCameraChange={(deviceId) => {
+            cameraQuality.clear();
+            setSelectedCameraId(deviceId);
+            setCameraAttempt((attempt) => attempt + 1);
+          }}
+          onSharpnessChange={(value) => { void cameraQuality.applySharpness(value); }}
+          onZoomChange={(value) => { void cameraQuality.applyZoom(value); }}
+          className="absolute left-3 right-3 top-[max(5.25rem,calc(env(safe-area-inset-top)+4.5rem))] z-20 mx-auto max-w-md"
+        />
+      )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center pb-[12dvh]">
         <div className="relative aspect-square w-[min(76vw,44dvh,21rem)] rounded-[1.75rem] border border-white/35 shadow-[0_0_0_999px_rgba(2,6,23,0.48)]">
