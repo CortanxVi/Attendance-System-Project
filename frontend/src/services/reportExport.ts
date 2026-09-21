@@ -3,7 +3,7 @@ import { sanitizeSpreadsheetMatrix } from './spreadsheet.ts';
 import { styleAttendanceWorkbook } from './xlsxStyle.ts';
 
 export type ReportFormat = 'excel' | 'csv' | 'pdf';
-export type AttendanceMark = 1 | '/' | 'X' | '';
+export type AttendanceMark = 1 | 0.5 | 'X' | '';
 
 export interface ReportCourse {
   id: string;
@@ -34,6 +34,10 @@ export interface AttendanceExportSession {
   created_at: string;
   closed_at?: string | null;
   status?: string | null;
+  report_semester?: number | null;
+  report_year?: number | null;
+  archived_at?: string | null;
+  archive_reason?: string | null;
 }
 
 export interface AttendanceExportStudent {
@@ -45,6 +49,7 @@ export interface AttendanceExportPayload {
   course: ReportCourse;
   records: AttendanceExportRecord[];
   sessions: AttendanceExportSession[];
+  archived_sessions?: AttendanceExportSession[];
   students: AttendanceExportStudent[];
 }
 
@@ -58,6 +63,7 @@ export interface AttendanceReportRow {
   lateCount: number;
   absentCount: number;
   attendedCount: number;
+  attendancePoints: number;
   attendanceScore: number | null;
   remark: string;
 }
@@ -68,6 +74,7 @@ export interface AttendanceReportModel {
   weekCount: number;
   closedSessionCount: number;
   allowedAbsenceCount: number;
+  requiredAttendancePercent: number;
   sessions: Array<AttendanceExportSession | null>;
   rows: AttendanceReportRow[];
 }
@@ -86,7 +93,7 @@ function isClosedSession(session: AttendanceExportSession | null): boolean {
 
 function markForStatus(status: string | undefined, closed: boolean): AttendanceMark {
   if (status === 'present') return 1;
-  if (status === 'late') return '/';
+  if (status === 'late') return 0.5;
   if (status === 'absent') return 'X';
   return closed ? 'X' : '';
 }
@@ -111,6 +118,7 @@ export function buildAttendanceReportModel(payload: AttendanceExportPayload): At
   const closedSessionCount = sessions.filter(isClosedSession).length;
   const maxAbsencePercent = Math.max(0, Number(payload.course.max_absence_percent) || 0);
   const allowedAbsenceCount = Math.floor((weekCount * maxAbsencePercent) / 100);
+  const requiredAttendancePercent = Math.max(0, 100 - maxAbsencePercent);
 
   const studentMap = new Map<string, AttendanceExportStudent>();
   for (const student of payload.students ?? []) {
@@ -144,17 +152,18 @@ export function buildAttendanceReportModel(payload: AttendanceExportPayload): At
       });
       const closedMarks = marks.filter((_mark, weekIndex) => isClosedSession(sessions[weekIndex]));
       const presentCount = closedMarks.filter((mark) => mark === 1).length;
-      const lateCount = closedMarks.filter((mark) => mark === '/').length;
+      const lateCount = closedMarks.filter((mark) => mark === 0.5).length;
       const absentCount = closedMarks.filter((mark) => mark === 'X').length;
       const attendedCount = presentCount + lateCount;
+      const attendancePoints = presentCount + (lateCount * 0.5);
       const attendanceScore = closedSessionCount > 0
-        ? Number(((attendedCount / closedSessionCount) * 100).toFixed(1))
+        ? Number(((attendancePoints / closedSessionCount) * 100).toFixed(1))
         : null;
       const remark = closedSessionCount === 0
         ? 'ยังไม่มีคาบที่ปิดเพื่อคำนวณผล'
-        : absentCount > allowedAbsenceCount
-          ? `ไม่ผ่านเกณฑ์ (ขาดเกิน ${allowedAbsenceCount} ครั้ง)`
-          : `ผ่านเกณฑ์ (ขาดได้ไม่เกิน ${allowedAbsenceCount} ครั้ง)`;
+        : attendanceScore !== null && attendanceScore < requiredAttendancePercent
+          ? `ไม่ผ่านเกณฑ์ (ได้ ${attendanceScore.toFixed(1)}%, ขั้นต่ำ ${requiredAttendancePercent.toFixed(1)}%)`
+          : `ผ่านเกณฑ์ (ได้ ${attendanceScore?.toFixed(1)}%, ขั้นต่ำ ${requiredAttendancePercent.toFixed(1)}%)`;
 
       return {
         order: index + 1,
@@ -166,6 +175,7 @@ export function buildAttendanceReportModel(payload: AttendanceExportPayload): At
         lateCount,
         absentCount,
         attendedCount,
+        attendancePoints,
         attendanceScore,
         remark,
       };
@@ -177,6 +187,7 @@ export function buildAttendanceReportModel(payload: AttendanceExportPayload): At
     weekCount,
     closedSessionCount,
     allowedAbsenceCount,
+    requiredAttendancePercent,
     sessions,
     rows,
   };
@@ -197,11 +208,11 @@ function criteriaText(model: AttendanceReportModel): string {
 }
 
 function legendText(): string {
-  return 'สัญลักษณ์: 1 = มาเรียนและเช็คชื่อผ่าน · / = มาสาย · X = ขาดเรียน · ช่องว่าง = คาบยังไม่เปิด/ยังไม่ปิด';
+  return 'สัญลักษณ์: 1 = มาเรียนและเช็คชื่อผ่าน · 0.5 = มาสาย · X = ขาดเรียน · ช่องว่าง = คาบยังไม่เปิด/ยังไม่ปิด';
 }
 
 function scoreText(): string {
-  return 'คะแนนเวลาเรียน = (จำนวนมาเรียน + จำนวนมาสาย) ÷ จำนวนคาบที่ปิดแล้ว × 100; การมาสายยังนับว่าเข้าเรียน เนื่องจากรายวิชายังไม่มีค่าน้ำหนักหักคะแนนสาย';
+  return 'คะแนนเวลาเรียน = (มาเรียน × 1 + มาสาย × 0.5) ÷ จำนวนคาบที่ปิดแล้ว × 100; ผ่านเมื่อคะแนนไม่น้อยกว่า 100 − เปอร์เซ็นต์ขาดสูงสุดของรายวิชา';
 }
 
 export function buildCsvMatrix(model: AttendanceReportModel): unknown[][] {
@@ -216,7 +227,7 @@ export function buildCsvMatrix(model: AttendanceReportModel): unknown[][] {
     [
       'ลำดับ', 'รหัสนักศึกษา', 'ชื่อ-นามสกุล', 'กลุ่ม',
       ...model.sessions.map(weekLabel),
-      'มาเรียน', 'มาสาย', 'ขาดเรียน', 'เข้าเรียนรวม', 'คะแนนเวลาเรียน (%)', 'หมายเหตุ',
+      'มาเรียน', 'มาสาย', 'ขาดเรียน', 'คะแนนสะสม', 'คะแนนเวลาเรียน (%)', 'หมายเหตุ',
     ],
     ...model.rows.map((row) => [
       row.order,
@@ -227,7 +238,7 @@ export function buildCsvMatrix(model: AttendanceReportModel): unknown[][] {
       row.presentCount,
       row.lateCount,
       row.absentCount,
-      row.attendedCount,
+      row.attendancePoints,
       row.attendanceScore ?? '',
       row.remark,
     ]),
@@ -255,7 +266,7 @@ function buildExcelMatrix(model: AttendanceReportModel): unknown[][] {
       row.presentCount,
       row.lateCount,
       row.absentCount,
-      row.attendedCount,
+      row.attendancePoints,
       row.attendanceScore ?? 0,
       row.remark,
     ]),
@@ -330,11 +341,11 @@ export async function createAttendanceWorkbook(model: AttendanceReportModel) {
     const remarkColumn = columnName(summaryStart + 5);
     const weekRowRange = `${columnName(weekStart)}${excelRow}:${columnName(weekEnd)}${excelRow}`;
     worksheet[`${presentColumn}${excelRow}`] = { t: 'n', f: `COUNTIFS(${weekRowRange},1,${sessionStateRange},"CLOSED")`, v: model.rows[index].presentCount };
-    worksheet[`${lateColumn}${excelRow}`] = { t: 'n', f: `COUNTIFS(${weekRowRange},"/",${sessionStateRange},"CLOSED")`, v: model.rows[index].lateCount };
+    worksheet[`${lateColumn}${excelRow}`] = { t: 'n', f: `COUNTIFS(${weekRowRange},0.5,${sessionStateRange},"CLOSED")`, v: model.rows[index].lateCount };
     worksheet[`${absentColumn}${excelRow}`] = { t: 'n', f: `COUNTIFS(${weekRowRange},"X",${sessionStateRange},"CLOSED")`, v: model.rows[index].absentCount };
-    worksheet[`${attendedColumn}${excelRow}`] = { t: 'n', f: `SUM(${presentColumn}${excelRow}:${lateColumn}${excelRow})`, v: model.rows[index].attendedCount };
+    worksheet[`${attendedColumn}${excelRow}`] = { t: 'n', f: `${presentColumn}${excelRow}+(${lateColumn}${excelRow}*0.5)`, v: model.rows[index].attendancePoints };
     worksheet[`${scoreColumn}${excelRow}`] = { t: 'n', f: `IF(COUNTIF(${sessionStateRange},"CLOSED")=0,0,${attendedColumn}${excelRow}/COUNTIF(${sessionStateRange},"CLOSED")*100)`, v: model.rows[index].attendanceScore ?? 0, z: '0.0' };
-    worksheet[`${remarkColumn}${excelRow}`] = { t: 's', f: `IF(COUNTIF(${sessionStateRange},"CLOSED")=0,"ยังไม่มีคาบที่ปิดเพื่อคำนวณผล",IF(${absentColumn}${excelRow}>${model.allowedAbsenceCount},"ไม่ผ่านเกณฑ์ (ขาดเกิน ${model.allowedAbsenceCount} ครั้ง)","ผ่านเกณฑ์ (ขาดได้ไม่เกิน ${model.allowedAbsenceCount} ครั้ง)"))`, v: model.rows[index].remark };
+    worksheet[`${remarkColumn}${excelRow}`] = { t: 's', f: `IF(COUNTIF(${sessionStateRange},"CLOSED")=0,"ยังไม่มีคาบที่ปิดเพื่อคำนวณผล",IF(${scoreColumn}${excelRow}<${model.requiredAttendancePercent},"ไม่ผ่านเกณฑ์","ผ่านเกณฑ์"))`, v: model.rows[index].remark };
   }
 
   const border = { top: { style: 'thin', color: { rgb: '9CA3AF' } }, bottom: { style: 'thin', color: { rgb: '9CA3AF' } }, left: { style: 'thin', color: { rgb: '9CA3AF' } }, right: { style: 'thin', color: { rgb: '9CA3AF' } } };
@@ -398,11 +409,11 @@ export function buildAttendancePdfDefinition(model: AttendanceReportModel, gener
       ...Array.from({ length: Math.max(0, model.weekCount - 1) }, () => ({})),
       { text: 'สรุปผล', colSpan: 6, style: 'tableHeader' }, {}, {}, {}, {}, {},
     ],
-    ['', '', '', '', ...weekHeader.map((text) => ({ text, style: 'tableHeader' })), ...['มา', 'สาย', 'ขาด', 'รวม', 'คะแนน (%)', 'หมายเหตุ'].map((text) => ({ text, style: 'tableHeader' }))],
+    ['', '', '', '', ...weekHeader.map((text) => ({ text, style: 'tableHeader' })), ...['มา', 'สาย', 'ขาด', 'คะแนนสะสม', 'คะแนน (%)', 'หมายเหตุ'].map((text) => ({ text, style: 'tableHeader' }))],
     ...model.rows.map((row) => [
       String(row.order), formatStudentId(row.studentId), row.fullName, row.section,
       ...row.marks.map(String),
-      String(row.presentCount), String(row.lateCount), String(row.absentCount), String(row.attendedCount),
+      String(row.presentCount), String(row.lateCount), String(row.absentCount), row.attendancePoints.toFixed(1),
       row.attendanceScore === null ? '-' : row.attendanceScore.toFixed(1), row.remark,
     ]),
   ];

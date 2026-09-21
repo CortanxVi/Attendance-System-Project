@@ -119,7 +119,7 @@ def get_student_attendance_history(
         records_res = supabase.table('attendance_records') \
             .select(
                 'check_in_time, status, method, '
-                'attendance_sessions(course_id, courses(id, course_code, course_name, total_sessions, max_absence_percent))'
+                'attendance_sessions(course_id, archived_at, courses(id, course_code, course_name, total_sessions, max_absence_percent))'
             ) \
             .eq('student_id', student_uuid) \
             .order('check_in_time', desc=True) \
@@ -131,6 +131,8 @@ def get_student_attendance_history(
         history_list = []
         for rec in records:
             session_info = rec.get('attendance_sessions') or {}
+            if session_info.get('archived_at'):
+                continue
             course = session_info.get('courses') or {}
             course_id = course.get('id')
 

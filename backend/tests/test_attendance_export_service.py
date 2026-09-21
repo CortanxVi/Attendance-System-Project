@@ -20,6 +20,10 @@ class _Query:
         self.filters.append((field, value))
         return self
 
+    def in_(self, field, values):
+        self.filters.append((field, values))
+        return self
+
     def order(self, field, **options):
         self.ordering = (field, options)
         return self
@@ -70,6 +74,15 @@ class AttendanceExportServiceTests(unittest.TestCase):
                 "created_at": "2026-09-01T08:00:00Z",
                 "closed_at": "2026-09-01T09:00:00Z",
                 "status": "closed",
+                "archived_at": None,
+            }, {
+                "id": "session-old",
+                "created_at": "2026-08-01T08:00:00Z",
+                "closed_at": "2026-08-01T09:00:00Z",
+                "status": "closed",
+                "report_semester": 2,
+                "report_year": 2025,
+                "archived_at": "2026-09-01T10:00:00Z",
             }],
             enrollments=[
                 {"profiles": {"student_id": "6500000000002", "full_name": "Student Two"}},
@@ -84,13 +97,15 @@ class AttendanceExportServiceTests(unittest.TestCase):
         self.assertEqual(data["course"]["course_code"], "ENG101")
         self.assertEqual(data["records"][0]["session_id"], "session-1")
         self.assertEqual(data["sessions"][0]["status"], "closed")
+        self.assertEqual(len(data["sessions"]), 1)
+        self.assertEqual(data["archived_sessions"][0]["id"], "session-old")
         self.assertEqual(
             [student["student_id"] for student in data["students"]],
             ["6500000000001", "6500000000002"],
         )
         self.assertEqual(
             database.queries["attendance_records"].filters,
-            [("attendance_sessions.course_id", "course-1")],
+            [("session_id", ["session-1"])],
         )
         self.assertEqual(
             database.queries["attendance_sessions"].ordering,

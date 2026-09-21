@@ -19,19 +19,41 @@ class AttendanceExportService:
 
         course = course_res.data[0]
 
-        records_res = (
-            supabase.table("attendance_records")
+        sessions_res = (
+            supabase.table("attendance_sessions")
             .select(
-                "id, check_in_time, status, method, session_id, "
-                "profiles(student_id, full_name), attendance_sessions!inner(course_id)"
+                "id, created_at, closed_at, status, report_semester, report_year, "
+                "archived_at, archive_reason"
             )
-            .eq("attendance_sessions.course_id", course_id)
-            .order("check_in_time", desc=False)
+            .eq("course_id", course_id)
+            .order("created_at", desc=False)
             .execute()
         )
+        all_sessions = sessions_res.data or []
+        active_sessions = [row for row in all_sessions if not row.get("archived_at")]
+        archived_sessions = sorted(
+            (row for row in all_sessions if row.get("archived_at")),
+            key=lambda row: row.get("archived_at") or "",
+            reverse=True,
+        )
+        active_session_ids = [row["id"] for row in active_sessions if row.get("id")]
+
+        records = []
+        if active_session_ids:
+            records_res = (
+                supabase.table("attendance_records")
+                .select(
+                    "id, check_in_time, status, method, session_id, "
+                    "profiles(student_id, full_name)"
+                )
+                .in_("session_id", active_session_ids)
+                .order("check_in_time", desc=False)
+                .execute()
+            )
+            records = records_res.data or []
 
         export_data = []
-        for record in records_res.data or []:
+        for record in records:
             profile = record.get("profiles") or {}
             export_data.append({
                 "id": record["id"],
@@ -42,14 +64,6 @@ class AttendanceExportService:
                 "method": record["method"],
                 "session_id": record["session_id"],
             })
-
-        sessions_res = (
-            supabase.table("attendance_sessions")
-            .select("id, created_at, closed_at, status")
-            .eq("course_id", course_id)
-            .order("created_at", desc=False)
-            .execute()
-        )
 
         enrollments_res = (
             supabase.table("enrollments")
@@ -72,7 +86,8 @@ class AttendanceExportService:
         return {
             "course": course,
             "records": export_data,
-            "sessions": sessions_res.data or [],
+            "sessions": active_sessions,
+            "archived_sessions": archived_sessions,
             "students": students,
         }, None
 

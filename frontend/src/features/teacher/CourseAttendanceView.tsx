@@ -5,6 +5,7 @@ import { useNotification } from '../../components/notifications/notificationCont
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
 import { apiErrorMessage } from '../../services/apiError';
 import { exportAttendanceReport, type AttendanceExportPayload, type ReportFormat } from '../../services/reportExport';
+import AttendancePeriodManager from './AttendancePeriodManager';
 
 interface CourseAttendanceViewProps {
   courseId: string;
@@ -14,7 +15,7 @@ interface CourseAttendanceViewProps {
 }
 
 interface AttendanceRecord { id: string; student_id: string; full_name: string; session_id: string; status: string; check_in_time: string; method?: string | null }
-interface AttendanceSession { id: string; created_at: string; status?: string | null }
+interface AttendanceSession { id: string; created_at: string; closed_at?: string | null; status?: string | null }
 interface AttendanceStudent { student_id: string; full_name: string }
 
 export default function CourseAttendanceView({ courseId, courseCode, courseName, onClose }: CourseAttendanceViewProps) {
@@ -47,14 +48,14 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
         setExportPayload(res.data);
         const s = res.data.sessions || [];
         setSessions(s);
-        if (!preserveSession && s.length > 0) setSelectedSessionId((current) => current || s[s.length - 1].id);
+        setSelectedSessionId((current) => s.some((session) => session.id === current) ? current : (s[s.length - 1]?.id ?? ''));
       }
-    } catch (err) {
-      console.error("Error fetching attendance data", err);
+    } catch (err: unknown) {
+      notify(apiErrorMessage(err, 'ไม่สามารถโหลดประวัติการเข้าเรียนได้'), 'error');
     } finally {
       if (!preserveSession) setLoading(false);
     }
-  }, [courseId]);
+  }, [courseId, notify]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void fetchData(); }, 0);
@@ -203,6 +204,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
 
             
             <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+              {exportPayload && <AttendancePeriodManager courseId={courseId} payload={exportPayload} onChanged={() => fetchData(true)} />}
               <div className="grid shrink-0 grid-cols-3 gap-2" aria-label="ดาวน์โหลดรายงาน">
                 {(['excel', 'csv', 'pdf'] as const).map((format) => (
                   <button
@@ -422,6 +424,7 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                     ) : (
                       filteredStudents.map(student => {
                         let presentCount = 0;
+                        let lateCount = 0;
                         let absentCount = 0;
 
                       
@@ -434,10 +437,10 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                             </td>
                             {sessions.map(s => {
                               const record = matrixMap[student.student_id]?.[s.id];
-                              const isAttended = record && (record.status === 'present' || record.status === 'late');
-                              if (isAttended) presentCount++;
-                              else if (record && record.status === 'absent') absentCount++;
-                              else absentCount++;
+                              const isClosed = s.status === 'closed' || Boolean(s.closed_at);
+                              if (isClosed && record?.status === 'present') presentCount++;
+                              else if (isClosed && record?.status === 'late') lateCount++;
+                              else if (isClosed) absentCount++;
 
                             
 
@@ -463,8 +466,10 @@ export default function CourseAttendanceView({ courseId, courseCode, courseName,
                               );
                             })}
                             <td className="px-6 py-3 text-center border-l border-gray-100 bg-orange-50/20 whitespace-nowrap text-xs">
-                              <span className="text-green-600 font-bold mr-2" title="มาเรียน/สาย">มา: {presentCount}</span>
+                              <span className="text-green-600 font-bold mr-2" title="มาเรียน">มา: {presentCount}</span>
+                              <span className="text-orange-600 font-bold mr-2" title="มาสาย (0.5 คะแนน)">สาย: {lateCount}</span>
                               <span className="text-red-500 font-bold" title="ขาดเรียน">ขาด: {absentCount}</span>
+                              <span className="ml-2 font-bold text-slate-700" title="คะแนนสะสม">คะแนน: {(presentCount + lateCount * 0.5).toFixed(1)}</span>
                             </td>
                           </tr>
                         );

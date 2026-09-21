@@ -1478,13 +1478,15 @@ def get_course_attendance_summary(
         # 2. ดึงรายชื่อนักศึกษาทั้งหมดในวิชานี้พร้อมข้อมูลประวัติการเช็คชื่อ
         # (หมายเหตุ: ปรับโครงสร้าง Query ตามความสัมพันธ์ตารางจริงของคุณ)
         records_res = supabase.table('attendance_records') \
-            .select('student_id, status, attendance_sessions!inner(course_id)') \
+            .select('student_id, status, attendance_sessions!inner(course_id, archived_at)') \
             .eq('attendance_sessions.course_id', course_id) \
             .execute()
             
         # 3. จัดกลุ่มประมวลผลข้อมูล (Data Aggregation)
         student_summary = {}
         for rec in records_res.data:
+            if (rec.get('attendance_sessions') or {}).get('archived_at'):
+                continue
             s_id = rec['student_id']
             if s_id not in student_summary:
                 student_summary[s_id] = {"present": 0, "late": 0, "absent": 0, "leave": 0}
@@ -1494,6 +1496,7 @@ def get_course_attendance_summary(
         final_report = []
         for s_id, summary in student_summary.items():
             absent_count = summary['absent']
+            attendance_points = summary['present'] + (summary['late'] * 0.5)
             # คำนวณอัตราส่วนการขาดเรียนจริงเป็นเปอร์เซ็นต์
             absence_rate = (absent_count / total_sessions) * 100
             
@@ -1506,6 +1509,7 @@ def get_course_attendance_summary(
                 "student_id": s_id,
                 "attendance_stats": summary,
                 "total_absent_count": absent_count,
+                "attendance_points": attendance_points,
                 "absence_percentage": round(absence_rate, 2),
                 "evaluation": grade_status
             })

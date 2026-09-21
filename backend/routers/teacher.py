@@ -1,6 +1,7 @@
 import hmac
 import re
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from pydantic import BaseModel, Field, field_validator
@@ -49,12 +50,97 @@ def get_teacher_export_attendance(
             "course": data["course"],
             "records": data["records"],
             "sessions": data.get("sessions", []),
+            "archived_sessions": data.get("archived_sessions", []),
             "students": data.get("students", []),
         }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
+
+
+class AttendanceSessionSelection(BaseModel):
+    session_ids: list[UUID] = Field(min_length=1, max_length=1000)
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class AttendanceSessionRestore(BaseModel):
+    session_ids: list[UUID] = Field(min_length=1, max_length=1000)
+
+
+class AttendancePeriodRollover(BaseModel):
+    semester: Literal[1, 2]
+    year: int = Field(ge=2000, le=3000)
+    reason: str | None = Field(default=None, max_length=300)
+
+
+@teacher_router.post("/courses/{course_id}/attendance-period/archive")
+def archive_course_attendance_sessions(
+    course_id: str,
+    payload: AttendanceSessionSelection,
+    current_user: Annotated[AuthenticatedUser, Depends(require_roles("teacher", "admin"))],
+):
+    """Remove selected closed sessions from the current report without deleting evidence."""
+    require_course_management_permission(course_id, current_user)
+    try:
+        response = supabase.rpc("archive_attendance_sessions", {
+            "target_course_id": course_id,
+            "actor_id": current_user.id,
+            "target_session_ids": [str(session_id) for session_id in payload.session_ids],
+            "archive_note": payload.reason,
+        }).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="ไม่สามารถนำคาบที่เลือกออกจากรายงานได้ กรุณาปิดคาบและโหลดข้อมูลใหม่",
+        ) from exc
+    return {"status": "success", "message": "นำคาบที่เลือกออกจากรายงานแล้ว", "result": response.data or {}}
+
+
+@teacher_router.post("/courses/{course_id}/attendance-period/restore")
+def restore_course_attendance_sessions(
+    course_id: str,
+    payload: AttendanceSessionRestore,
+    current_user: Annotated[AuthenticatedUser, Depends(require_roles("teacher", "admin"))],
+):
+    """Restore archived sessions only when they belong to the current course period."""
+    require_course_management_permission(course_id, current_user)
+    try:
+        response = supabase.rpc("restore_attendance_sessions", {
+            "target_course_id": course_id,
+            "actor_id": current_user.id,
+            "target_session_ids": [str(session_id) for session_id in payload.session_ids],
+        }).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="คืนคาบเรียนไม่สำเร็จ คืนได้เฉพาะคาบของภาคเรียนปัจจุบัน",
+        ) from exc
+    return {"status": "success", "message": "คืนคาบเรียนเข้าสู่รายงานแล้ว", "result": response.data or {}}
+
+
+@teacher_router.post("/courses/{course_id}/attendance-period/rollover")
+def rollover_course_attendance_period(
+    course_id: str,
+    payload: AttendancePeriodRollover,
+    current_user: Annotated[AuthenticatedUser, Depends(require_roles("teacher", "admin"))],
+):
+    """Atomically archive the active report and start a blank semester for the same course."""
+    require_course_management_permission(course_id, current_user)
+    try:
+        response = supabase.rpc("rollover_attendance_period", {
+            "target_course_id": course_id,
+            "actor_id": current_user.id,
+            "new_semester": payload.semester,
+            "new_year": payload.year,
+            "archive_note": payload.reason,
+        }).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="เริ่มภาคเรียนใหม่ไม่สำเร็จ กรุณาปิดคาบที่เปิดอยู่และลองอีกครั้ง",
+        ) from exc
+    return {"status": "success", "message": "เริ่มภาคเรียนใหม่และสร้างรายงานเปล่าแล้ว", "result": response.data or {}}
 
 class ManualAttendanceUpdate(BaseModel):
     status: str # present, late, absent

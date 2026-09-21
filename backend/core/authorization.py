@@ -22,7 +22,7 @@ def require_owned_course(course_id: str, current_user: AuthenticatedUser) -> dic
 def require_owned_session(session_id: str, current_user: AuthenticatedUser) -> dict:
     response = (
         supabase_db.table("attendance_sessions")
-        .select("id, course_id, opened_by, status, created_at")
+        .select("id, course_id, opened_by, status, created_at, archived_at")
         .eq("id", session_id)
         .execute()
     )
@@ -31,6 +31,8 @@ def require_owned_session(session_id: str, current_user: AuthenticatedUser) -> d
     session = response.data[0]
     if current_user.role != "admin" and session.get("opened_by") != current_user.id:
         raise HTTPException(status_code=403, detail="คุณไม่ใช่เจ้าของคาบเรียนนี้")
+    if session.get("archived_at"):
+        raise HTTPException(status_code=409, detail="คาบเรียนนี้ถูกนำออกจากรอบรายงานปัจจุบันแล้ว")
     return session
 
 

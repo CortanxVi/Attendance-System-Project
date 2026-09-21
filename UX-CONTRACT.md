@@ -23,6 +23,7 @@
 | Course join codes and approval | `backend/routers/course_membership.py`, migration `20260831165330` | API/schema policy | 2026-08-31 |
 | Course roster import and paging | `backend/services/roster_import_service.py`, migration `20260901160534` | API/schema policy | 2026-09-01 |
 | Teacher attendance session recovery | `backend/main.py`, `backend/services/teacher_session_service.py`, `attendance_sessions` | API/domain lifecycle | 2026-09-13 |
+| Attendance report periods and scoring | `backend/services/attendance_export_service.py`, `routers/teacher.py`, migration `20260921111209`, `reportExport.ts` | API/schema/report contract | 2026-09-21 |
 
 ## Visual contract
 
@@ -43,6 +44,7 @@
 | Toast | `NotificationProvider` | shared component | success/info/error | live region + browser |
 | Upload | screen-owned accessible file input + shared preview/validation | `imageUtils.prepareStudentCardImage`, `SupportCenter`, `roster_import_service`, backend validators | card image/XLSX/CSV/support attachment; request PDF/common raster images, normalized to JPEG/PNG | client + server validation |
 | CRUD | backend-authorized screen flows | API routes | stay/refresh | API + browser |
+| Attendance period lifecycle | teacher attendance-history dialog + atomic backend RPC | active/archived session snapshot columns | archive selected, restore current period, rollover semester | API + report tests |
 | Presentation mode | `usePresentationMode` | Fullscreen API + app viewport fallback | Dynamic QR/class code | keyboard/touch/browser |
 | Student QR camera | `QRScanner` fullscreen dialog | Dynamic QR API contract + layer tokens | rear-camera scan/error/retry | keyboard/touch/camera/browser |
 
@@ -84,6 +86,9 @@
 | Request course join | student submits class code | disabled + spinner | remain/refetch requests | toast + pending card | retain code and show inline error | join-code input | `StudentCourses.tsx`, `course_membership.py` |
 | Review course join | teacher approves/rejects after confirmation | disabled | remain/refetch list | toast + enrollment/status | keep request pending and retry | review action | `CourseManagement.tsx`, `review_course_join_request` RPC |
 | Rotate class code | teacher confirms rotation | disabled | remain with new code | toast | keep current code and retry | rotate action | `CourseManagement.tsx`, `course_membership.py` |
+| Archive selected attendance sessions | teacher selects closed sessions and confirms | disabled confirmation | remain/refetch active report | toast with recoverability statement | preserve selection and retry; open sessions rejected | selected-session list | `AttendancePeriodManager.tsx`, `archive_attendance_sessions` RPC |
+| Start a new attendance-report semester | teacher enters semester/year and confirms | disabled confirmation | same course with blank active report | toast with new period | old sessions remain archived; active/open session blocks rollover | period manager heading | `AttendancePeriodManager.tsx`, `rollover_attendance_period` RPC |
+| Restore an archived session | teacher confirms a current-period archive | disabled confirmation | remain/refetch report | toast | older-period restore rejected to prevent mixed reports | restore action | `AttendancePeriodManager.tsx`, `restore_attendance_sessions` RPC |
 
 ## Navigation and responsive behavior
 
@@ -111,6 +116,7 @@
 ## Async and resilience
 
 - Mutation default: pessimistic for attendance and account/security operations
+- Attendance-report reset policy: never hard-delete records from the teacher flow; atomically archive session membership from the active report and keep period snapshots for audit/recovery
 - Idempotency and duplicate-submit policy: disabled submit + database unique `(session_id, student_id)`; support requests/messages also use unique UUID client tokens
 - Offline/read-stale/write behavior: attendance writes fail closed; no cached API attendance data
 - Retry/backoff/timeout behavior: OCR worker deadline 40s/backend timeout 42s; 30-request queue; optional standalone card OCR is limited per authenticated account; QR expiry asks for latest scan
@@ -129,6 +135,7 @@
 - Sensitive-value handling: no service key, embedding, raw OCR or QR token in notifications/logs
 - Temporary-admin handling: PIN uses Argon2id plus server pepper; grants are memory-only, session-bound, hashed at rest, short-lived and revocable; permanent-admin operations fail closed on the server
 - Duplicate-submit prevention: button busy state + unique database constraint; face attendance insert and QR challenge consumption are one atomic PostgreSQL RPC
+- Attendance score: closed active sessions only; present = 1 point, late = 0.5 point, absent/missing in a closed session = 0 points. Pass threshold is `100 - max_absence_percent` from the course, and Excel/CSV/PDF use the same model.
 - Liveness validation: face enrollment and attendance share signed protocol v4 hybrid mode and the same scanner/frame verifier: three passive samples followed by one randomly selected low-friction action (`blink` or `move_closer`) after a signed 500–1,400 ms prompt delay, then a recovery frame. Every token binds challenge, authenticated account, purpose, expiry, nonce, action, and delay; attendance additionally binds its session, so enrollment and attendance tokens cannot be exchanged. Browser Face Landmarker runs in the shared Web Worker on compatible browsers and uses a bounded one-frame-at-a-time DOM/main-thread fallback on iOS WebKit; either path captures the exact analyzed frames, but its decision is advisory. Backend recomputes one-face presence, same-person similarity, passive MiniFAS PAD, action geometry, recovery, timing order, and frozen-frame resistance before registration or recognition. Supabase claim/finalize RPCs retain one-use and concurrent-request protection. Static duplicates, wrong actions, face loss/swap, expired/borrowed/cross-purpose tokens, print/screen risk, and repeated finalization fail closed. This raises the cost of ordinary replay but does not claim resistance to adaptive deepfake/virtual-camera injection or ISO/IEC 30107 certification.
 - Course membership: class codes never replace authentication; a non-enrolled student creates one pending request per course and only the course owner or permanent admin can approve it atomically with enrollment. Temporary admin elevation cannot manage another teacher's course.
 - Image resource limits: client auto-orients and fits JPEG/PNG inside 1920×1920 px without cropping/upscaling, encodes once at JPEG quality 94%, then the server independently enforces encoded-byte, width, height, decoded-format and total-pixel limits

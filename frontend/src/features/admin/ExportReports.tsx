@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { Download, FileSpreadsheet, LayoutList, Search, Table2, UserRound, X } from 'lucide-react';
+import { Download, FileSpreadsheet, LayoutGrid, LayoutList, Search, UserRound, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useNotification } from '../../components/notifications/notificationContext';
 import { apiErrorMessage } from '../../services/apiError';
@@ -11,7 +11,7 @@ export default function ExportReports() {
   const [courses, setCourses] = useState<ReportCourse[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'table'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get('q') ?? '';
 
@@ -63,7 +63,7 @@ export default function ExportReports() {
       <h2 className="flex items-center gap-2 text-xl font-bold text-gray-800 sm:text-2xl"><FileSpreadsheet className="shrink-0 text-red-500" />ออกรายงานการเช็คชื่อ</h2>
       <div role="group" aria-label="รูปแบบการแสดงรายวิชา" className="inline-flex w-fit rounded-xl border border-slate-200 bg-slate-50 p-1">
         <ViewButton active={viewMode === 'list'} onClick={() => setViewMode('list')} icon={<LayoutList size={17} />} label="รายการ" />
-        <ViewButton active={viewMode === 'table'} onClick={() => setViewMode('table')} icon={<Table2 size={17} />} label="ตาราง" />
+        <ViewButton active={viewMode === 'grid'} onClick={() => setViewMode('grid')} icon={<LayoutGrid size={17} />} label="กริด" />
       </div>
     </div>
     <div className="mb-5 flex flex-col gap-2">
@@ -75,10 +75,10 @@ export default function ExportReports() {
       </div>
       {!loading && <p aria-live="polite" className="text-xs text-slate-500">พบ {filteredCourses.length} จาก {courses.length} รายวิชา</p>}
     </div>
-    {loading ? <div className="py-10 text-center text-gray-500">กำลังโหลดรายวิชา...</div> : viewMode === 'list' ? <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+    {loading ? <div className="py-10 text-center text-gray-500">กำลังโหลดรายวิชา...</div> : viewMode === 'grid' ? <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
       {filteredCourses.map((course) => <ReportCard key={course.id} course={course} exporting={exporting} onExport={handleExport} />)}
       {!filteredCourses.length && <div className="col-span-full py-8 text-center text-gray-500">{courses.length ? 'ไม่พบรายวิชาที่ตรงกับคำค้นหา' : 'ไม่มีข้อมูลรายวิชาในระบบ'}</div>}
-    </div> : <ReportTable courses={filteredCourses} exporting={exporting} onExport={handleExport} emptyLabel={courses.length ? 'ไม่พบรายวิชาที่ตรงกับคำค้นหา' : 'ไม่มีข้อมูลรายวิชาในระบบ'} />}
+    </div> : <ReportList courses={filteredCourses} exporting={exporting} onExport={handleExport} emptyLabel={courses.length ? 'ไม่พบรายวิชาที่ตรงกับคำค้นหา' : 'ไม่มีข้อมูลรายวิชาในระบบ'} />}
   </div>;
 }
 
@@ -101,7 +101,7 @@ function ReportCard({ course, exporting, onExport }: { course: ReportCourse; exp
   </article>;
 }
 
-function ReportTable({ courses, exporting, onExport, emptyLabel }: { courses: ReportCourse[]; exporting: string | null; onExport: (course: ReportCourse, format: ReportFormat) => Promise<void>; emptyLabel: string }) {
+function ReportList({ courses, exporting, onExport, emptyLabel }: { courses: ReportCourse[]; exporting: string | null; onExport: (course: ReportCourse, format: ReportFormat) => Promise<void>; emptyLabel: string }) {
   if (!courses.length) return <div className="py-8 text-center text-gray-500">{emptyLabel}</div>;
   return <div className="overflow-x-auto rounded-xl border border-slate-200">
     <table className="w-full min-w-[860px] text-left text-sm">

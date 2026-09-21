@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   ShieldAlert,
@@ -6,7 +6,11 @@ import {
   Edit,
   Trash2,
   X,
+  ArrowDown,
+  ArrowUp,
+  Search,
 } from "lucide-react";
+import { useSearchParams } from 'react-router-dom';
 import { useNotification } from '../../components/notifications/notificationContext';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
 import { useTemporaryAdmin } from '../../contexts/temporaryAdminState';
@@ -47,6 +51,9 @@ export default function UserManagement() {
   const temporaryAdmin = useTemporaryAdmin();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get('userQ') ?? '';
+  const roleSort = searchParams.get('roleSort') === 'desc' ? 'desc' : 'asc';
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -77,12 +84,12 @@ export default function UserManagement() {
       setLoading(true);
       const res = await axios.get("/api/v1/admin/users");
       setUsers(res.data.users);
-    } catch (err) {
-      console.error("Error fetching users", err);
+    } catch (err: unknown) {
+      notify(apiErrorMessage(err, 'ไม่สามารถโหลดข้อมูลผู้ใช้งานได้'), 'error');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notify]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void fetchUsers(); }, 0);
@@ -186,6 +193,29 @@ export default function UserManagement() {
     }
   };
 
+  const visibleUsers = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase('th-TH');
+    const roleOrder: Record<string, number> = { admin: 0, teacher: 1, student: 2 };
+    return users
+      .filter((user) => !normalized || [user.full_name, user.student_id]
+        .some((value) => value?.toLocaleLowerCase('th-TH').includes(normalized)))
+      .sort((left, right) => {
+        const direction = roleSort === 'asc' ? 1 : -1;
+        const roleDifference = ((roleOrder[left.role] ?? 99) - (roleOrder[right.role] ?? 99)) * direction;
+        if (roleDifference) return roleDifference;
+        const nameDifference = (left.full_name || '').localeCompare(right.full_name || '', 'th', { numeric: true });
+        if (nameDifference) return nameDifference;
+        return (left.student_id || '').localeCompare(right.student_id || '', 'th', { numeric: true });
+      });
+  }, [query, roleSort, users]);
+
+  const updateSearchParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
   return (
     <div className="min-w-0 space-y-6 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm animate-fade-in sm:p-6">
       <ConfirmDialog
@@ -214,6 +244,23 @@ export default function UserManagement() {
         </div>
       </div>
 
+      <div className="flex flex-col gap-2">
+        <div className="relative w-full max-w-xl">
+          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={19} />
+          <label htmlFor="admin-user-search" className="sr-only">ค้นหารายชื่อหรือรหัสนักศึกษา</label>
+          <input
+            id="admin-user-search"
+            type="search"
+            value={query}
+            onChange={(event) => updateSearchParam('userQ', event.target.value)}
+            placeholder="ค้นหาชื่อ-นามสกุล หรือรหัสนักศึกษา"
+            className="min-h-11 w-full rounded-xl border border-slate-300 bg-white py-2 pl-10 pr-11 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200"
+          />
+          {query && <button type="button" onClick={() => updateSearchParam('userQ', '')} aria-label="ล้างคำค้นหาผู้ใช้งาน" className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-red-300"><X size={17} /></button>}
+        </div>
+        {!loading && <p aria-live="polite" className="text-xs text-slate-500">พบ {visibleUsers.length} จาก {users.length} บัญชี</p>}
+      </div>
+
       {loading ? (
         <div className="text-center py-8 text-gray-500">
           กำลังโหลดข้อมูลผู้ใช้งาน...
@@ -227,12 +274,22 @@ export default function UserManagement() {
                 <th className="py-3 px-4">รหัสนักศึกษา/พนักงาน</th>
                 <th className="py-3 px-4 text-center">สถานะการลงทะเบียน</th>
                 <th className="py-3 px-4">ชั้นปี / ห้อง</th>
-                <th className="py-3 px-4">สิทธิ์ปัจจุบัน</th>
+                <th className="py-3 px-4" aria-sort={roleSort === 'asc' ? 'ascending' : 'descending'}>
+                  <button
+                    type="button"
+                    onClick={() => updateSearchParam('roleSort', roleSort === 'asc' ? 'desc' : 'asc')}
+                    className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg px-2 text-left font-bold hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-red-300"
+                    aria-label={`เรียงตามสิทธิ์ ${roleSort === 'asc' ? 'จากผู้ดูแลไปนักศึกษา' : 'จากนักศึกษาไปผู้ดูแล'}`}
+                  >
+                    สิทธิ์ปัจจุบัน
+                    {roleSort === 'asc' ? <ArrowDown size={16} /> : <ArrowUp size={16} />}
+                  </button>
+                </th>
                 <th className="py-3 px-4 text-right">การจัดการ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50 text-sm text-gray-700">
-              {users.map((user) => (
+              {visibleUsers.map((user) => (
                 <tr
                   key={user.id}
                   className="hover:bg-slate-50/50 transition-colors"
@@ -279,7 +336,9 @@ export default function UserManagement() {
                   <td className="py-3 px-4 text-right">
                     <div className="flex items-center justify-end gap-3">
                       <button
+                        type="button"
                         onClick={() => openEditModal(user)}
+                        aria-label={`แก้ไขข้อมูล ${user.full_name || 'ผู้ใช้งาน'}`}
                         className="text-blue-500 hover:text-blue-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm cursor-pointer"
                         title="แก้ไขข้อมูลรายละเอียดและสิทธิ์"
                       >
@@ -288,7 +347,9 @@ export default function UserManagement() {
 
                       {!temporaryAdmin.active && (
                         <button
+                          type="button"
                           onClick={() => handleDeleteUser(user.id, user.full_name)}
+                          aria-label={`ลบผู้ใช้งาน ${user.full_name || ''}`}
                           className="text-red-500 hover:text-red-700 p-1.5 hover:bg-white border border-transparent hover:border-gray-200 rounded-md transition-all shadow-sm cursor-pointer"
                           title="ลบผู้ใช้งาน"
                         >
@@ -299,10 +360,10 @@ export default function UserManagement() {
                   </td>
                 </tr>
               ))}
-              {users.length === 0 && (
+              {visibleUsers.length === 0 && (
                 <tr>
                   <td colSpan={6} className="text-center py-8 text-gray-500">
-                    ไม่มีข้อมูลผู้ใช้งานในระบบ
+                    {users.length ? 'ไม่พบผู้ใช้งานที่ตรงกับคำค้นหา' : 'ไม่มีข้อมูลผู้ใช้งานในระบบ'}
                   </td>
                 </tr>
               )}
