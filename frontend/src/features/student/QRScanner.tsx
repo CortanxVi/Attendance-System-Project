@@ -15,7 +15,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { apiErrorMessage } from '../../services/apiError';
-import type { AttendanceLivenessAction } from '../../utils/liveness';
+import type { HybridLivenessAction } from '../../utils/liveness';
 
 export interface VerifiedSessionInfo {
   sessionId: string;
@@ -27,7 +27,7 @@ export interface VerifiedSessionInfo {
   livenessToken: string;
   livenessMode: 'hybrid';
   livenessSampleCount: 3;
-  livenessAction: AttendanceLivenessAction;
+  livenessAction: HybridLivenessAction;
   livenessPromptDelayMs: number;
 }
 

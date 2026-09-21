@@ -3,39 +3,29 @@ import Webcam from 'react-webcam';
 import { Camera, Loader2, ScanFace, Settings, ShieldCheck } from 'lucide-react';
 import { openFaceLandmarkerClient, type FaceLandmarkerClient, type FaceLandmarkerClientEvent } from '../../services/faceLandmarkerRuntime';
 import type {
-  AttendanceLivenessAction,
-  AttendanceLivenessEvidence,
+  HybridLivenessAction,
+  HybridLivenessEvidence,
   LivenessObservation,
-  PassiveLivenessEvidence,
 } from '../../utils/liveness';
-import { attendanceActionDetected, attendanceRecoveryDetected } from '../../utils/liveness';
+import { hybridActionDetected, hybridRecoveryDetected } from '../../utils/liveness';
 
 const SAMPLE_COUNT = 3 as const;
 const SAMPLE_INTERVAL_MS = 450;
 const ATTEMPT_TIMEOUT_MS = 20_000;
 
-export interface PassiveLivenessCapture {
-  mode: 'passive';
-  faceImageSrc: string;
-  passiveImageSrcs: [string, string, string];
-  evidence: PassiveLivenessEvidence;
-}
-
-export interface AttendanceLivenessCapture {
+export interface LivenessCapture {
   mode: 'hybrid';
   faceImageSrc: string;
   passiveImageSrcs: [string, string, string];
   actionImageSrc: string;
   recoveryImageSrc: string;
-  evidence: AttendanceLivenessEvidence;
+  evidence: HybridLivenessEvidence;
 }
-
-export type LivenessCapture = PassiveLivenessCapture | AttendanceLivenessCapture;
 
 interface LivenessScannerProps {
   onCaptureSuccess: (capture: LivenessCapture) => void;
-  attendanceChallenge?: {
-    action: AttendanceLivenessAction;
+  challenge: {
+    action: HybridLivenessAction;
     promptDelayMs: number;
   };
 }
@@ -59,7 +49,7 @@ function frameToJpeg(frame: ImageBitmap): string {
   return canvas.toDataURL('image/jpeg', 0.84);
 }
 
-export default function LivenessScanner({ onCaptureSuccess, attendanceChallenge }: LivenessScannerProps) {
+export default function LivenessScanner({ onCaptureSuccess, challenge }: LivenessScannerProps) {
   const webcamRef = useRef<Webcam>(null);
   const callbackRef = useRef(onCaptureSuccess);
   const [instruction, setInstruction] = useState('กำลังเตรียมระบบตรวจใบหน้า...');
@@ -107,7 +97,7 @@ export default function LivenessScanner({ onCaptureSuccess, attendanceChallenge 
     let actionImage = '';
     const samples: string[] = [];
     const passiveObservations: LivenessObservation[] = [];
-    const markers: AttendanceLivenessEvidence['frames'] = [];
+    const markers: HybridLivenessEvidence['frames'] = [];
     const observedTimestamps: number[] = [];
 
     const fail = (message: string) => {
@@ -155,29 +145,16 @@ export default function LivenessScanner({ onCaptureSuccess, attendanceChallenge 
             passiveObservations.push(observation);
             lastSampleAt = observation.timestampMs;
             markers.push({ kind: 'passive_sample', sampleIndex: samples.length, timestampMs: observation.timestampMs });
-            setProgress(samples.length / (attendanceChallenge ? 5 : SAMPLE_COUNT));
+            setProgress(samples.length / 5);
             if (samples.length === SAMPLE_COUNT) {
-              if (!attendanceChallenge) {
-                const elapsed = Math.max(1, observation.timestampMs - startedAt);
-                const effectiveFps = observedTimestamps.length > 1 ? ((observedTimestamps.length - 1) * 1000) / elapsed : 0;
-                window.clearTimeout(timeout);
-                callbackRef.current({
-                  mode: 'passive',
-                  faceImageSrc: samples[2],
-                  passiveImageSrcs: samples as [string, string, string],
-                  evidence: { version: 3, mode: 'passive', sampleCount: SAMPLE_COUNT, frames: markers.slice(0, 3) as PassiveLivenessEvidence['frames'], startedAtMs: startedAt, completedAtMs: observation.timestampMs, effectiveFps },
-                });
-              } else {
-                promptAt = observation.timestampMs + attendanceChallenge.promptDelayMs;
-                phase = 'wait_prompt';
-                setInstruction('เตรียมทำคำสั่งง่าย ๆ อีกหนึ่งขั้นตอน');
-              }
+              promptAt = observation.timestampMs + challenge.promptDelayMs;
+              phase = 'wait_prompt';
+              setInstruction('เตรียมทำคำสั่งง่าย ๆ อีกหนึ่งขั้นตอน');
             }
           }
           return;
         }
 
-        if (!attendanceChallenge) return;
         const baseline = {
           leftEar: median(passiveObservations.map((item) => item.leftEar)),
           rightEar: median(passiveObservations.map((item) => item.rightEar)),
@@ -189,33 +166,33 @@ export default function LivenessScanner({ onCaptureSuccess, attendanceChallenge 
         if (phase === 'wait_prompt') {
           if (observation.timestampMs < promptAt) return;
           phase = 'action';
-          setInstruction(attendanceChallenge.action === 'blink' ? 'กะพริบตาทั้งสองข้าง 1 ครั้ง' : 'ขยับใบหน้าเข้าใกล้กล้องเล็กน้อย');
+          setInstruction(challenge.action === 'blink' ? 'กะพริบตาทั้งสองข้าง 1 ครั้ง' : 'ขยับใบหน้าเข้าใกล้กล้องเล็กน้อย');
           return;
         }
 
         if (phase === 'action') {
-          actionStableFrames = attendanceActionDetected(
-            attendanceChallenge.action,
+          actionStableFrames = hybridActionDetected(
+            challenge.action,
             observation,
             baseline,
           ) ? actionStableFrames + 1 : 0;
           if (actionStableFrames >= 2) {
             actionImage = frameToJpeg(frame);
-            markers.push({ kind: 'challenge_action', action: attendanceChallenge.action, timestampMs: observation.timestampMs });
+            markers.push({ kind: 'challenge_action', action: challenge.action, timestampMs: observation.timestampMs });
             phase = 'recovery';
             setProgress(0.8);
-            setInstruction(attendanceChallenge.action === 'blink' ? 'ลืมตาและมองตรง' : 'กลับมาอยู่ในกรอบเดิม');
+            setInstruction(challenge.action === 'blink' ? 'ลืมตาและมองตรง' : 'กลับมาอยู่ในกรอบเดิม');
           }
           return;
         }
 
-        recoveryStableFrames = attendanceRecoveryDetected(
+        recoveryStableFrames = hybridRecoveryDetected(
           observation,
           baseline,
         ) ? recoveryStableFrames + 1 : 0;
         if (recoveryStableFrames >= 2) {
           const recoveryImage = frameToJpeg(frame);
-          markers.push({ kind: 'challenge_recovery', action: attendanceChallenge.action, timestampMs: observation.timestampMs });
+          markers.push({ kind: 'challenge_recovery', action: challenge.action, timestampMs: observation.timestampMs });
           const elapsed = Math.max(1, observation.timestampMs - startedAt);
           const effectiveFps = observedTimestamps.length > 1 ? ((observedTimestamps.length - 1) * 1000) / elapsed : 0;
           window.clearTimeout(timeout);
@@ -230,8 +207,8 @@ export default function LivenessScanner({ onCaptureSuccess, attendanceChallenge 
               version: 4,
               mode: 'hybrid',
               sampleCount: SAMPLE_COUNT,
-              action: attendanceChallenge.action,
-              promptDelayMs: attendanceChallenge.promptDelayMs,
+              action: challenge.action,
+              promptDelayMs: challenge.promptDelayMs,
               frames: markers,
               startedAtMs: startedAt,
               promptAtMs: promptAt,
@@ -253,7 +230,7 @@ export default function LivenessScanner({ onCaptureSuccess, attendanceChallenge 
       timeout = window.setTimeout(() => fail('ตรวจใบหน้าไม่สำเร็จภายในเวลาที่กำหนด กรุณาจัดแสงและลองใหม่'), ATTEMPT_TIMEOUT_MS);
     }).catch((loadError) => fail(loadError instanceof Error ? loadError.message : 'โหลดระบบตรวจจับใบหน้าไม่สำเร็จ'));
     return () => { cancelled = true; window.clearTimeout(timeout); cancelAnimationFrame(animationFrame); client?.close(); };
-  }, [attemptKey, attendanceChallenge, selectedCameraId]);
+  }, [attemptKey, challenge, selectedCameraId]);
 
   return <div className="relative flex min-h-[clamp(20rem,64dvh,27rem)] w-full flex-col items-center justify-center overflow-hidden rounded-2xl bg-gray-950">
     {isLoading && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 px-5 text-center text-white"><Loader2 className="mb-4 animate-spin motion-reduce:animate-none" size={44} /><p className="font-semibold">กำลังเตรียมระบบตรวจสอบใบหน้า...</p><p className="mt-1 text-xs text-gray-300">โมเดลทำงานบนอุปกรณ์และไม่บันทึกวิดีโอถาวร</p></div>}

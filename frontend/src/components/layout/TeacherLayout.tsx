@@ -6,8 +6,9 @@ import { useResponsiveDrawer } from './useResponsiveDrawer';
 import { useDesktopSidebar } from './useDesktopSidebar';
 import AppBackButton from '../navigation/AppBackButton';
 import { useTeacherAttendance } from '../../contexts/teacherAttendanceState';
+import SidebarAccountCard, { type SidebarAccountProfile } from './SidebarAccountCard';
 
-export default function TeacherLayout() {
+export default function TeacherLayout({ profile }: { profile: SidebarAccountProfile }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -60,6 +61,8 @@ export default function TeacherLayout() {
             {sidebar.collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
           </button>
         </div>
+
+        <SidebarAccountCard profile={profile} role="teacher" desktopExpanded={sidebar.desktopExpanded} />
 
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-5">
           {menuItems.map((item) => {

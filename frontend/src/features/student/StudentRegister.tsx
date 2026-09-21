@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Camera, CheckCircle, ImageUp, Loader2, RotateCw, ShieldCheck } from 'lucide-react';
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
@@ -41,8 +41,16 @@ export default function StudentRegister() {
     setErrorMsg('');
     try {
       const nextChallenge = await faceService.createEnrollmentLivenessChallenge(card);
-      if (nextChallenge.liveness_protocol_version !== 3 || nextChallenge.liveness_mode !== 'passive' || nextChallenge.liveness_sample_count !== 3) {
-        throw new Error('Backend ยังไม่รองรับ Passive Liveness รุ่นปัจจุบัน กรุณาอัปเดต Backend');
+      if (
+        nextChallenge.liveness_protocol_version !== 4
+        || nextChallenge.liveness_mode !== 'hybrid'
+        || nextChallenge.liveness_sample_count !== 3
+        || !['blink', 'move_closer'].includes(nextChallenge.liveness_action)
+        || !Number.isInteger(nextChallenge.liveness_prompt_delay_ms)
+        || nextChallenge.liveness_prompt_delay_ms < 500
+        || nextChallenge.liveness_prompt_delay_ms > 1_400
+      ) {
+        throw new Error('Backend ยังไม่รองรับ Hybrid Liveness รุ่นปัจจุบัน กรุณาอัปเดต Backend');
       }
       setStudentId(nextChallenge.student_id);
       setChallenge(nextChallenge);
@@ -76,12 +84,6 @@ export default function StudentRegister() {
 
   const handleLivenessCapture = async (capture: LivenessCapture) => {
     if (!challenge || !studentId) return;
-    if (capture.mode !== 'passive') {
-      setChallenge(null);
-      setErrorMsg('รูปแบบ Liveness สำหรับลงทะเบียนไม่ถูกต้อง กรุณาเริ่มใหม่');
-      setPhase('retry');
-      return;
-    }
     setPhase('saving');
     setErrorMsg('');
     try {
@@ -91,6 +93,8 @@ export default function StudentRegister() {
         challenge.liveness_token,
         {
           passiveImages: capture.passiveImageSrcs.map((image, index) => base64ToFile(image, `enrollment_passive_${index + 1}.jpg`)) as [File, File, File],
+          actionImage: base64ToFile(capture.actionImageSrc, 'enrollment_liveness_action.jpg'),
+          recoveryImage: base64ToFile(capture.recoveryImageSrc, 'enrollment_liveness_recovery.jpg'),
           evidence: capture.evidence,
         },
       );
@@ -104,13 +108,17 @@ export default function StudentRegister() {
   };
 
   const runtimeReady = faceRuntime.status === 'ready';
+  const livenessChallenge = useMemo(() => challenge ? {
+    action: challenge.liveness_action,
+    promptDelayMs: challenge.liveness_prompt_delay_ms,
+  } : null, [challenge]);
 
   return (
     <div className="student-page">
       <div className="rounded-2xl border border-gray-100 bg-white p-[clamp(1rem,4vw,1.25rem)] shadow-sm">
       <header className="mb-6 text-center">
         <h1 className="text-2xl font-bold text-gray-800">ลงทะเบียนใบหน้า</h1>
-        <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าแบบ Passive ก่อนบันทึก</p>
+        <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าด้วย Hybrid Liveness ชุดเดียวกับการเช็คชื่อ</p>
       </header>
 
       {errorMsg && (
@@ -158,14 +166,15 @@ export default function StudentRegister() {
         </section>
       )}
 
-      {phase === 'liveness' && challenge && (
+      {phase === 'liveness' && challenge && livenessChallenge && (
         <section className="space-y-4">
           <div className="flex items-center justify-between gap-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
             <span className="flex items-center gap-2 font-semibold"><CheckCircle size={18} aria-hidden="true" />ยืนยันรหัส {studentId} แล้ว</span>
             <span className="text-xs">สิทธิ์ถึง {new Date(challenge.challenge_expires_at).toLocaleTimeString('th-TH')}</span>
           </div>
-          <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าแบบ Passive</h2>
-          <LivenessScanner onCaptureSuccess={(capture) => void handleLivenessCapture(capture)} />
+          <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าและทำคำสั่งยืนยัน 1 ครั้ง</h2>
+          <p className="text-center text-sm leading-6 text-gray-500">ระบบเก็บภาพต่อเนื่อง 3 เฟรม จากนั้นสุ่มให้กะพริบตาหรือขยับเข้าใกล้กล้องเล็กน้อย</p>
+          <LivenessScanner challenge={livenessChallenge} onCaptureSuccess={(capture) => void handleLivenessCapture(capture)} />
         </section>
       )}
 

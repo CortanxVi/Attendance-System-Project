@@ -21,7 +21,7 @@ from core.request_limits import SupportUploadLimitMiddleware
 from main import app
 
 
-class LivenessEvidenceSecurityTests(unittest.TestCase):
+class EnrollmentHybridLivenessSecurityTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime.now(timezone.utc).replace(microsecond=0)
         self.challenge = create_liveness_challenge(
@@ -31,17 +31,25 @@ class LivenessEvidenceSecurityTests(unittest.TestCase):
         )
 
     def evidence(self):
+        prompt_delay = self.challenge.prompt_delay_ms
+        action = self.challenge.action
+        prompt_at = 2_500 + prompt_delay
         return {
-            "version": 3,
-            "mode": "passive",
+            "version": 4,
+            "mode": "hybrid",
             "sampleCount": 3,
+            "action": action,
+            "promptDelayMs": prompt_delay,
             "frames": [
                 {"kind": "passive_sample", "sampleIndex": 1, "timestampMs": 1_500},
                 {"kind": "passive_sample", "sampleIndex": 2, "timestampMs": 2_000},
                 {"kind": "passive_sample", "sampleIndex": 3, "timestampMs": 2_500},
+                {"kind": "challenge_action", "action": action, "timestampMs": prompt_at + 200},
+                {"kind": "challenge_recovery", "action": action, "timestampMs": prompt_at + 500},
             ],
             "startedAtMs": 1_000,
-            "completedAtMs": 2_600,
+            "promptAtMs": prompt_at,
+            "completedAtMs": prompt_at + 600,
             "effectiveFps": 20,
         }
 
@@ -53,8 +61,12 @@ class LivenessEvidenceSecurityTests(unittest.TestCase):
             "student-1",
             now=self.now,
         )
-        self.assertEqual(result.mode, "passive")
+        self.assertEqual(result.mode, "hybrid")
         self.assertEqual(result.sample_count, 3)
+        self.assertEqual(result.action, self.challenge.action)
+        self.assertIn(self.challenge.action, ("blink", "move_closer"))
+        self.assertGreaterEqual(self.challenge.prompt_delay_ms, 500)
+        self.assertLessEqual(self.challenge.prompt_delay_ms, 1_400)
 
     def test_accepts_low_fps_attempt_but_rejects_over_20_seconds(self):
         evidence = self.evidence()
@@ -66,9 +78,9 @@ class LivenessEvidenceSecurityTests(unittest.TestCase):
             "student-1",
             now=self.now,
         )
-        self.assertEqual(result.total_duration_ms, 1_600)
+        self.assertGreater(result.total_duration_ms, 1_600)
 
-        evidence["completedAtMs"] = 22_000
+        evidence["completedAtMs"] = 25_000
         with self.assertRaises(HTTPException):
             verify_liveness_submission(
                 self.challenge.token,
@@ -100,6 +112,32 @@ class LivenessEvidenceSecurityTests(unittest.TestCase):
     def test_rejects_client_attempt_to_reduce_signed_sample_count(self):
         evidence = self.evidence()
         evidence["sampleCount"] = 2
+        with self.assertRaises(HTTPException):
+            verify_liveness_submission(
+                self.challenge.token,
+                json.dumps(evidence),
+                "challenge-1",
+                "student-1",
+                now=self.now,
+            )
+
+    def test_rejects_client_action_substitution_and_early_action(self):
+        evidence = self.evidence()
+        replacement = "move_closer" if self.challenge.action == "blink" else "blink"
+        evidence["action"] = replacement
+        evidence["frames"][3]["action"] = replacement
+        evidence["frames"][4]["action"] = replacement
+        with self.assertRaises(HTTPException):
+            verify_liveness_submission(
+                self.challenge.token,
+                json.dumps(evidence),
+                "challenge-1",
+                "student-1",
+                now=self.now,
+            )
+
+        evidence = self.evidence()
+        evidence["frames"][3]["timestampMs"] = evidence["promptAtMs"] - 1
         with self.assertRaises(HTTPException):
             verify_liveness_submission(
                 self.challenge.token,
@@ -217,17 +255,27 @@ class AttendanceHybridLivenessSecurityTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             self.verify(evidence)
 
-    def test_rejects_protocol_v3_token_on_attendance_v4_path(self):
-        passive = create_liveness_challenge(
+    def test_rejects_enrollment_token_on_attendance_path(self):
+        enrollment = create_liveness_challenge(
             "challenge-1", "student-1", self.now + timedelta(minutes=1)
         )
         with self.assertRaises(HTTPException):
             verify_attendance_liveness_submission(
-                passive.token,
+                enrollment.token,
                 json.dumps(self.evidence()),
                 "challenge-1",
                 "student-1",
                 "session-1",
+                now=self.now,
+            )
+
+    def test_rejects_attendance_token_on_enrollment_path(self):
+        with self.assertRaises(HTTPException):
+            verify_liveness_submission(
+                self.challenge.token,
+                json.dumps(self.evidence()),
+                "challenge-1",
+                "student-1",
                 now=self.now,
             )
 
@@ -258,6 +306,8 @@ class LivenessApiContractTests(unittest.TestCase):
             "liveness_token",
             "liveness_evidence",
             "liveness_passive_images",
+            "liveness_action_image",
+            "liveness_recovery_image",
         ):
             self.assertIn(name, properties)
 

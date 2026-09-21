@@ -194,7 +194,7 @@ TRUSTED_HOSTS=api.example.ac.th,127.0.0.1,localhost
 
 1. Frontend เก็บ Passive frame 3 เฟรม แล้วให้กะพริบตาหรือขยับเข้าใกล้ตามคำสั่งสุ่มหนึ่งครั้ง จากนั้นเก็บ Recovery frame; preview กล้องหน้าถูก mirror เพื่อให้ผู้ใช้ขยับตามธรรมชาติ.
 2. Frontend ส่งภาพ 5 ไฟล์, `challenge_id`, signed `liveness_token` และ `liveness_evidence` ไป `POST /api/v1/attendance/verify`.
-3. Backend ตรวจ signature, audience/user, challenge, วันหมดอายุ, session และ enrollment ซ้ำ.
+3. Backend ตรวจ signature, purpose `attendance`, ผู้ใช้, challenge, วันหมดอายุ, session และ enrollment ซ้ำ.
 4. RPC `claim_face_attendance_challenge` ล็อก challenge พร้อม processing token เพื่อกัน double-submit และ concurrent replay; งานยาวมีการ renew lease.
 5. ทุกภาพผ่านการตรวจชนิดไฟล์, byte limit, dimension/pixel limit และ decode ก่อนเข้าโมเดล.
 6. Passive PAD ตรวจ 3 เฟรมแรกเพื่อคัดกรองภาพถ่ายหรือหน้าจอ และ Backend ตรวจ Action/Recovery จากภาพจริงเพื่อเพิ่มการป้องกันวิดีโอ Replay.
@@ -211,10 +211,11 @@ Hybrid Liveness ใช้คำสั่งเพียงหนึ่งคร�
 1. นักศึกษาส่งภาพบัตรไป `POST /api/v1/enrollment/liveness-challenge`.
 2. Backend ส่งรูปไป OCR Service และตรวจว่ารหัสบนบัตรตรงกับ `student_id` ของบัญชี.
 3. สร้าง `face_enrollment_challenges`; challenge เก่าที่ยังไม่ใช้ของบัญชีเดียวกันถูกยกเลิก.
-4. นักศึกษาทำ Passive Liveness 3 เฟรม.
-5. `POST /api/v1/enrollment/register-face` ตรวจ/claim challenge, ตรวจ PAD และสกัด embedding.
-6. RPC `finalize_face_enrollment` เขียน embedding 512 ค่าและตั้ง `face_registered=true` แบบ atomic.
-7. นักศึกษาไม่สามารถลงทะเบียนซ้ำเอง; การเปลี่ยนข้อมูลต้องผ่านผู้ดูแลระบบถาวร.
+4. Backend ออก protocol-v4 token แบบ purpose `face_enrollment` ที่สุ่ม `blink` หรือ `move_closer` พร้อมเวลาหน่วงและผูกบัญชี; token นี้ใช้ข้ามไปเช็กชื่อไม่ได้.
+5. นักศึกษาใช้ scanner ชุดเดียวกับการเช็กชื่อเพื่อเก็บ Passive 3 เฟรม, Action และ Recovery รวม 5 เฟรม.
+6. `POST /api/v1/enrollment/register-face` ตรวจ token/evidence, claim challenge, ตรวจ PAD/บุคคลเดิม/action/recovery และสกัด embedding จาก Recovery frame.
+7. RPC `finalize_face_enrollment` เขียน embedding 512 ค่าและตั้ง `face_registered=true` แบบ atomic.
+8. นักศึกษาไม่สามารถลงทะเบียนซ้ำเอง; การเปลี่ยนข้อมูลต้องผ่านผู้ดูแลระบบถาวร.
 
 ระบบเก็บ face embedding ไม่ใช่ไฟล์ selfie ถาวรในตาราง แต่ embedding ยังเป็นข้อมูลชีวมิติที่อ่อนไหว ต้องจำกัดผู้เข้าถึง, การสำรอง, retention และการลบตามนโยบายสถาบัน
 

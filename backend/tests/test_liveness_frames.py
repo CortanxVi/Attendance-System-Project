@@ -11,9 +11,8 @@ os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-t
 
 from services.insightface_service import FaceObservation
 from services.liveness_frame_service import (
-    verify_hybrid_attendance_frames,
+    verify_hybrid_liveness_frames,
     verify_liveness_frames,
-    verify_passive_liveness_frames,
 )
 
 
@@ -102,33 +101,6 @@ class LivenessFrameVerificationTests(unittest.TestCase):
 
     @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
     @patch("services.liveness_frame_service.passive_pad_service.assert_live")
-    def test_passive_liveness_accepts_three_continuous_frontal_samples(self, pad, extract):
-        extract.side_effect = [observation(scale=0.40), observation(scale=0.405), observation(scale=0.398)]
-        result = verify_passive_liveness_frames([frame(10), frame(12), frame(14)])
-        np.testing.assert_array_equal(result.final_embedding, np.asarray([1.0, 0.0], dtype=np.float32))
-        pad.assert_called_once()
-
-    @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
-    @patch("services.liveness_frame_service.passive_pad_service.assert_live")
-    def test_passive_liveness_rejects_duplicated_still_frames(self, _pad, extract):
-        extract.side_effect = [observation(scale=0.40), observation(scale=0.40), observation(scale=0.40)]
-        with self.assertRaises(HTTPException):
-            verify_passive_liveness_frames([frame(10), frame(10), frame(10)])
-
-    @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
-    @patch("services.liveness_frame_service.passive_pad_service.assert_live")
-    def test_passive_liveness_rejects_reference_outside_capture_frame(self, pad, extract):
-        extract.side_effect = [
-            observation(scale=0.40, center_offset=0.34),
-            observation(scale=0.40),
-            observation(scale=0.40),
-        ]
-        with self.assertRaises(HTTPException):
-            verify_passive_liveness_frames([frame(10), frame(12), frame(14)])
-        pad.assert_not_called()
-
-    @patch("services.liveness_frame_service.face_service.extract_strict_face_observation")
-    @patch("services.liveness_frame_service.passive_pad_service.assert_live")
     def test_hybrid_accepts_signed_blink_and_recovery(self, pad, extract):
         extract.side_effect = [
             observation(scale=0.40),
@@ -137,7 +109,7 @@ class LivenessFrameVerificationTests(unittest.TestCase):
             observation(scale=0.40, left_eye=0.15, right_eye=0.14),
             observation(scale=0.40, left_eye=0.31, right_eye=0.30),
         ]
-        result = verify_hybrid_attendance_frames(
+        result = verify_hybrid_liveness_frames(
             [frame(10), frame(12), frame(14)], frame(20), frame(24), "blink"
         )
         np.testing.assert_array_equal(result.final_embedding, np.asarray([1.0, 0.0], dtype=np.float32))
@@ -153,7 +125,7 @@ class LivenessFrameVerificationTests(unittest.TestCase):
             observation(scale=0.45),
             observation(scale=0.40),
         ]
-        result = verify_hybrid_attendance_frames(
+        result = verify_hybrid_liveness_frames(
             [frame(10), frame(12), frame(14)], frame(22), frame(26), "move_closer"
         )
         np.testing.assert_array_equal(result.final_embedding, np.asarray([1.0, 0.0], dtype=np.float32))
@@ -170,7 +142,7 @@ class LivenessFrameVerificationTests(unittest.TestCase):
             observation(scale=0.40, left_eye=0.31, right_eye=0.30),
         ]
         with self.assertRaises(HTTPException):
-            verify_hybrid_attendance_frames(
+            verify_hybrid_liveness_frames(
                 [frame(10), frame(12), frame(14)], frame(14), frame(14), "blink"
             )
 
@@ -185,7 +157,7 @@ class LivenessFrameVerificationTests(unittest.TestCase):
             observation(scale=0.40),
         ]
         with self.assertRaises(HTTPException):
-            verify_hybrid_attendance_frames(
+            verify_hybrid_liveness_frames(
                 [frame(10), frame(12), frame(14)], frame(20), frame(24), "move_closer"
             )
 

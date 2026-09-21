@@ -48,10 +48,7 @@ from services.liveness_service import (
     verify_attendance_liveness_submission,
     verify_liveness_submission,
 )
-from services.liveness_frame_service import (
-    verify_hybrid_attendance_frames,
-    verify_passive_liveness_frames,
-)
+from services.liveness_frame_service import verify_hybrid_liveness_frames
 from services.face_enrollment_service import (
     claim_face_enrollment_challenge,
     finalize_face_enrollment,
@@ -546,9 +543,11 @@ async def create_face_enrollment_liveness_challenge(
         "student_id": current_user.student_id,
         "challenge_expires_at": expires_at.isoformat(),
         "challenge_ttl_seconds": int((expires_at - datetime.now(timezone.utc)).total_seconds()),
-        "liveness_protocol_version": 3,
+        "liveness_protocol_version": liveness.protocol_version,
         "liveness_mode": liveness.mode,
         "liveness_sample_count": liveness.sample_count,
+        "liveness_action": liveness.action,
+        "liveness_prompt_delay_ms": liveness.prompt_delay_ms,
         "liveness_token": liveness.token,
     }
 
@@ -561,6 +560,8 @@ async def register_face(
     liveness_token: str | None = Form(None),
     liveness_evidence: str | None = Form(None),
     liveness_passive_images: list[UploadFile] | None = File(None),
+    liveness_action_image: UploadFile | None = File(None),
+    liveness_recovery_image: UploadFile | None = File(None),
     current_user: AuthenticatedUser = Depends(require_roles("student", "admin")),
 ):
     processing_claim_token: str | None = None
@@ -579,6 +580,8 @@ async def register_face(
                 enrollment_challenge_id,
                 liveness_token,
                 liveness_evidence,
+                liveness_action_image,
+                liveness_recovery_image,
             )
             if any(value is None for value in required_values):
                 raise HTTPException(status_code=422, detail="ต้องผ่าน Liveness ก่อนลงทะเบียนใบหน้า")
@@ -619,16 +622,31 @@ async def register_face(
                 for index, upload in enumerate(passive_uploads, start=1)
             ]
             validated_uploads = await asyncio.gather(*upload_tasks)
+            action_upload, recovery_upload = await asyncio.gather(
+                read_validated_image(liveness_action_image, "ภาพขณะทำคำสั่งสุ่ม"),
+                read_validated_image(liveness_recovery_image, "ภาพหลังกลับสู่ท่าปกติ"),
+            )
             prepared_images = await asyncio.gather(*(
                 run_in_threadpool(prepare_face_image, upload.content)
                 for upload in validated_uploads
             ))
-            if any(image is None for image in prepared_images):
+            prepared_action_image, prepared_recovery_image = await asyncio.gather(
+                run_in_threadpool(prepare_face_image, action_upload.content),
+                run_in_threadpool(prepare_face_image, recovery_upload.content),
+            )
+            if (
+                any(image is None for image in prepared_images)
+                or prepared_action_image is None
+                or prepared_recovery_image is None
+            ):
                 raise HTTPException(status_code=400, detail="ไฟล์ภาพ Liveness เสียหรืออ่านไม่ได้")
 
             verified_frames = await run_in_threadpool(
-                verify_passive_liveness_frames,
+                verify_hybrid_liveness_frames,
                 prepared_images,
+                prepared_action_image,
+                prepared_recovery_image,
+                verified_liveness.action,
             )
             await run_in_threadpool(
                 finalize_face_enrollment,
@@ -776,7 +794,7 @@ async def verify_hybrid_face_attendance(
             raise HTTPException(status_code=400, detail="ไฟล์ภาพ liveness เสียหรืออ่านไม่ได้")
 
         verified_frames = await run_in_threadpool(
-            verify_hybrid_attendance_frames,
+            verify_hybrid_liveness_frames,
             prepared_images,
             prepared_action_image,
             prepared_recovery_image,

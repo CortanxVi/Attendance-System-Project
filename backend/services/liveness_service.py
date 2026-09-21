@@ -1,4 +1,4 @@
-"""Signed passive enrollment and hybrid attendance liveness protocols."""
+"""Signed hybrid liveness protocol shared by enrollment and attendance."""
 
 from __future__ import annotations
 
@@ -16,12 +16,12 @@ from fastapi import HTTPException
 from core.config import APP_ENV, LIVENESS_SIGNING_KEY, OCR_SERVICE_TOKEN
 
 
-PROTOCOL_VERSION = 3
-PROTOCOL_MODE = "passive"
+PROTOCOL_VERSION = 4
+PROTOCOL_MODE = "hybrid"
 PASSIVE_SAMPLE_COUNT = 3
-ATTENDANCE_PROTOCOL_VERSION = 4
-ATTENDANCE_PROTOCOL_MODE = "hybrid"
-ATTENDANCE_ACTIONS = ("blink", "move_closer")
+LIVENESS_ACTIONS = ("blink", "move_closer")
+ENROLLMENT_PURPOSE = "face_enrollment"
+ATTENDANCE_PURPOSE = "attendance"
 MIN_PROMPT_DELAY_MS = 500
 MAX_PROMPT_DELAY_MS = 1_400
 MAX_TOKEN_BYTES = 4096
@@ -75,20 +75,57 @@ def _decode_base64url(value: str) -> bytes:
 
 
 def create_liveness_challenge(challenge_id: str, student_id: str, expires_at: datetime) -> LivenessChallenge:
+    """Issue an enrollment-only hybrid challenge.
+
+    Enrollment deliberately shares the same low-friction action protocol as
+    attendance, while the signed purpose prevents cross-flow token reuse.
+    """
+    return _create_hybrid_challenge(
+        challenge_id,
+        student_id,
+        expires_at,
+        purpose=ENROLLMENT_PURPOSE,
+    )
+
+
+def _create_hybrid_challenge(
+    challenge_id: str,
+    student_id: str,
+    expires_at: datetime,
+    *,
+    purpose: str,
+    session_id: str | None = None,
+) -> LivenessChallenge:
     now = datetime.now(timezone.utc)
+    action = secrets.choice(LIVENESS_ACTIONS)
+    prompt_delay_ms = MIN_PROMPT_DELAY_MS + secrets.randbelow(
+        MAX_PROMPT_DELAY_MS - MIN_PROMPT_DELAY_MS + 1
+    )
     payload = {
         "v": PROTOCOL_VERSION,
         "challenge_id": challenge_id,
         "student_id": student_id,
         "mode": PROTOCOL_MODE,
         "sample_count": PASSIVE_SAMPLE_COUNT,
+        "purpose": purpose,
+        "action": action,
+        "prompt_delay_ms": prompt_delay_ms,
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
         "nonce": secrets.token_urlsafe(18),
     }
+    if session_id is not None:
+        payload["session_id"] = session_id
     encoded = _encode_base64url(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     signature = hmac.new(_signing_key(), encoded.encode("ascii"), hashlib.sha256).digest()
-    return LivenessChallenge(token=f"{encoded}.{_encode_base64url(signature)}", mode=PROTOCOL_MODE, sample_count=PASSIVE_SAMPLE_COUNT)
+    return LivenessChallenge(
+        token=f"{encoded}.{_encode_base64url(signature)}",
+        mode=PROTOCOL_MODE,
+        sample_count=PASSIVE_SAMPLE_COUNT,
+        protocol_version=PROTOCOL_VERSION,
+        action=action,
+        prompt_delay_ms=prompt_delay_ms,
+    )
 
 
 def create_attendance_liveness_challenge(
@@ -105,37 +142,12 @@ def create_attendance_liveness_challenge(
     backend later recomputes the action from the submitted images.
     """
 
-    now = datetime.now(timezone.utc)
-    action = secrets.choice(ATTENDANCE_ACTIONS)
-    prompt_delay_ms = MIN_PROMPT_DELAY_MS + secrets.randbelow(
-        MAX_PROMPT_DELAY_MS - MIN_PROMPT_DELAY_MS + 1
-    )
-    payload = {
-        "v": ATTENDANCE_PROTOCOL_VERSION,
-        "challenge_id": challenge_id,
-        "student_id": student_id,
-        "session_id": session_id,
-        "mode": ATTENDANCE_PROTOCOL_MODE,
-        "sample_count": PASSIVE_SAMPLE_COUNT,
-        "action": action,
-        "prompt_delay_ms": prompt_delay_ms,
-        "iat": int(now.timestamp()),
-        "exp": int(expires_at.timestamp()),
-        "nonce": secrets.token_urlsafe(18),
-    }
-    encoded = _encode_base64url(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    )
-    signature = hmac.new(
-        _signing_key(), encoded.encode("ascii"), hashlib.sha256
-    ).digest()
-    return LivenessChallenge(
-        token=f"{encoded}.{_encode_base64url(signature)}",
-        mode=ATTENDANCE_PROTOCOL_MODE,
-        sample_count=PASSIVE_SAMPLE_COUNT,
-        protocol_version=ATTENDANCE_PROTOCOL_VERSION,
-        action=action,
-        prompt_delay_ms=prompt_delay_ms,
+    return _create_hybrid_challenge(
+        challenge_id,
+        student_id,
+        expires_at,
+        purpose=ATTENDANCE_PURPOSE,
+        session_id=session_id,
     )
 
 
@@ -162,46 +174,23 @@ def _decode_and_verify_token(token: str, expected_version: int = PROTOCOL_VERSIO
     return payload
 
 
-def verify_liveness_submission(token: str, evidence_json: str, expected_challenge_id: str, expected_student_id: str, *, now: datetime | None = None) -> VerifiedLivenessEvidence:
-    payload = _decode_and_verify_token(token)
-    if payload.get("challenge_id") != expected_challenge_id or payload.get("student_id") != expected_student_id:
-        raise HTTPException(status_code=403, detail="สิทธิ์ตรวจบุคคลจริงไม่ตรงกับผู้ใช้หรือ QR")
-    current_timestamp = int((now or datetime.now(timezone.utc)).timestamp())
-    issued_at, expires_at = payload.get("iat"), payload.get("exp")
-    if not isinstance(issued_at, int) or not isinstance(expires_at, int) or issued_at > current_timestamp + 5 or expires_at <= current_timestamp:
-        raise HTTPException(status_code=400, detail="สิทธิ์ตรวจบุคคลจริงหมดอายุ กรุณาเริ่มใหม่")
-    if payload.get("mode") != PROTOCOL_MODE or payload.get("sample_count") != PASSIVE_SAMPLE_COUNT:
-        raise HTTPException(status_code=403, detail="นโยบายตรวจบุคคลจริงไม่ถูกต้อง")
-    if not evidence_json or len(evidence_json.encode()) > MAX_EVIDENCE_BYTES:
-        raise HTTPException(status_code=422, detail="หลักฐานตรวจบุคคลจริงมีขนาดไม่ถูกต้อง")
-    try:
-        evidence = json.loads(evidence_json)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail="อ่านหลักฐานตรวจบุคคลจริงไม่ได้") from exc
-    if not isinstance(evidence, dict) or evidence.get("version") != PROTOCOL_VERSION or evidence.get("mode") != PROTOCOL_MODE or evidence.get("sampleCount") != PASSIVE_SAMPLE_COUNT:
-        raise HTTPException(status_code=422, detail="รูปแบบหลักฐานตรวจบุคคลจริงไม่ถูกต้อง")
-    started = _finite_number(evidence.get("startedAtMs"), "startedAtMs")
-    completed = _finite_number(evidence.get("completedAtMs"), "completedAtMs")
-    fps = _finite_number(evidence.get("effectiveFps"), "effectiveFps")
-    duration = int(completed - started)
-    if not MIN_ATTEMPT_DURATION_MS <= duration <= MAX_ATTEMPT_DURATION_MS:
-        raise HTTPException(status_code=422, detail="ระยะเวลาสแกนใบหน้าไม่เป็นธรรมชาติ กรุณาลองใหม่")
-    if not MIN_EFFECTIVE_FPS <= fps <= MAX_EFFECTIVE_FPS:
-        raise HTTPException(status_code=422, detail="อัตราภาพจากกล้องไม่เพียงพอสำหรับตรวจบุคคลจริง")
-    frames = evidence.get("frames")
-    if not isinstance(frames, list) or len(frames) != PASSIVE_SAMPLE_COUNT:
-        raise HTTPException(status_code=422, detail="หลักฐานภาพต่อเนื่องไม่ครบ")
-    timestamps = []
-    for index, frame in enumerate(frames, start=1):
-        if not isinstance(frame, dict) or frame.get("kind") != "passive_sample" or frame.get("sampleIndex") != index:
-            raise HTTPException(status_code=422, detail="ลำดับหลักฐานภาพต่อเนื่องไม่ถูกต้อง")
-        timestamps.append(_finite_number(frame.get("timestampMs"), "frames.timestampMs"))
-    if timestamps[0] < started or timestamps[-1] > completed:
-        raise HTTPException(status_code=422, detail="เวลาหลักฐานภาพไม่ต่อเนื่อง")
-    intervals = [current - previous for previous, current in zip(timestamps, timestamps[1:])]
-    if any(not MIN_SAMPLE_INTERVAL_MS <= interval <= MAX_SAMPLE_INTERVAL_MS for interval in intervals):
-        raise HTTPException(status_code=422, detail="ช่วงเวลาหลักฐานภาพไม่เป็นธรรมชาติ")
-    return VerifiedLivenessEvidence(mode=PROTOCOL_MODE, sample_count=PASSIVE_SAMPLE_COUNT, total_duration_ms=duration)
+def verify_liveness_submission(
+    token: str,
+    evidence_json: str,
+    expected_challenge_id: str,
+    expected_student_id: str,
+    *,
+    now: datetime | None = None,
+) -> VerifiedLivenessEvidence:
+    """Validate enrollment protocol-v4 evidence before image processing."""
+    return _verify_hybrid_liveness_submission(
+        token,
+        evidence_json,
+        expected_challenge_id,
+        expected_student_id,
+        expected_purpose=ENROLLMENT_PURPOSE,
+        now=now,
+    )
 
 
 def verify_attendance_liveness_submission(
@@ -215,15 +204,43 @@ def verify_attendance_liveness_submission(
 ) -> VerifiedLivenessEvidence:
     """Validate protocol-v4 metadata before expensive image processing."""
 
-    payload = _decode_and_verify_token(token, ATTENDANCE_PROTOCOL_VERSION)
+    return _verify_hybrid_liveness_submission(
+        token,
+        evidence_json,
+        expected_challenge_id,
+        expected_student_id,
+        expected_purpose=ATTENDANCE_PURPOSE,
+        expected_session_id=expected_session_id,
+        now=now,
+    )
+
+
+def _verify_hybrid_liveness_submission(
+    token: str,
+    evidence_json: str,
+    expected_challenge_id: str,
+    expected_student_id: str,
+    *,
+    expected_purpose: str,
+    expected_session_id: str | None = None,
+    now: datetime | None = None,
+) -> VerifiedLivenessEvidence:
+    """Validate the shared hybrid contract and its purpose-specific binding."""
+
+    payload = _decode_and_verify_token(token, PROTOCOL_VERSION)
     if (
         payload.get("challenge_id") != expected_challenge_id
         or payload.get("student_id") != expected_student_id
-        or payload.get("session_id") != expected_session_id
+        or payload.get("purpose") != expected_purpose
+        or (
+            expected_session_id is not None
+            and payload.get("session_id") != expected_session_id
+        )
+        or (expected_session_id is None and "session_id" in payload)
     ):
         raise HTTPException(
             status_code=403,
-            detail="สิทธิ์ตรวจบุคคลจริงไม่ตรงกับผู้ใช้ ห้องเรียน หรือ QR",
+            detail="สิทธิ์ตรวจบุคคลจริงไม่ตรงกับผู้ใช้หรือขั้นตอนที่กำลังทำ",
         )
 
     current_timestamp = int((now or datetime.now(timezone.utc)).timestamp())
@@ -242,9 +259,9 @@ def verify_attendance_liveness_submission(
     action = payload.get("action")
     prompt_delay_ms = payload.get("prompt_delay_ms")
     if (
-        payload.get("mode") != ATTENDANCE_PROTOCOL_MODE
+        payload.get("mode") != PROTOCOL_MODE
         or payload.get("sample_count") != PASSIVE_SAMPLE_COUNT
-        or action not in ATTENDANCE_ACTIONS
+        or action not in LIVENESS_ACTIONS
         or not isinstance(prompt_delay_ms, int)
         or not MIN_PROMPT_DELAY_MS <= prompt_delay_ms <= MAX_PROMPT_DELAY_MS
     ):
@@ -262,8 +279,8 @@ def verify_attendance_liveness_submission(
     frames = evidence.get("frames") if isinstance(evidence, dict) else None
     if (
         not isinstance(evidence, dict)
-        or evidence.get("version") != ATTENDANCE_PROTOCOL_VERSION
-        or evidence.get("mode") != ATTENDANCE_PROTOCOL_MODE
+        or evidence.get("version") != PROTOCOL_VERSION
+        or evidence.get("mode") != PROTOCOL_MODE
         or evidence.get("sampleCount") != PASSIVE_SAMPLE_COUNT
         or evidence.get("action") != action
         or evidence.get("promptDelayMs") != prompt_delay_ms
@@ -329,7 +346,7 @@ def verify_attendance_liveness_submission(
         raise HTTPException(status_code=422, detail="เวลาคำสั่งสุ่มไม่ต่อเนื่อง")
 
     return VerifiedLivenessEvidence(
-        mode=ATTENDANCE_PROTOCOL_MODE,
+        mode=PROTOCOL_MODE,
         sample_count=PASSIVE_SAMPLE_COUNT,
         total_duration_ms=duration,
         action=action,

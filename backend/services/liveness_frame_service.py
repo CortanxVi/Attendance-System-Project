@@ -1,4 +1,4 @@
-"""Backend recomputation for passive and legacy transient liveness frames."""
+"""Backend recomputation for hybrid and legacy transient liveness frames."""
 
 from __future__ import annotations
 
@@ -22,26 +22,7 @@ class VerifiedLivenessFrames:
     final_embedding: np.ndarray
 
 
-def verify_passive_liveness_frames(images: Sequence[np.ndarray]) -> VerifiedLivenessFrames:
-    """Verify three transient frontal samples with local PAD and identity continuity."""
-    if len(images) != 3:
-        raise HTTPException(status_code=422, detail="หลักฐาน Passive Liveness ต้องมี 3 เฟรม")
-    observations = [_extract(image, f"ภาพต่อเนื่องลำดับที่ {index}") for index, image in enumerate(images, start=1)]
-    reference = observations[0]
-    if not 0.17 <= reference.face_width_ratio <= 0.84 or reference.center_offset > 0.30:
-        raise HTTPException(status_code=422, detail="โปรดมองตรงและให้ใบหน้าอยู่ในกรอบตลอดการสแกน")
-    for observation in observations[1:]:
-        _same_person(reference, observation)
-        if not _frontal(reference, observation, scale_tolerance=0.22):
-            raise HTTPException(status_code=422, detail="โปรดมองตรงและให้ใบหน้าอยู่ในกรอบตลอดการสแกน")
-    passive_pad_service.assert_live(images, [observation.bbox for observation in observations])
-    differences = [_frame_difference(first, second) for first, second in zip(images, images[1:])]
-    if any(difference < 0.35 for difference in differences):
-        raise HTTPException(status_code=422, detail="ตรวจพบภาพซ้ำหรือภาพนิ่ง กรุณาใช้บุคคลจริงหน้ากล้อง")
-    return VerifiedLivenessFrames(final_embedding=observations[-1].embedding)
-
-
-def verify_hybrid_attendance_frames(
+def verify_hybrid_liveness_frames(
     passive_images: Sequence[np.ndarray],
     action_image: np.ndarray,
     recovery_image: np.ndarray,
@@ -51,7 +32,8 @@ def verify_hybrid_attendance_frames(
 
     The signed metadata decides which action is required. Geometry and identity
     are recomputed from the uploaded frames, so a browser cannot claim that an
-    action happened without supplying matching visual evidence.
+    action happened without supplying matching visual evidence. Enrollment and
+    attendance call this same verifier after validating their signed purpose.
     """
 
     if action not in ("blink", "move_closer"):

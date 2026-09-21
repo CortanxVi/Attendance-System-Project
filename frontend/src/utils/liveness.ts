@@ -1,27 +1,17 @@
 export type LivenessAction = 'move_closer' | 'blink';
 
-export interface PassiveLivenessEvidence {
-  version: 3;
-  mode: 'passive';
-  sampleCount: 3;
-  frames: Array<{ kind: 'passive_sample'; sampleIndex: number; timestampMs: number }>;
-  startedAtMs: number;
-  completedAtMs: number;
-  effectiveFps: number;
-}
+export type HybridLivenessAction = 'blink' | 'move_closer';
 
-export type AttendanceLivenessAction = 'blink' | 'move_closer';
-
-export interface AttendanceLivenessEvidence {
+export interface HybridLivenessEvidence {
   version: 4;
   mode: 'hybrid';
   sampleCount: 3;
-  action: AttendanceLivenessAction;
+  action: HybridLivenessAction;
   promptDelayMs: number;
   frames: Array<
     | { kind: 'passive_sample'; sampleIndex: number; timestampMs: number }
-    | { kind: 'challenge_action'; action: AttendanceLivenessAction; timestampMs: number }
-    | { kind: 'challenge_recovery'; action: AttendanceLivenessAction; timestampMs: number }
+    | { kind: 'challenge_action'; action: HybridLivenessAction; timestampMs: number }
+    | { kind: 'challenge_recovery'; action: HybridLivenessAction; timestampMs: number }
   >;
   startedAtMs: number;
   promptAtMs: number;
@@ -29,7 +19,7 @@ export interface AttendanceLivenessEvidence {
   effectiveFps: number;
 }
 
-export interface AttendanceLivenessBaseline {
+export interface HybridLivenessBaseline {
   leftEar: number;
   rightEar: number;
   faceWidthRatio: number;
@@ -37,10 +27,10 @@ export interface AttendanceLivenessBaseline {
   pitch: number;
 }
 
-export function attendanceActionDetected(
-  action: AttendanceLivenessAction,
+export function hybridActionDetected(
+  action: HybridLivenessAction,
   observation: LivenessObservation,
-  baseline: AttendanceLivenessBaseline,
+  baseline: HybridLivenessBaseline,
 ): boolean {
   const poseStable = observation.faceCount === 1
     && observation.centerOffset <= 0.30
@@ -57,9 +47,9 @@ export function attendanceActionDetected(
   return scaleRatio >= 1.08 && scaleRatio <= 1.70;
 }
 
-export function attendanceRecoveryDetected(
+export function hybridRecoveryDetected(
   observation: LivenessObservation,
-  baseline: AttendanceLivenessBaseline,
+  baseline: HybridLivenessBaseline,
 ): boolean {
   return observation.faceCount === 1
     && observation.faceWidthRatio >= 0.20

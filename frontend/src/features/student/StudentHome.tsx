@@ -6,7 +6,7 @@ import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
 import { ArrowRight, Camera, CheckCircle, Loader2, QrCode, RotateCw, ScanFace, ShieldCheck, UserCheck, XCircle } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
-import type { AttendanceLivenessAction, AttendanceLivenessEvidence } from '../../utils/liveness';
+import type { HybridLivenessAction, HybridLivenessEvidence } from '../../utils/liveness';
 import {
   getFaceLandmarkerRuntimeSnapshot,
   preloadFaceLandmarker,
@@ -25,7 +25,7 @@ export default function StudentHome() {
   const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
   const [challengeTtlSeconds, setChallengeTtlSeconds] = useState(0);
   const [livenessToken, setLivenessToken] = useState<string | null>(null);
-  const [livenessAction, setLivenessAction] = useState<AttendanceLivenessAction | null>(null);
+  const [livenessAction, setLivenessAction] = useState<HybridLivenessAction | null>(null);
   const [livenessPromptDelayMs, setLivenessPromptDelayMs] = useState<number | null>(null);
   const [isLivenessActive, setIsLivenessActive] = useState(false);
 
@@ -34,7 +34,7 @@ export default function StudentHome() {
   const [capturedPassiveData, setCapturedPassiveData] = useState<[string, string, string] | null>(null);
   const [capturedActionData, setCapturedActionData] = useState<string | null>(null);
   const [capturedRecoveryData, setCapturedRecoveryData] = useState<string | null>(null);
-  const [livenessEvidence, setLivenessEvidence] = useState<AttendanceLivenessEvidence | null>(null);
+  const [livenessEvidence, setLivenessEvidence] = useState<HybridLivenessEvidence | null>(null);
   
   // สถานะการส่งข้อมูล
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -45,7 +45,7 @@ export default function StudentHome() {
   const [resultScore, setResultScore] = useState<number | null>(null); // คะแนนความเหมือน
   const [resultStatus, setResultStatus] = useState<string>(''); // 🌟 [เพิ่มใหม่] สถานะจริง present/late/absent
   const [resultCheckInTime, setResultCheckInTime] = useState<string>('');
-  const attendanceChallenge = useMemo(() => (
+  const livenessChallenge = useMemo(() => (
     livenessAction && livenessPromptDelayMs !== null
       ? { action: livenessAction, promptDelayMs: livenessPromptDelayMs }
       : undefined
@@ -202,7 +202,7 @@ export default function StudentHome() {
            <button onClick={() => setIsLivenessActive(false)} className="absolute top-4 right-4 z-30 bg-white/80 p-2 rounded-full text-sm font-bold shadow-md">ยกเลิก</button>
            <LivenessScanner
              onCaptureSuccess={handleFaceCapture}
-             attendanceChallenge={attendanceChallenge}
+             challenge={livenessChallenge!}
            />
         </div>
       ) : verifiedCourse ? (

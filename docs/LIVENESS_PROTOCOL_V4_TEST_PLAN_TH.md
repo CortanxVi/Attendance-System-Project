@@ -1,8 +1,8 @@
-# แผนทดสอบ Liveness Protocol v4 บน branch `livenessFeature`
+# แผนทดสอบ Liveness Protocol v4 สำหรับลงทะเบียนใบหน้าและเช็คชื่อ
 
 ## 1. วัตถุประสงค์
 
-Protocol v4 เป็นระบบทดลองสำหรับขั้นตอนเช็กชื่อด้วยใบหน้า มีเป้าหมายเพิ่มการป้องกันภัย 5 กลุ่ม โดยรักษาการใช้งานให้สั้นและเข้าใจง่าย:
+Protocol v4 เป็นระบบ Hybrid Liveness กลางที่ใช้ทั้งขั้นตอนลงทะเบียนใบหน้าและเช็กชื่อด้วยใบหน้า มีเป้าหมายเพิ่มการป้องกันภัย 5 กลุ่ม โดยรักษาการใช้งานให้สั้นและเข้าใจง่าย:
 
 1. รูปถ่ายบนกระดาษ
 2. รูปบนหน้าจอโทรศัพท์หรือแท็บเล็ต
@@ -10,7 +10,7 @@ Protocol v4 เป็นระบบทดลองสำหรับขั้�
 4. การส่ง Request ซ้ำหรือพร้อมกัน
 5. การนำ Challenge ของผู้ใช้อื่นมาใช้
 
-การลงทะเบียนใบหน้ายังคงใช้ Protocol v3 แบบ Passive ส่วน Protocol v4 ใช้เฉพาะการเช็กชื่อใน branch ทดลองนี้ เพื่อจำกัดผลกระทบและทำให้เปรียบเทียบกับระบบเดิมได้
+ทั้งสองขั้นตอนใช้ตัวสแกนและตัวตรวจภาพ Backend ชุดเดียวกัน แต่ token ลงนามกำกับ `purpose` แยกเป็น enrollment กับ attendance และ token เช็กชื่อผูก Attendance Session เพิ่ม จึงห้ามนำ token ข้ามขั้นตอน
 
 ## 2. Threat Model และขอบเขตการรับประกัน
 
@@ -20,11 +20,22 @@ Protocol v4 เป็นระบบทดลองสำหรับขั้�
 | ภาพบนหน้าจอ | Passive PAD, หลายเฟรม, คำสั่งสุ่มและ Recovery | ปฏิเสธภาพนิ่งบนโทรศัพท์/แท็บเล็ตและเพิ่มต้นทุนการโจมตีด้วยหน้าจอ |
 | วิดีโอ Replay | Backend สุ่ม `blink` หรือ `move_closer`, สุ่มเวลาหน่วง, ตรวจภาพ Action/Recovery ใหม่ | ปฏิเสธวิดีโอทั่วไปที่ไม่ตรงกับคำสั่งและจังหวะของ Challenge |
 | Request ซ้ำ | Supabase Claim lease, Processing token, Unique attendance, Atomic finalize และ Consumed timestamp | ประมวลผล Challenge เดียวได้ครั้งเดียวและไม่สร้าง Attendance ซ้ำ |
-| Challenge ของผู้อื่น | HMAC token ผูก Challenge ID, Account ID และ Session ID; Backend query ด้วยผู้ใช้ที่ยืนยันจาก JWT | ผู้ใช้หรือห้องเรียนที่ไม่ตรงกันได้รับ HTTP 403 |
+| Challenge ของผู้อื่น/คนละขั้นตอน | HMAC token ผูก Challenge ID, Account ID, Purpose และ Session ID เมื่อเป็นการเช็กชื่อ; Backend query ด้วยผู้ใช้ที่ยืนยันจาก JWT | ผู้ใช้ ห้องเรียน หรือขั้นตอนที่ไม่ตรงกันได้รับ HTTP 403 |
 
 ระบบนี้ใช้กล้อง RGB ผ่าน Browser จึงไม่รับประกันการป้องกัน Deepfake แบบตอบสนองทันที, Virtual Camera, การฉีดวิดีโอเข้า Browser หรือหน้ากากสามมิติระดับสูง การทดสอบต้องรายงานเป็นอัตราการตรวจจับจริง ห้ามอธิบายว่า “ป้องกันได้ 100%” หรือ “ผ่าน ISO/IEC 30107” โดยไม่มีผลทดสอบตามมาตรฐาน
 
 ## 3. ลำดับการทำงาน
+
+### 3.1 ลงทะเบียนใบหน้า
+
+1. นักศึกษาที่เข้าสู่ระบบถ่ายหรือเลือกภาพบัตรนักศึกษา
+2. Backend OCR และตรวจว่ารหัสบนบัตรตรงกับโปรไฟล์ที่ยืนยันจาก JWT
+3. Backend สร้างแถว `face_enrollment_challenges` และ HMAC token รุ่น 4 ที่ผูกบัญชี, purpose `face_enrollment`, อายุ, nonce, action และ prompt delay
+4. Browser ใช้ scanner กลางเก็บ Passive 3 เฟรม, Action 1 เฟรม และ Recovery 1 เฟรม
+5. Backend ตรวจ Token/Evidence, claim challenge, ตรวจ PAD/บุคคลเดียวกัน/action/recovery แล้วใช้ embedding จาก Recovery frame
+6. Supabase RPC บันทึก embedding และ consume challenge แบบ atomic; นักศึกษาไม่สามารถเขียนทับใบหน้าที่มีอยู่แล้ว
+
+### 3.2 เช็กชื่อ
 
 1. นักศึกษาสแกน Dynamic QR ล่าสุด
 2. Backend ตรวจ Session, QR, การลงทะเบียนรายวิชา และรายการเช็กชื่อเดิม
@@ -33,6 +44,7 @@ Protocol v4 เป็นระบบทดลองสำหรับขั้�
    - Challenge ID
    - Account ID
    - Attendance Session ID
+   - Purpose `attendance`
    - เวลาสร้างและหมดอายุ
    - Nonce สุ่ม
    - คำสั่ง `blink` หรือ `move_closer`
@@ -114,7 +126,8 @@ Threshold เหล่านี้เป็นค่าทดลอง ห้า
 - ใช้ Token ของบัญชี A กับ JWT ของบัญชี B
 - แก้ Action, Prompt delay, Timestamp และจำนวนเฟรมใน Evidence
 - ใช้ Token หมดอายุ
-- ส่ง Protocol v3 เข้า Endpoint v4
+- ส่ง token รุ่นเก่าหรือ Evidence ที่ระบุเวอร์ชันไม่ตรงเข้า Endpoint v4
+- สลับ token ระหว่าง enrollment กับ attendance
 
 ## 6. ผลลัพธ์ที่ต้องบันทึก
 
@@ -172,7 +185,7 @@ PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run build
 
 ## 9. การนำไปทดสอบ Preview
 
-- Deploy Frontend จาก branch `livenessFeature`
+- Deploy Frontend จาก branch Preview ที่ต้องการทดสอบ (เช่น `demo3.1`)
 - Build/รัน Backend จาก commit เดียวกัน เพราะ Frontend v4 ส่งฟิลด์เพิ่มจาก v3
 - ไม่ต้องใช้ Supabase migration ใหม่ เนื่องจากใช้ตารางและ RPC ป้องกัน Replay ที่มีอยู่แล้ว
 - ห้ามนำ Frontend v4 ไปใช้กับ Backend v3 หรือ Frontend v3 ไปใช้กับ Backend v4
@@ -190,4 +203,4 @@ PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run build
 7. มีขั้นตอน Manual fallback พร้อม Audit Log สำหรับผู้ใช้ที่ตรวจไม่ผ่าน
 8. ผู้ดูแลยอมรับความเสี่ยงคงเหลือเรื่อง Adaptive replay, Deepfake และ Virtual Camera
 9. Deploy Frontend และ Backend จาก commit เดียวกัน
-10. Merge ผ่าน Pull Request จาก `livenessFeature` เข้า `main` หลังอนุมัติเท่านั้น
+10. Merge ผ่าน Pull Request จาก branch Preview เข้า `main` หลังอนุมัติเท่านั้น

@@ -29,6 +29,7 @@ scripts/verify_face_models.sh
   npm run test:card-image
   npm run test:security
   npm run test:liveness
+  npm run test:sidebar-account
   npm run test:face-runtime
   npm run test:api-origin
   npm run build

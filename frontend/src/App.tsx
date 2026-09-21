@@ -41,6 +41,7 @@ interface UserProfile {
   base_role?: string;
   academic_year?: number | null;
   class_level?: string | null;
+  avatar_url?: string | null;
 }
 
 export default function App() {
@@ -195,7 +196,7 @@ export default function App() {
 
         {/* เส้นทางสำหรับแอดมิน */}
         {activeRole === 'admin' && (
-          <Route path="/admin" element={<AdminLayout temporary={baseRole === 'teacher'} />}>
+          <Route path="/admin" element={<AdminLayout profile={profile} temporary={baseRole === 'teacher'} />}>
             <Route index element={<SystemOverview />} />
             <Route path="users" element={<UserManagement />} />
             <Route path="courses" element={<AllCoursesManagement />} />
@@ -208,7 +209,7 @@ export default function App() {
 
         {/* เส้นทางสำหรับอาจารย์ */}
         {activeRole === 'teacher' && (
-          <Route path="/teacher" element={<TeacherAttendanceProvider><SupportWorkspaceProvider><TeacherLayout /></SupportWorkspaceProvider></TeacherAttendanceProvider>}>
+          <Route path="/teacher" element={<TeacherAttendanceProvider><SupportWorkspaceProvider><TeacherLayout profile={profile} /></SupportWorkspaceProvider></TeacherAttendanceProvider>}>
             <Route index element={<TeacherDashboard />} />
             <Route path="reports" element={<TeacherExportReports />} />
             <Route path="courses/:courseId/manage/:tab?" element={<CourseManagement />} />

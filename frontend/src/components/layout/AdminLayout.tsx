@@ -8,8 +8,9 @@ import { useNotification } from '../notifications/notificationContext';
 import { useResponsiveDrawer } from './useResponsiveDrawer';
 import { useDesktopSidebar } from './useDesktopSidebar';
 import AppBackButton from '../navigation/AppBackButton';
+import SidebarAccountCard, { type SidebarAccountProfile } from './SidebarAccountCard';
 
-export default function AdminLayout({ temporary = false }: { temporary?: boolean }) {
+export default function AdminLayout({ profile, temporary = false }: { profile: SidebarAccountProfile; temporary?: boolean }) {
   const navigate = useNavigate(); // for Redirect
   const location = useLocation(); // passing state สำหรับรับค่า state มาจาก component อื่น
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -72,6 +73,8 @@ export default function AdminLayout({ temporary = false }: { temporary?: boolean
             {sidebar.collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
           </button>
         </div>
+
+        <SidebarAccountCard profile={profile} role={temporary ? 'temporary_admin' : 'admin'} desktopExpanded={sidebar.desktopExpanded} />
 
         {/* Menu Navigate buttons */}
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-5">

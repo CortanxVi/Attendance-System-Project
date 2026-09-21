@@ -36,6 +36,8 @@ class StudentFaceEnrollmentBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 liveness_token=None,
                 liveness_evidence=None,
                 liveness_passive_images=None,
+                liveness_action_image=None,
+                liveness_recovery_image=None,
                 current_user=user(role="admin"),
             )
         self.assertEqual(caught.exception.status_code, 422)
@@ -49,6 +51,8 @@ class StudentFaceEnrollmentBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 liveness_token=None,
                 liveness_evidence=None,
                 liveness_passive_images=None,
+                liveness_action_image=None,
+                liveness_recovery_image=None,
                 current_user=user(role="student"),
             )
         self.assertEqual(caught.exception.status_code, 422)
@@ -63,6 +67,8 @@ class StudentFaceEnrollmentBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 liveness_token=None,
                 liveness_evidence=None,
                 liveness_passive_images=None,
+                liveness_action_image=None,
+                liveness_recovery_image=None,
                 current_user=user(role="admin", temporary=True),
             )
         self.assertEqual(caught.exception.status_code, 403)

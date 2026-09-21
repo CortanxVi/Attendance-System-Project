@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { apiErrorMessage } from './apiError';
-import type { AttendanceLivenessEvidence, PassiveLivenessEvidence } from '../utils/liveness';
+import type { HybridLivenessAction, HybridLivenessEvidence } from '../utils/liveness';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
 const API_BASE_URL = '/api/v1';
@@ -30,9 +30,11 @@ export interface EnrollmentLivenessChallenge {
   student_id: string;
   challenge_expires_at: string;
   challenge_ttl_seconds: number;
-  liveness_protocol_version: 3;
-  liveness_mode: 'passive';
+  liveness_protocol_version: 4;
+  liveness_mode: 'hybrid';
   liveness_sample_count: 3;
+  liveness_action: HybridLivenessAction;
+  liveness_prompt_delay_ms: number;
   liveness_token: string;
 }
 
@@ -80,7 +82,9 @@ export const faceService = {
     livenessToken: string,
     capture: {
       passiveImages: [File, File, File];
-      evidence: PassiveLivenessEvidence;
+      actionImage: File;
+      recoveryImage: File;
+      evidence: HybridLivenessEvidence;
     },
   ): Promise<RegisterResponse> => {
     const formData = new FormData();
@@ -89,6 +93,8 @@ export const faceService = {
     formData.append('liveness_token', livenessToken);
     formData.append('liveness_evidence', JSON.stringify(capture.evidence));
     capture.passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
+    formData.append('liveness_action_image', capture.actionImage);
+    formData.append('liveness_recovery_image', capture.recoveryImage);
     try {
       const response = await axios.post<RegisterResponse>(
         `${API_BASE_URL}/enrollment/register-face`,
@@ -108,7 +114,7 @@ export const faceService = {
     recoveryImage: File,
     challengeId: string,
     livenessToken: string,
-    livenessEvidence: AttendanceLivenessEvidence,
+    livenessEvidence: HybridLivenessEvidence,
   ): Promise<VerifyResponse> => {
     const formData = new FormData();
     passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
