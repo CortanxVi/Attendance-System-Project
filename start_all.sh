@@ -66,17 +66,17 @@ fi
 
 (
   cd "$project_root/backend"
-  exec .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+  exec .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8080
 ) &
 backend_pid=$!
 
 (
   cd "$project_root/frontend"
-  exec npm run dev -- --host 127.0.0.1
+  exec npm run dev -- --host 127.0.0.1 --port 5180
 ) &
 frontend_pid=$!
 
-echo "Backend : http://127.0.0.1:8000"
+echo "Backend : http://127.0.0.1:8080"
 echo "OCR     : http://127.0.0.1:3001 (ready)"
-echo "Frontend: http://127.0.0.1:5173"
+echo "Frontend: http://127.0.0.1:5180"
 wait -n "$backend_pid" "$ocr_pid" "$frontend_pid"

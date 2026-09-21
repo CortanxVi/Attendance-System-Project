@@ -5,7 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { readFileSync } from 'node:fs'
 
 const mobileHttpsEnabled = process.env.DEV_MOBILE_HTTPS === '1'
-const backendPort = process.env.DEV_BACKEND_PORT || '8000'
+const backendPort = process.env.DEV_BACKEND_PORT || '8080'
 const mobileHttps = mobileHttpsEnabled
   ? {
       cert: readFileSync(process.env.DEV_HTTPS_CERT || ''),
