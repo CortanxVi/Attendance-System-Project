@@ -1,8 +1,12 @@
 # คู่มือ Deployment สำหรับ Ubuntu Server 24.04 LTS
 
-สถาปัตยกรรมนี้ใช้ Supabase แบบ hosted BaaS โดยให้ Mini PC รัน Nginx, Frontend แบบ static, FastAPI และ Light OCR ห้ามใช้ `start_all.sh`, `start_all.bat` หรือ Vite development server เป็น Production
+ตรวจสอบล่าสุด: **22 กันยายน 2026**, branch `main`, commit `63727b1`
 
-ถ้าต้องการแยก Frontend ไป Vercel/Static Cloud และให้ Mini PC รันเฉพาะ API/OCR/Face inference ให้ใช้คู่มือ `docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md` และตัวติดตั้งพร้อมแฟล็ก `--api-only` แทนสถาปัตยกรรม same-origin ในเอกสารนี้
+สถาปัตยกรรมนี้เป็นทางเลือก **same-origin** ที่ให้ Mini PC รัน Nginx, Frontend static, FastAPI และ Light OCR โดยยังใช้ Supabase แบบ hosted BaaS. ห้ามใช้ `start_all.sh`, `start_all.bat` หรือ Vite development server เป็น Production
+
+ระบบปัจจุบันเลือก Frontend บน Vercel และ Mini PC รันเฉพาะ API/OCR/Face inference จึงควรใช้ `docs/MAIN_PRODUCTION_DEPLOYMENT_VERCEL_DOCKER_NGINX_TH.md` เป็นคู่มือหลัก. เอกสารฉบับนี้เก็บไว้สำหรับกรณีที่องค์กรต้องการย้าย Frontend static มาอยู่หลัง Nginx origin เดียวกันเท่านั้น
+
+ก่อนติดตั้ง release ปัจจุบันต้องยืนยัน migration 19 ไฟล์ตรงกับ Cloud, `scripts/verify_release.sh` ผ่าน, กล้องเต็มจอ/Hybrid Liveness v4 ใช้งานร่วมกับ Backend revision เดียวกัน และรายงานรอบภาคเรียนใหม่ทำงานครบทั้ง archive, restore และ rollover
 
 ## 1. สถาปัตยกรรมและพอร์ต
 
@@ -176,16 +180,17 @@ sudo curl -fsS -H 'Host: localhost' http://127.0.0.1:8000/health/ready
 
 1. Google login/logout และ session expiry
 2. role matrix: anonymous, student, teacher, temporary admin, permanent admin
-3. โปรไฟล์และชั้นปี 1–8
+3. โปรไฟล์และชั้นปีแบบอ่านอย่างเดียวที่คำนวณจากรหัสนักศึกษา
 4. สร้างวิชา รหัสคลาส หมุน/ปิด/หมดอายุ และอนุมัติสมาชิก
 5. roster `.xlsx`/`.csv`: valid, duplicate, formula, malformed และไฟล์เกินขนาด
 6. ลงทะเบียนใบหน้า: genuine, static photo, printed photo, screen replay, wink, nod, multiple faces และ challenge replay
 7. Dynamic QR: current, expired, reused, wrong course และปิดคาบ
-8. เช็คชื่อใบหน้า/OCR และ NFC พร้อมตรวจ Realtime บนหน้าอาจารย์
+8. เช็คชื่อใบหน้าหลัง Dynamic QR โดยไม่อัปโหลดบัตรซ้ำ, NFC และ Realtime บนหน้าอาจารย์
 9. คำร้อง attachment preview, unauthorized access และไฟล์อันตราย
-10. export รายงานและตรวจ spreadsheet formula safety
-11. burst 30 และ 40 คนด้วยภาพจำลองความละเอียดจริง
-12. soak 1–2 ชั่วโมง, restart OCR/Backend, network interruption และ backup restore
+10. export รายงาน Excel/CSV/PDF, คะแนน `1/0.5/0`, สัญลักษณ์ `1// /X`, เกณฑ์รายวิชา และ spreadsheet formula safety
+11. archive/restore คาบ, rollover ภาคเรียน และยืนยันว่ารายงาน active เริ่มนับครั้งใหม่โดยข้อมูลเก่ายังอยู่
+12. burst 30 และ 40 คนด้วยภาพจำลองความละเอียดจริง
+13. soak 1–2 ชั่วโมง, restart OCR/Backend, network interruption และ backup restore
 
 บันทึกเฉพาะผล aggregate, latency, CPU/RAM, HTTP status, Request ID และหมวด error ห้ามเก็บภาพใบหน้าหรือข้อมูลนักศึกษาจริงในหลักฐานทดสอบ
 

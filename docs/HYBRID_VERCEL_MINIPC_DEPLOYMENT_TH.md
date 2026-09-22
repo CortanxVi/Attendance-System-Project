@@ -1,6 +1,6 @@
 # คู่มือ Deployment ฉบับ Production: Vercel + Nginx + Docker บน Mini PC
 
-อัปเดต: 14 กันยายน 2026
+อัปเดต: **22 กันยายน 2026**, branch `main`, commit `63727b1`
 
 คู่มือนี้อธิบายการนำโปรเจกต์ AttendanceDemo1.2 ขึ้นใช้งานจริงตั้งแต่เตรียม Git branch, ตรวจและ build โค้ด, ตั้ง Supabase, Environment Variables, DNS/TLS, Docker Compose, Nginx, Vercel, การเชื่อม URL ระหว่างระบบ, การทดสอบ และการ rollback
 
@@ -13,6 +13,8 @@
 - **Supabase** ยังคงเป็นบริการ BaaS สำหรับ Auth, PostgreSQL, Storage และ Realtime ไม่ได้รันใน Docker ชุดนี้
 
 > ตัวอย่างทั้งหมดใช้ชื่อสมมติ ห้ามคัดลอก key หรือ secret ตัวอย่างไปใช้จริง
+
+**สถานะอ้างอิงของ release ปัจจุบัน:** repository มี Supabase migration 19 ไฟล์ที่ตรงกับ environment ที่เชื่อมต่อ, Backend tests 116 รายการ, Frontend build 1,918 modules และ PWA precache 69 entries ผ่านในการตรวจล่าสุด ตัวเลขนี้เป็น snapshot ไม่ใช่สิ่งรับรองว่า runtime บน Mini PC ปัจจุบันพร้อมใช้; ยังต้องตรวจ container, Nginx, DNS, TLS และ public health ทุกครั้งก่อนปล่อยใช้งาน
 
 ## 1. ภาพรวมสถาปัตยกรรม
 
@@ -49,13 +51,13 @@ Nginx เป็นช่องทางสาธารณะเพียงจ�
 | Backend API | `https://api.attendance.example.ac.th` | origin เท่านั้น ไม่มี `/api` หรือ `/api/v1` |
 | Supabase | `https://YOUR_PROJECT_REF.supabase.co` | URL จากหน้า Connect/API Settings |
 | Vercel Production branch | `main` | branch ที่ผู้ใช้จริงได้รับ |
-| Vercel Preview branch | `demo3.1` | branch สำหรับ QA ก่อน merge |
+| Vercel Preview branch | branch ชั่วคราว (ถ้าใช้) | สำหรับ QA แบบแยก environment; ไม่ผูกกับชื่อ `demo3.1` |
 
 Vercel ไม่ได้บังคับว่าต้องอ่าน `main` เสมอ แต่หนึ่ง Project จะมี **Production Branch** หนึ่ง branch ซึ่งโดยทั่วไป Vercelเลือก `main` ให้ตอน import ส่วน branch อื่นจะเป็น Preview สามารถเปลี่ยนได้ที่ **Project Settings -> Environments -> Production -> Branch Tracking**
 
 ## 2. สิ่งที่ผู้ดูแลต้องเข้าใจก่อนเริ่ม
 
-1. **Git release flow** — `demo3.1` เป็น Preview และ `main` เป็น Production; ห้าม force-push ทับประวัติ Production
+1. **Git release flow** — `main` เป็น source of truth ของ Production; Preview เป็นทางเลือกชั่วคราวและต้องแยกข้อมูล/คีย์; ห้าม force-push ทับประวัติ Production
 2. **Build-time environment** — ค่า `VITE_*` ถูกฝังลง JavaScript ตอน build การแก้ค่าใน Vercelต้อง redeploy
 3. **Secret boundary** — ค่าใน Browser เปิดดูได้ทั้งหมด; `SUPABASE_KEY`, OCR token และ signing keys ต้องอยู่เฉพาะ Mini PC
 4. **CORS** — Backend ต้องอนุญาต Frontend origin แบบตรงตัว ไม่ใช่ API origin และไม่ใช้ `*` ใน Production
@@ -98,26 +100,26 @@ git branch -vv
 
 ถ้ามีไฟล์ที่ยังไม่ commit ให้ตรวจว่าเป็นงานของใคร อย่าใช้ `git reset --hard`, `git clean -fd` หรือ force-push เพื่อลบทิ้ง
 
-### 4.2 ทดสอบ `demo3.1` เป็น Preview
+### 4.2 ทดสอบ branch ชั่วคราวเป็น Preview (ไม่บังคับ)
 
 ```bash
-git switch demo3.1
-git pull --ff-only origin demo3.1
+git switch <review-branch>
+git pull --ff-only origin <review-branch>
 scripts/verify_release.sh
-git push origin demo3.1
+git push origin <review-branch>
 ```
 
 เมื่อ push branch ที่ไม่ใช่ Production Branch Vercel จะสร้าง Preview Deployment ให้ ทดสอบ Preview กับ **Supabase Staging และ Staging API** ก่อน ไม่ควรให้ Preview build เข้าถึงข้อมูล Production โดยไม่จำเป็น
 
-### 4.3 Promote ไป `main`
+### 4.3 Promote commit ที่ตรวจแล้วไป `main`
 
-วิธีที่แนะนำคือเปิด Pull Request จาก `demo3.1` ไป `main`, ให้ checks ผ่านและ review ก่อน merge หากทำจาก command line:
+วิธีที่แนะนำคือเปิด Pull Request จาก branch ที่ตรวจแล้วไป `main`, ให้ checks ผ่านและ review ก่อน merge หากทำจาก command line:
 
 ```bash
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git merge --no-ff demo3.1
+git merge --no-ff <review-branch>
 scripts/verify_release.sh
 git push origin main
 ```
@@ -135,7 +137,7 @@ git push origin v1.0.0
 git rev-parse HEAD
 ```
 
-> ใน Project นี้ `main` และ `origin/main` มี release จาก `demo3.1` อยู่แล้ว ณ วันที่อัปเดตคู่มือ แต่ทุกครั้งต้องตรวจสถานะใหม่ อย่าอาศัยข้อความนี้เป็นหลักฐานแทน Git
+> ณ วันที่ตรวจ `main` และ `origin/main` อยู่ commit `63727b1` ตรงกัน แต่ทุก release ต้องตรวจสถานะใหม่ อย่าอาศัยข้อความนี้เป็นหลักฐานแทน Git
 
 ## 5. ตรวจและ build โปรเจกต์ก่อน Production
 
@@ -194,7 +196,7 @@ Supabase เป็น hosted BaaS ในสถาปัตยกรรมนี�
 
 ### 6.1 แยก Staging และ Production
 
-- Staging ใช้ข้อมูลทดสอบและเชื่อมกับ Vercel Preview `demo3.1`
+- Staging ใช้ข้อมูลทดสอบและเชื่อมกับ Vercel Preview เฉพาะเมื่อทีมสร้าง branch ทดสอบ
 - Production ใช้ข้อมูลจริงและเชื่อมกับ Vercel Production `main`
 - ห้ามนำ service-role/secret key ของ Production ไปใส่ Preview หรือ Frontend
 
@@ -698,7 +700,7 @@ VITE_API_ORIGIN=https://api.attendance.example.ac.th
 - เลือก target **Production** ให้ถูก
 - เมื่อแก้ค่า ต้องสร้าง deployment ใหม่ เพราะเป็น build-time variables
 
-สำหรับ Preview branch `demo3.1` ให้เลือก **Preview** และกำหนด branch-specific variables ไป Supabase/API Staging ถ้าใช้ random Preview URL กับ OAuth/CORS จะดูแลยาก ควรใช้ stable branch domain หรือ Vercel Custom Environment ตาม plan
+หากใช้ Preview branch ให้เลือก **Preview** และกำหนด branch-specific variables ไป Supabase/API Staging ถ้าใช้ random Preview URL กับ OAuth/CORS จะดูแลยาก ควรใช้ stable branch domain หรือ Vercel Custom Environment ตาม plan; หากไม่มี Preview ให้ตั้งเฉพาะ Production สำหรับ `main`
 
 กำหนด Frontend Production URL ที่เป็น canonical เพียงชื่อเดียวและให้ผู้ใช้เข้าผ่านชื่อนั้น หากยังเปิดทั้ง custom domain และชื่อ `*.vercel.app` ให้ใส่ทั้งสอง origin แบบตรงตัวใน `FRONTEND_ORIGINS`/Supabase Redirect URLs หรือกำหนด redirect ไป canonical domain มิฉะนั้น build เดียวกันอาจใช้งานผ่าน domain หนึ่งได้แต่อีก domain ติด CORS/OAuth
 

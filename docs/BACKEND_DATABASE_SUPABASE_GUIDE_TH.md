@@ -1,6 +1,8 @@
 # คู่มือ Backend, Database และ Supabase ของระบบบันทึกเวลาเข้าเรียน
 
-เอกสารนี้อธิบายสถาปัตยกรรมและโค้ดของโปรเจกต์ตามสถานะที่ตรวจสอบเมื่อวันที่ 13 กันยายน 2026 ครอบคลุม Frontend, FastAPI Backend, OCR Service, Supabase Auth, PostgreSQL, Storage, Row Level Security (RLS), migration และลำดับการทำงานของฟีเจอร์สำคัญ
+เอกสารนี้อธิบายสถาปัตยกรรมและโค้ดของโปรเจกต์ตามสถานะที่ตรวจสอบเมื่อวันที่ **22 กันยายน 2026** จาก branch `main` ณ commit `63727b1` ครอบคลุม Frontend, FastAPI Backend, OCR Service, Supabase Auth, PostgreSQL, Storage, Row Level Security (RLS), migration และลำดับการทำงานของฟีเจอร์สำคัญ
+
+สถานะอ้างอิงปัจจุบันคือ migration ใน repository 19 ไฟล์ถูกนำขึ้นโปรเจกต์ Supabase ที่เชื่อมต่อแล้ว, ตาราง `public` 18 ตาราง, PostgreSQL function ใน `public` 18 ฟังก์ชัน, private Storage bucket สำหรับไฟล์คำร้องหนึ่ง bucket และ Realtime ของ `attendance_records`. การเปลี่ยนล่าสุดเพิ่มรอบรายงานแบบเก็บประวัติ, การคิดคะแนนมาสาย 0.5, การคำนวณชั้นปีจากรหัสนักศึกษา, กล้อง QR/ใบหน้าเต็มหน้าจอ, โปรไฟล์อาจารย์/ผู้ดูแลแบบ modal และ confirmation portal ที่อยู่เหนือหน้าต่างเจ้าของงาน
 
 > ข้อควรระวัง: ห้ามคัดลอกค่า API key, access token, service-role/secret key, ข้อมูลนักศึกษา, เวกเตอร์ใบหน้า หรือ URL ภายในที่เป็นความลับลง Git, screenshot, issue หรือ log ใด ๆ
 
@@ -277,6 +279,8 @@ temporary_admin_requests/enrollments/grants ผูกกับ profiles(teacher/
 - `qr_token` เป็น token ปัจจุบัน; `qr_token_rotated_at` ใช้ตรวจอายุ.
 - `qr_refresh_rate_seconds` ถูกจำกัดช่วง 10–15 วินาทีในฐานข้อมูล.
 - `grace_period_minutes` เก็บช่วงผ่อนผันของ session.
+- `report_semester`, `report_year` เป็น snapshot ของรอบรายงานขณะสร้างคาบ.
+- `archived_at`, `archived_by`, `archive_reason` ใช้พักคาบออกจากรายงานปัจจุบันโดยไม่ลบหลักฐานเดิม.
 
 #### `attendance_records`
 
@@ -373,6 +377,11 @@ RLS ต้องเปิดพร้อม policy ที่ตั้งใจ�
 - `bulk_set_attendance_status`: เปลี่ยนหลาย attendance records ใน transaction.
 - `review_course_join_request`: อนุมัติ/ปฏิเสธ join request แบบสอดคล้องกัน.
 - `record_temporary_admin_pin_failure`: เพิ่ม failed attempt และ lockout แบบ atomic.
+- `archive_attendance_sessions`: พักคาบที่ปิดแล้วบางคาบหรือทั้งหมดออกจากรายงาน active โดยไม่ลบ record.
+- `restore_attendance_sessions`: คืนคาบที่พักไว้ได้เฉพาะรอบภาคเรียนปัจจุบัน.
+- `rollover_attendance_period`: ปิดรอบเดิม เก็บคาบไว้ใน archive และเริ่มภาคเรียนใหม่ด้วยรายวิชา/รายชื่อ/เกณฑ์เดิม.
+
+Trigger `snapshot_attendance_session_period` บันทึก semester/year ลงคาบใหม่โดยอัตโนมัติ และ trigger `student_support_message_touch_request` อัปเดตเวลากิจกรรมของคำร้องเมื่อมีข้อความใหม่
 
 ฟังก์ชัน `SECURITY DEFINER` ทำงานด้วยสิทธิ์ของ owner จึงต้องตรวจ `search_path`, ตรวจ caller ภายใน function และจำกัด `GRANT EXECUTE` ทุกครั้งที่แก้ migration ห้ามสร้าง definer function แล้วเปิดให้ `public` โดยไม่ review.
 
@@ -506,6 +515,10 @@ npm run build
 npm run test:api-origin
 npm run test:liveness
 npm run test:face-runtime
+npm run test:camera-quality
+npm run test:sidebar-account
+npm run test:overlays
+npm run test:report-export
 ```
 
 Vite รุ่นปัจจุบันต้องใช้ Node.js 20.19+ หรือ 22.12+ แนะนำ Node 22 LTS ตามเอกสารโปรเจกต์
@@ -533,13 +546,16 @@ curl http://127.0.0.1:8000/health/ready
 
 ก่อน Production ต้องมี backup/restore test, monitoring, log retention, incident procedure, biometric consent/retention policy, key rotation และ rollback ที่ทดลองแล้ว
 
-## 15. สิ่งที่เปลี่ยนในหน้าจอนักศึกษารอบนี้
+## 15. สถานะหน้าจอและกฎธุรกิจปัจจุบัน
 
 - ถอด custom Pull to Refresh และ indicator ออกจาก Student, Teacher และ Admin ทั้งระบบ; ใช้พฤติกรรม refresh ปกติของ browser/PWA แทน.
 - หน้านักศึกษาหลักใช้ `student-page` ร่วมกัน มี padding แบบ responsive, safe-area และความกว้างสูงสุด 480px เพื่อให้สมดุลบนโทรศัพท์หลายรุ่น.
-- หน้าสแกน QR เปิดเต็ม viewport, ใช้กล้องหลัง, pause ระหว่างตรวจ API, มีสถานะ success/error และ retry.
-- กด Back/Escape เพื่อปิดกล้องได้, focus กลับปุ่มเปิดกล้อง, dialog มี focus trap และข้อความสำหรับ assistive technology.
-- รอบ redesign เดิมไม่ได้แก้ schema; branch `livenessFeature` เพิ่ม contract ของ Backend/Frontend สำหรับ Hybrid Liveness v4 โดยยังใช้ตารางและ RPC เดิม.
+- หน้าสแกน QR เปิดเป็น document-level portal เต็ม viewport, ใช้กล้องหลัง, pause ระหว่างตรวจ API, ปิดเสียงตรวจพบ QR และมีสถานะ success/error/retry.
+- หลัง QR ผ่าน หน้าตรวจใบหน้าเปิดเต็ม viewport เช่นเดียวกัน; Student header/bottom navigation ถูกทำให้ inert จนสำเร็จหรือยกเลิก. ขั้นตอนลงทะเบียนใบหน้าใช้ scanner เดียวกัน.
+- แผงกล้องเป็นปุ่มขนาดเล็กและขยายเมื่อกด โดยแสดงเลนส์, resolution, autofocus, zoom และ sharpness เฉพาะที่อุปกรณ์รองรับ. กล้องหน้าถูก mirror เฉพาะ preview แต่หลักฐานยังใช้ orientation จริง.
+- ชั้นปีเป็นค่าอ่านอย่างเดียวที่ Backend คำนวณจากสองหลักปีรับเข้าในรหัสนักศึกษา 13 หลัก; นักศึกษาแก้เองไม่ได้.
+- ประวัติและรายงานนับเฉพาะคาบที่ไม่ถูก archive ในรอบ active. คะแนนมาตรฐานคือมาเรียน `1`, มาสาย `0.5`, ขาด `0`; เกณฑ์ผ่านยังมาจากค่าของรายวิชา.
+- การ์ดบัญชีอาจารย์/ผู้ดูแลเปิด profile modal ที่แสดงรูป Google, ชื่อ, อีเมลและ role. Confirmation และ reason dialog ใช้ document portal ชั้น `--z-confirmation` เพื่อไม่ซ่อนหลัง modal อื่น.
 
 ## 16. เอกสารอ้างอิง Supabase
 

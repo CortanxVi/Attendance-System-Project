@@ -1,5 +1,7 @@
 # แผนทดสอบ Liveness Protocol v4 สำหรับลงทะเบียนใบหน้าและเช็คชื่อ
 
+ตรวจสอบล่าสุด: **22 กันยายน 2569**, branch `main`, commit `63727b1`. Protocol v4 ถูกใช้ร่วมกันในทั้ง enrollment และ attendance แล้ว โดยหน้ากล้องทั้งสองเปิดเป็น fullscreen document portal และใช้ชุดควบคุมคุณภาพกล้องเดียวกัน
+
 ## 1. วัตถุประสงค์
 
 Protocol v4 เป็นระบบ Hybrid Liveness กลางที่ใช้ทั้งขั้นตอนลงทะเบียนใบหน้าและเช็กชื่อด้วยใบหน้า มีเป้าหมายเพิ่มการป้องกันภัย 5 กลุ่ม โดยรักษาการใช้งานให้สั้นและเข้าใจง่าย:
@@ -32,6 +34,9 @@ Protocol v4 เป็นระบบ Hybrid Liveness กลางที่ใช
 2. Backend OCR และตรวจว่ารหัสบนบัตรตรงกับโปรไฟล์ที่ยืนยันจาก JWT
 3. Backend สร้างแถว `face_enrollment_challenges` และ HMAC token รุ่น 4 ที่ผูกบัญชี, purpose `face_enrollment`, อายุ, nonce, action และ prompt delay
 4. Browser ใช้ scanner กลางเก็บ Passive 3 เฟรม, Action 1 เฟรม และ Recovery 1 เฟรม
+   - scanner ปิด Student header/bottom navigation ตลอดรอบกล้อง;
+   - preview กล้องหน้าถูก mirror เพื่อการใช้งาน แต่ภาพหลักฐานคง orientation จริง;
+   - ปุ่มกล้องแบบ compact เปิดเลือกเลนส์และ capability ที่อุปกรณ์รองรับโดยไม่บดบังกรอบหน้า.
 5. Backend ตรวจ Token/Evidence, claim challenge, ตรวจ PAD/บุคคลเดียวกัน/action/recovery แล้วใช้ embedding จาก Recovery frame
 6. Supabase RPC บันทึก embedding และ consume challenge แบบ atomic; นักศึกษาไม่สามารถเขียนทับใบหน้าที่มีอยู่แล้ว
 
@@ -178,16 +183,18 @@ cd backend
 cd ../frontend
 PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run lint
 PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run test:liveness
+PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run test:camera-quality
+PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run test:overlays
 PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run build
 ```
 
 หากตำแหน่ง Node.js ต่างจากตัวอย่าง ให้ใช้ `nvm use 22` แล้วรัน `npm` ตามปกติ ไม่ควร hard-code path นี้ใน Production script
 
-## 9. การนำไปทดสอบ Preview
+## 9. การนำ revision ปัจจุบันไปทดสอบก่อน Production
 
-- Deploy Frontend จาก branch Preview ที่ต้องการทดสอบ (เช่น `demo3.1`)
-- Build/รัน Backend จาก commit เดียวกัน เพราะ Frontend v4 ส่งฟิลด์เพิ่มจาก v3
-- ไม่ต้องใช้ Supabase migration ใหม่ เนื่องจากใช้ตารางและ RPC ป้องกัน Replay ที่มีอยู่แล้ว
+- Production source of truth คือ branch `main`. หากสร้าง branch ทดสอบชั่วคราว ให้แยก Vercel environment/API/Supabase test data และ merge ผ่าน review ก่อนกลับ `main`; ไม่ผูกขั้นตอนกับชื่อ `demo3.1` อีกต่อไป
+- Build/รัน Frontend และ Backend จาก commit เดียวกัน เพราะ Frontend v4 ส่งฟิลด์หลักฐานเฉพาะรุ่น
+- ตรวจให้ migration ทั้ง 19 ไฟล์—including secure face enrollment และ attendance reporting periods—ตรงกับ environment ก่อนทดสอบ
 - ห้ามนำ Frontend v4 ไปใช้กับ Backend v3 หรือ Frontend v3 ไปใช้กับ Backend v4
 - ทดสอบด้วย Supabase project/environment สำหรับ Preview ถ้ามี เพื่อไม่ให้ Attendance ทดลองปะปน Production
 - หากจำเป็นต้องใช้ฐานข้อมูลเดียวกัน ให้ใช้รายวิชา Session และบัญชีทดสอบโดยเฉพาะ และลบข้อมูลตามกระบวนการที่ผู้ดูแลอนุมัติ
@@ -203,4 +210,4 @@ PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" npm run build
 7. มีขั้นตอน Manual fallback พร้อม Audit Log สำหรับผู้ใช้ที่ตรวจไม่ผ่าน
 8. ผู้ดูแลยอมรับความเสี่ยงคงเหลือเรื่อง Adaptive replay, Deepfake และ Virtual Camera
 9. Deploy Frontend และ Backend จาก commit เดียวกัน
-10. Merge ผ่าน Pull Request จาก branch Preview เข้า `main` หลังอนุมัติเท่านั้น
+10. ให้ release บน `main` มาจาก commit ที่ review แล้วและผ่าน `scripts/verify_release.sh`; ห้าม force-push เพื่อข้ามประวัติ Production

@@ -1,6 +1,6 @@
 # คู่มือสำรวจ Supabase BaaS และโค้ด Backend ของระบบเช็คชื่อ
 
-ปรับปรุง 16 กันยายน 2026 — เอกสารนี้เขียนใหม่จากซอร์สโค้ดใน repository และการตรวจ Supabase โปรเจกต์ที่เชื่อมต่อแบบอ่านอย่างเดียวในวันเดียวกัน ไม่ใช่คำสั่งให้สร้างตารางใหม่หรือเปิดเผยข้อมูลจริงของนักศึกษา ค่าใน Cloud เปลี่ยนได้ภายหลัง จึงควรใช้ขั้นตอนตรวจซ้ำในข้อ 11 ก่อนสรุปสถานะ Production
+ปรับปรุง **22 กันยายน 2026**, branch `main`, commit `63727b1` — เอกสารนี้อ้างจากซอร์สโค้ด, migration 19 ไฟล์ และผลตรวจ Supabase แบบอ่านอย่างเดียว ไม่ใช่คำสั่งให้สร้างตารางใหม่หรือเปิดเผยข้อมูลจริง ค่าใน Cloud เปลี่ยนได้ภายหลัง จึงควรใช้ขั้นตอนตรวจซ้ำในข้อ 11 ก่อนสรุป Production
 
 > ความปลอดภัย: ห้ามส่งออก API secret/service-role key, OAuth client secret, access token, PIN hash, face embedding, raw biometric frame, รายชื่อนักศึกษา หรือเนื้อหาคำร้องลง Git, issue, screenshot หรือไฟล์คู่มือนี้ ใช้คำสั่งดู *โครงสร้าง* ก่อนดูแถวข้อมูล และจำกัดผู้มีสิทธิ์ Dashboard ตามหน้าที่
 
@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | React/Vite/PWA | Vercel หรือ static host | UI, Google sign-in, QR/camera, ส่ง Bearer token ไป API; ไม่มี server secret |
 | Supabase Auth | Supabase Cloud | บัญชีผู้ใช้, Google OAuth, session/access token, callback/redirect |
-| PostgreSQL + PostgREST | Supabase Cloud | 18 ตาราง `public`, RLS, index/constraint, trigger, 18 ฟังก์ชันที่ตรวจพบ |
+| PostgreSQL + PostgREST | Supabase Cloud | 18 ตาราง `public`, RLS, index/constraint, 18 public functions, private policy helpers และ 2 application triggers |
 | Storage | Supabase Cloud | bucket private `student-request-files` เก็บไฟล์แนบคำร้อง |
 | Realtime | Supabase Cloud | publication สำหรับ `attendance_records` เท่านั้นตามสถานะที่ตรวจพบ |
 | Edge Functions | Supabase Cloud | **ยังไม่มีฟังก์ชันที่ deploy** ณ วันตรวจสอบ |
@@ -91,7 +91,7 @@ rg --files supabase/migrations | sort
 | `profiles` | `id`, `email`, `full_name`, `student_id`, `role`, `face_registered`, `created_at`, `face_embedding`, `nfc_uid`, `academic_year`, `class_level` | โปรไฟล์ผูก `auth.users`; role student/teacher/admin; embedding และ NFC เป็นข้อมูลอ่อนไหว ไม่ export |
 | `courses` | `id`, `course_code`, `course_name`, `teacher_id`, `created_at`, `section`, `total_sessions`, `late_threshold_minutes`, `absent_threshold_minutes`, `max_absence_percent`, `year`, `semester` | รายวิชา/กลุ่ม/เจ้าของวิชาและเกณฑ์มาเรียน-สาย-ขาด |
 | `enrollments` | `id`, `course_id`, `student_id` | ความสัมพันธ์นักศึกษา↔รายวิชา ใช้ตรวจสิทธิ์เช็คชื่อ/คำร้อง |
-| `attendance_sessions` | `id`, `course_id`, `opened_by`, `qr_token`, `qr_refresh_rate_seconds`, `grace_period_minutes`, `status`, `created_at`, `closed_at`, `qr_token_rotated_at` | คาบที่เปิด/ปิดและ QR token หมุนเวียน; token ห้ามเผยแพร่ |
+| `attendance_sessions` | `id`, `course_id`, `opened_by`, `qr_token`, `qr_refresh_rate_seconds`, `grace_period_minutes`, `status`, `created_at`, `closed_at`, `qr_token_rotated_at`, `report_semester`, `report_year`, `archived_at`, `archived_by`, `archive_reason` | คาบเรียน, QR token หมุนเวียน และ snapshot รอบรายงาน; archive เป็นแบบกู้คืนได้ ไม่ลบ attendance record |
 | `attendance_records` | `id`, `session_id`, `student_id`, `check_in_time`, `status`, `method`, `similarity_score` | ผลเช็คชื่อรายคน/คาบ; Realtime publication ใช้ตารางนี้ |
 | `attendance_checkin_challenges` | `id`, `session_id`, `student_id`, `expires_at`, `consumed_at`, `created_at`, `processing_at`, `processing_token` | สิทธิ์ชั่วคราวหลังสแกน QR ป้องกันใช้ซ้ำ/แข่งขันกัน |
 | `face_enrollment_challenges` | `id`, `student_user_id`, `student_id`, `expires_at`, `consumed_at`, `processing_at`, `processing_token`, `created_at` | สิทธิ์ลงทะเบียนใบหน้าครั้งเดียวหลังตรวจบัตร |
@@ -142,7 +142,7 @@ Supabase Storage ที่ตรวจพบมี bucket `student-request-files
 
 ## 6. Database Functions (RPC), Trigger และ Realtime
 
-ตรวจพบ 18 ฟังก์ชันใน schema ที่เกี่ยวข้อง (`public`/`private`):
+ตรวจพบ 18 ฟังก์ชันใน `public` และ helper ใน `private` อีก 3 ฟังก์ชัน:
 
 | ฟังก์ชัน | หน้าที่โดยสรุป |
 | --- | --- |
@@ -155,8 +155,9 @@ Supabase Storage ที่ตรวจพบมี bucket `student-request-files
 | `public.touch_student_support_request` | อัปเดตเวลาเมื่อมีข้อความใหม่; เป็น `SECURITY DEFINER` และถูกเรียกโดย trigger |
 | `public.claim_face_attendance_challenge`, `release_face_attendance_challenge`, `renew_face_attendance_challenge`, `finalize_face_attendance` | claim/lease/release/finalize challenge เข้าเรียนแบบครั้งเดียว; เป็น `SECURITY INVOKER` ตามที่ตรวจพบ |
 | `public.claim_face_enrollment_challenge`, `release_face_enrollment_challenge`, `renew_face_enrollment_challenge`, `finalize_face_enrollment` | วงจร challenge ลงทะเบียนใบหน้า; เป็น `SECURITY INVOKER` ตามที่ตรวจพบ |
+| `public.archive_attendance_sessions`, `restore_attendance_sessions`, `rollover_attendance_period` | จัดการรอบรายงานแบบ atomic และกู้คืนได้; `SECURITY DEFINER`, `search_path` ว่าง และเรียกได้เฉพาะ backend/service role |
 
-Trigger ที่ตรวจพบสำหรับคำร้อง: `student_support_message_touch_request` บน `student_support_messages` หลัง insert. Realtime publication ที่ตรวจพบมี `public.attendance_records` เท่านั้น; UI อาจใช้ polling เป็น fallback. ไม่มี Supabase Edge Function ที่ deploy ณ วันตรวจสอบ. อย่านำคำว่า RPC ไปสับสนกับ FastAPI route: RPC คือ PostgreSQL function ที่เรียกผ่าน Supabase/PostgREST.
+Application trigger ที่ตรวจพบมี 2 ตัว: `student_support_message_touch_request` บน `student_support_messages` หลัง insert และ `snapshot_attendance_session_period` ที่บันทึกภาค/ปีรายงานลง session. Realtime publication ที่ตรวจพบมี `public.attendance_records` เท่านั้น; UI ใช้ polling เป็น fallback. ไม่มี Supabase Edge Function ที่ deploy ณ วันตรวจ. อย่านำคำว่า RPC ไปสับสนกับ FastAPI route: RPC คือ PostgreSQL function ที่เรียกผ่าน Supabase/PostgREST.
 
 ### วิธีดู SQL ของฟังก์ชัน
 
@@ -227,13 +228,13 @@ Production Compose ที่ [`deployment/docker/compose.production.yml`](../dep
 2. ค้น `create table`, `alter table`, `create policy`, `create function`, `create trigger`, `storage.buckets` เพื่อดูว่าคำสั่งต้นฉบับสร้างอะไร.
 3. ไป Supabase Dashboard → **Database → Migrations** เพื่อดูประวัติที่ Cloud ประยุกต์จริง (ชื่อเมนูอาจเปลี่ยนตาม Dashboard รุ่น); เทียบ timestamp กับไฟล์ใน repo.
 4. ถ้าต้องแก้ schema ให้สร้างไฟล์ migration ใหม่ใน branch ทดสอบ, review security/rollback, ทดสอบกับฐานข้อมูลแยกก่อน แล้วจึง deploy; อย่าแก้ SQL เก่าเพื่อหวังให้ Cloud ย้อนประยุกต์เอง.
-5. การปรับไฟล์คำร้องรอบนี้ **ไม่ต้อง migration** เพราะจัดเก็บภาพใหม่เป็น JPEG/PNG ซึ่งผ่าน constraint ของ bucket/table เดิม. ต้อง deploy Backend image ใหม่เพื่อให้รองรับ HEIC/AVIF ฯลฯ และ endpoint `/download`; จากนั้น deploy Frontend ใหม่.
+5. Migration ล่าสุด `20260921111209_attendance_reporting_periods.sql` เพิ่ม snapshot/archive fields, trigger และ RPC archive/restore/rollover. ส่วนการรองรับ HEIC/AVIF ในคำร้องไม่เพิ่ม schema เพราะ Backend normalize เป็น JPEG/PNG ก่อนเก็บ.
 
 ## 10. วิธีดูใน Supabase Dashboard แบบทีละหน้าจอ
 
 1. เข้าสู่ Dashboard ด้วยบัญชีผู้ดูแลที่ได้รับสิทธิ์ เลือกโปรเจกต์ให้ตรงกับ `VITE_SUPABASE_URL`/`SUPABASE_URL` โดยเทียบ project reference **บนเครื่องตนเอง**; อย่าโพสต์ URL/private config.
 2. **Database → Tables → schema `public`**: เปิดตารางแต่ละตัว, ดู Columns, Primary/Foreign keys, Constraints, Indexes และ RLS Policies. เริ่มจาก `courses`, `enrollments`, `attendance_sessions`, `attendance_records`, `student_support_*` เพื่อเห็นความสัมพันธ์.
-3. **Database → Functions**: ดู 18 ฟังก์ชันด้านบน, `SECURITY DEFINER`, `search_path`, grants และ SQL definition. **Database → Triggers** (หรือ SQL Editor) ดู trigger อัปเดตคำร้อง.
+3. **Database → Functions**: ดู 18 public functions และ private helpers, `SECURITY DEFINER/INVOKER`, `search_path`, grants และ SQL definition. **Database → Triggers** (หรือ SQL Editor) ดู trigger คำร้องและ snapshot รอบรายงาน.
 4. **Database → Publications / Replication**: ตรวจว่าตารางใดเปิด Realtime; วันที่ตรวจพบ `attendance_records` เท่านั้น.
 5. **Storage → Buckets**: เปิด `student-request-files`, ตรวจ private, allowed MIME, 10 MiB และ Policies; อย่าทดสอบด้วย public URL เพราะการถูกปฏิเสธเป็นพฤติกรรมที่ตั้งใจ.
 6. **Authentication → Providers/Users/URL Configuration**: ดู Google, account/session และ redirect. การมอง Users มีข้อมูลส่วนบุคคล จึงใช้เฉพาะเมื่อจำเป็นและไม่ export.
@@ -309,7 +310,7 @@ order by version;
 
 หาก query ข้อสุดท้ายแจ้งไม่มีคอลัมน์ `name` หรือ permission error ให้ดูหน้า Database → Migrations หรือดู schema ของ `supabase_migrations.schema_migrations` ก่อน อย่าตีความว่า migration หาย. สำหรับการตรวจความปลอดภัยเชิงลึก ต้อง review grants, `SECURITY DEFINER` และ policy SQL กับผู้รับผิดชอบฐานข้อมูลด้วย.
 
-## 12. การตรวจหลัง deploy การเปลี่ยนไฟล์คำร้อง
+## 12. การตรวจหลัง deploy ระบบปัจจุบัน
 
 1. อัปเดต Python dependencies และ rebuild Docker Backend image; ตรวจ `pillow-heif` ติดตั้งจาก `backend/requirement.txt`. ไม่ต้องแก้ bucket policy หรือ schema.
 2. เปิด Backend `/health/live` และ `/health/ready` ภายในช่องทางที่อนุญาต; ตรวจ Backend/Nginx logs โดยไม่พิมพ์ Bearer token หรือไฟล์จริง.
@@ -317,5 +318,7 @@ order by version;
 4. ทดสอบอาจารย์เจ้าของวิชา: เปิดคำร้อง, ดาวน์โหลด PDF/รูป, เปิดไฟล์ได้, กดขยาย/ลดตัวอักษร, ลองบนหน้าจอมือถือและ desktop.
 5. ทดสอบบัญชีที่ไม่ใช่คู่สนทนา: request detail/preview/download ต้องถูกปฏิเสธ. ทดสอบ SVG, ไฟล์เสีย, เกิน 10 MiB, มากกว่า 3 ไฟล์ และ MIME ไม่ตรงโดยต้องไม่ทำให้บันทึกไฟล์ค้าง.
 6. ตรวจ Server log และ Storage ว่าไม่มี orphan object หลัง error, ตรวจ duplicate-submit/client token, และทดสอบ PDF จากแหล่งที่เชื่อถือได้. ห้ามใช้เอกสารนักศึกษาจริงในการทดสอบถ้าไม่มีฐานทางกฎหมาย/นโยบายที่รองรับ.
+7. ทดสอบรอบรายงานด้วยข้อมูลทดสอบ: archive บางคาบ/ทุกคาบ, restore และ rollover ไปภาคเรียนใหม่; ยืนยันว่าไม่ลบ attendance record และผลคะแนนเป็น present 1, late 0.5, absent 0.
+8. ทดสอบกล้อง QR/ใบหน้าบนอุปกรณ์จริง: fullscreen portal, การเลือกเลนส์/ความละเอียด, mirror preview และการกลับสู่หน้าปกติหลังสำเร็จ/ยกเลิก.
 
 คู่มือนี้บันทึกสถานะที่ตรวจได้ ณ วันที่ระบุเท่านั้น ไม่ได้เปลี่ยน Cloud, เปิดไฟล์ส่วนตัว หรือยืนยันค่า secret/OAuth redirect/การทำงานจริงบน Mini PC. เอกสาร Supabase อาจปรับตามรุ่นผลิตภัณฑ์ จึงควรเทียบ [เอกสารหลัก](https://supabase.com/docs) และ Dashboard ปัจจุบันเสมอ.

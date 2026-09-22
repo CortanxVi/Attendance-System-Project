@@ -1,9 +1,12 @@
 # Project Overview and Improvement Plan
 
 **Project:** AI-assisted student attendance system  
-**Review date:** 12 September 2026  
-**Review basis:** Current repository source code, Supabase migrations, release scripts, automated tests, deployment documentation, Git status, and read-only Supabase release checks.  
-**Important status note:** This document distinguishes between a feature that exists in source code and a feature that is proven ready in the deployed environment. The application has broad functional coverage, but the complete production release is not yet closed because the database migration history must be reconciled, the permanent Mini PC backend must replace the temporary development tunnel, and representative load/security acceptance tests remain outstanding.
+**Review date:** 22 September 2026
+
+**Review commit:** `63727b1` on `main`
+
+**Review basis:** Current repository source code, all 19 Supabase migrations, release scripts, automated tests, deployment documentation, Git status, and read-only Supabase release checks.
+**Important status note:** This document distinguishes between source readiness and deployed-runtime readiness. Migration history has been reconciled and the reporting-period migration is applied. The remaining Production work is to verify the permanent Mini PC/Nginx ingress instead of the temporary development tunnel, complete real-device privacy/security acceptance, and prove representative load and recovery behavior.
 
 ## 1. Executive Summary
 
@@ -64,6 +67,8 @@ Its responsibilities are:
 - Preload and cache the self-hosted MediaPipe face-landmarker model and WASM assets.
 - Resize/compress student-card images before upload while preserving OCR readability.
 - Display live attendance updates, histories, reports, settings, and support threads.
+- Open teacher/administrator account cards as accessible profile modals with the Google avatar and explicit role.
+- Render destructive confirmations and text prompts through a top-level portal so they remain above their parent dialogs.
 - Keep the temporary-admin grant in memory rather than persistent browser storage.
 
 Sensitive business decisions are not trusted to the browser. The backend rechecks the user, role, course ownership, enrollment, attendance session, QR challenge, liveness evidence, OCR result, and face match.
@@ -98,15 +103,15 @@ It:
 
 ### 2.4 Face and Liveness Pipeline
 
-The active workflow is:
+Enrollment and attendance now use the same protocol-v4 pipeline:
 
-1. Place exactly one face within the guide frame.
-2. Move closer to the camera and return to the frame.
-3. Perform a server-selected one- or two-blink challenge.
-4. Capture selected evidence frames: baseline, near, return, closed-eye, open-eye, and final face.
-5. Recompute movement, bilateral blinking, face continuity, passive PAD, and identity on the backend.
-6. Compare the final embedding with the registered embedding using InsightFace.
-7. Store the attendance record only when the complete chain passes.
+1. Open a full-app camera portal so the application header and navigation cannot overlap the capture surface.
+2. Place exactly one face within the guide frame while the client records three passive frames.
+3. Perform one backend-selected random action: a blink or a short move closer.
+4. Return to the neutral frame and record a recovery frame.
+5. Send only selected compressed evidence frames plus the user-, purpose-, and challenge-bound signed evidence.
+6. Recompute action evidence, face continuity, passive PAD, replay resistance, and identity on the backend.
+7. For attendance, compare the final embedding with the registered InsightFace embedding and write the record only when the complete chain passes. For enrollment, finalize the verified embedding atomically.
 
 The browser does **not** stream or permanently upload a complete video. It sends selected compressed frames and signed evidence. Raw attendance photos are not kept permanently. The design raises the difficulty of printed-photo and prerecorded-video attacks, but an RGB-camera-only implementation must not be described as impossible to spoof or as independently certified presentation-attack detection.
 
@@ -138,13 +143,13 @@ The backend service key must remain server-side. The frontend uses only the publ
 ### 3.2 Student Capabilities
 
 - View and edit the student's own profile.
-- Set academic year from 1 through 8 and update class-level information supported by the profile schema.
+- View a read-only academic year derived by the backend from the admission digits in the 13-digit student identifier; the student cannot override it.
 - Display the Google account profile image.
 - View registered courses.
 - Join a course by submitting its eight-character classroom code.
 - View or cancel pending course-join requests.
 - Register a face through student-card OCR plus liveness verification when no face is registered.
-- Scan a Dynamic QR code and complete card OCR, liveness, and face recognition to check in.
+- Scan a Dynamic QR code in the full-app scanner, then complete liveness and face recognition without repeating student-card OCR.
 - View personal attendance history and summary statistics.
 - See face-registration and NFC-registration states.
 - Receive guidance to contact a teacher when NFC is not registered.
@@ -166,6 +171,7 @@ The backend service key must remain server-side. The frontend uses only the publ
 - View successful face/OCR and NFC check-ins in the live feed.
 - Add manual attendance and perform authorized bulk attendance changes.
 - Export attendance reports in CSV, Excel, and PDF formats.
+- Manage report periods by recoverably archiving selected/all attendance sessions, restoring archived sessions, or rolling over to a new semester/year without deleting source attendance.
 - Reply to support requests within the teacher's authorized scope.
 - Request temporary administrator enrollment.
 
@@ -224,7 +230,8 @@ These identities are not human roles and must never be exposed in frontend envir
 - Supported attendance methods are face plus OCR, NFC, and authorized manual entry.
 - Face attendance requires a valid Dynamic QR challenge. A missing, expired, reused, wrong-user, wrong-course, or wrong-session challenge is rejected.
 - Attendance challenges are single-use and protected by atomic claim/finalize operations.
-- Course settings determine the late and absent thresholds.
+- Course settings determine late/absence thresholds and report criteria. Changing a course criterion changes later report calculations; preserved attendance records and archived reporting periods remain auditable.
+- Report scoring is `present = 1`, `late = 0.5`, and `absent = 0`; spreadsheet symbols remain `1`, `/`, and `X` respectively.
 - Successful check-in returns the recorded server time and updates the teacher view.
 - Duplicate attendance is rejected at both application and database levels where applicable.
 - Check-out is intentionally not supported.
@@ -261,9 +268,9 @@ These controls reduce risk but do not replace deployment verification, penetrati
 ### 6.1 Repository State
 
 - Branch: `main`.
-- Local branch status at review time: two commits ahead of `origin/main`.
+- Baseline commit at review time: `63727b1`, matching `origin/main` before this documentation update.
 - Worktree was clean before this documentation task.
-- The two local-only commits are documentation/runbook-related and must be reviewed and pushed intentionally.
+- Documentation changes created by this task must still be reviewed and committed intentionally.
 
 ### 6.2 Supabase Read-Only Release Check
 
@@ -272,52 +279,33 @@ The current release check reported:
 - Database lint: no schema errors.
 - Performance Advisor: no reported issues at the time of review.
 - Security Advisor: leaked-password protection is disabled.
-- Migration history: not fully synchronized.
+- Migration history: all 19 repository migrations matched the linked project at the last recorded check.
+- Latest applied schema change: `20260921111209_attendance_reporting_periods.sql`, adding recoverable report-period archive/restore/rollover behavior.
 
-The following local/remote timestamp pairs represent corresponding logical migrations but are not recorded with the same timestamp:
-
-- Local `20260902065653` versus remote `20260902071442`.
-- Local `20260902072732` versus remote `20260902073016`.
-- Local `20260902150753` versus remote `20260902150954`.
-
-In addition, local migration `20260907164433_secure_face_enrollment_liveness.sql` was not present remotely at review time.
-
-This mismatch is a release blocker. It can make secure self-service face enrollment fail even when the frontend and backend code are correct. Do not rename, apply, or repair migration history blindly. First compare the SQL content and remote schema, decide which timestamps are canonical, back up the database, and rehearse the repair on staging.
+The earlier timestamp drift and missing secure-enrollment migration were reconciled. This is not permission to use `migration repair` casually: every future schema change must still be reviewed, backed up, rehearsed on staging, applied once by an authorized operator, and verified with migration list, lint, advisors, and application smoke tests.
 
 ### 6.3 Deployment State
 
 - The frontend has been promoted through a Vercel-oriented workflow.
-- Recent operational records describe the backend as running from the development workstation through a temporary tunnel.
+- Recent operational records describe the currently reachable backend as Docker services exposed from the development workstation through a stable ngrok tunnel.
 - This is useful for staging/mobile acceptance testing but is not a durable production backend.
 - The intended production backend is the always-on Ubuntu Server Mini PC behind a stable HTTPS API domain.
 
 ### 6.4 Test Coverage State
 
-Existing automated coverage includes authorization regressions, bulk-attendance security, course-join security, face-enrollment security, image security, launcher security, liveness frames and tokens, operational security, roster-import security, general security, support security, temporary-admin security, spreadsheet security, face-runtime checks, API-origin checks, OCR security, OCR smoke testing, and OCR concurrency testing.
+The latest complete release verification passed 116 backend tests, the frontend lint and specialized API-origin/liveness/face-runtime/camera-quality/sidebar-account/overlay/report-export tests, a Vite production build of 1,918 modules, a 69-entry PWA precache, OCR security/doctor/audit checks, and the strict frontend design audit. Exact counts are snapshots and must be regenerated for the next release.
 
 The largest remaining quality gaps are full browser end-to-end coverage, a database actor/RLS matrix, migration CI against a clean Supabase project, real-device biometric acceptance tests, and representative 30–40-user load/soak testing on the target Mini PC.
 
 ## 7. Required Improvements
 
-### 7.1 Priority 0 — Release Blockers
+### 7.1 Priority 0 — Remaining Release Gates
 
-#### P0-1. Reconcile and Apply Supabase Migrations
+#### Completed foundation: Supabase migration reconciliation
 
-**Problem:** Local and remote migration history differ, and the secure face-enrollment migration is missing remotely.
+The previous migration drift and missing secure-enrollment function set have been resolved, and the reporting-period migration is applied. Preserve this state with migration CI, staging rehearsal, backups, and single-operator Production changes; migration consistency is a continuing control, not an open feature request.
 
-**Action:**
-
-1. Create a database backup.
-2. Compare each mismatched local SQL file with the live remote objects/functions.
-3. Rehearse `supabase migration repair` or the chosen canonical migration procedure against staging.
-4. Apply the secure face-enrollment migration to staging.
-5. Run the full enrollment and attendance acceptance flow.
-6. Promote exactly the verified migration set to production.
-7. Re-run migration list, database lint, Security Advisor, Performance Advisor, and the role/RLS matrix.
-
-**Exit criteria:** Local and remote histories match; enrollment and attendance RPCs exist with expected grants; all role tests pass.
-
-#### P0-2. Replace the Temporary Backend Tunnel
+#### P0-1. Replace the Temporary Backend Tunnel
 
 **Problem:** A workstation/tunnel backend depends on a developer session and is unsuitable for production availability.
 
@@ -325,7 +313,7 @@ The largest remaining quality gaps are full browser end-to-end coverage, a datab
 
 **Exit criteria:** The API survives reboot, tunnel closure, service restart, and release rollback without changing the frontend URL.
 
-#### P0-3. Prove Capacity for 30–40 Concurrent Users
+#### P0-2. Prove Capacity for 30–40 Concurrent Users
 
 **Problem:** Unit and component concurrency tests do not prove end-to-end capacity on an Intel Core i3-7100T with 8 GB RAM.
 
@@ -333,7 +321,7 @@ The largest remaining quality gaps are full browser end-to-end coverage, a datab
 
 **Exit criteria:** The team defines and meets an explicit service objective. A practical starting target is no lost/duplicate attendance, less than 1% server errors excluding intentional overload responses, and a documented p95 check-in time under the accepted user limit.
 
-#### P0-4. Calibrate Liveness and Face Recognition on Real Devices
+#### P0-3. Calibrate Liveness and Face Recognition on Real Devices
 
 **Problem:** Straight-ahead blink detection has been reported as intermittent, while excessive relaxation would weaken spoof protection.
 
@@ -341,7 +329,7 @@ The largest remaining quality gaps are full browser end-to-end coverage, a datab
 
 **Exit criteria:** Genuine-user success and attack-rejection targets are documented, repeatable, and versioned; users receive actionable retry guidance; backend PAD remains mandatory.
 
-#### P0-5. Close Authentication Hardening
+#### P0-4. Close Authentication Hardening
 
 **Problem:** Supabase reports leaked-password protection disabled, and permanent administrators do not yet have a documented AAL2/MFA requirement.
 
@@ -355,7 +343,7 @@ The largest remaining quality gaps are full browser end-to-end coverage, a datab
 
 **Exit criteria:** No unused login method remains; admin MFA and session policy are enforced and tested.
 
-#### P0-6. Establish Backup, Restore, and Privacy Governance
+#### P0-5. Establish Backup, Restore, and Privacy Governance
 
 **Problem:** Production readiness requires evidence that attendance, support, and biometric data can be recovered and lawfully managed.
 
@@ -487,20 +475,19 @@ Pin dependencies, preserve lockfiles, verify model checksums/licenses, scan cont
 
 ## 8. Recommended Delivery Order
 
-1. Back up Supabase and reconcile migration history in staging.
-2. Apply and verify secure face enrollment in staging.
-3. Close unused-password/MFA/session policy and run the full role/RLS matrix.
-4. Calibrate liveness and face thresholds on real devices with labeled evidence.
-5. Deploy the backend/OCR release to the Mini PC behind stable HTTPS.
-6. Add observability and verify backup restore and rollback.
-7. Run 30–40-user burst and soak tests on the real hardware/network.
-8. Fix measured bottlenecks: pagination, live-feed deltas, reduced round trips, inference queues, or report jobs.
-9. Run full mobile/browser/accessibility and operational acceptance tests.
-10. Freeze the release, record checksums and configuration, promote it, and monitor closely during the first live attendance sessions.
+1. Confirm the 19-migration baseline and take a recoverable Supabase backup before any new schema change.
+2. Close unused-password/MFA/session policy and run the full role/RLS matrix.
+3. Calibrate liveness and face thresholds on real devices with labeled evidence.
+4. Deploy the backend/OCR release to the Mini PC behind stable HTTPS.
+5. Add observability and verify backup restore and rollback.
+6. Run 30–40-user burst and soak tests on the real hardware/network.
+7. Fix measured bottlenecks: pagination, live-feed deltas, reduced round trips, inference queues, or report jobs.
+8. Run full mobile/browser/accessibility and operational acceptance tests, including full-app camera portals and modal layering.
+9. Freeze the release, record checksums and configuration, promote it, and monitor closely during the first live attendance sessions.
 
 ## 9. Suggested Production Acceptance Checklist
 
-- [ ] Local and remote Supabase migration histories match.
+- [x] Local and remote Supabase migration histories matched at the 22 September 2026 review; recheck before every release.
 - [ ] Supabase database lint, Security Advisor, and Performance Advisor have no unaccepted findings.
 - [ ] Anonymous/student/teacher/temp-admin/permanent-admin RLS and API negative tests pass.
 - [ ] Password provider is disabled if unused, or leaked-password protection is enabled.
