@@ -224,16 +224,23 @@ assert.match(scannerSource, /passiveImageSrcs/);
 assert.match(scannerSource, /challenge_action/);
 assert.match(scannerSource, /challenge_recovery/);
 assert.match(scannerSource, /challenge\.action === 'blink'/);
+assert.match(scannerSource, /createPortal/);
+assert.match(scannerSource, /document\.body/);
+assert.match(scannerSource, /useModalIsolation\(true\)/);
+assert.match(scannerSource, /onClose/);
+assert.match(scannerSource, /compact/);
 assert.doesNotMatch(scannerSource, /actions=\{/);
 assert.doesNotMatch(scannerSource, /mode: 'passive'/);
 assert.doesNotMatch(attendanceSource, /idCardImage|id_card_image/);
 assert.match(attendanceSource, /livenessAction/);
+assert.match(attendanceSource, /onClose=\{\(\) => setIsLivenessActive\(false\)\}/);
 assert.match(enrollmentSource, /liveness_protocol_version !== 4/);
 assert.match(enrollmentSource, /challenge=\{livenessChallenge\}/);
+assert.match(enrollmentSource, /onClose=\{cancelLiveness\}/);
 assert.doesNotMatch(apiSource, /formData\.append\(['"]id_card_image/);
 assert.match(apiSource, /liveness_action_image/);
 assert.match(apiSource, /liveness_recovery_image/);
 
 console.log(
-  'Shared hybrid enrollment and attendance contract passes (passive PAD, signed random action frames, mirrored preview, purpose-specific API payloads); legacy tracker regressions also pass.',
+  'Shared fullscreen hybrid enrollment and attendance contract passes (isolated portal, passive PAD, signed random action frames, mirrored preview, purpose-specific API payloads); legacy tracker regressions also pass.',
 );

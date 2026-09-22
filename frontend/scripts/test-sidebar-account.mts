@@ -14,6 +14,13 @@ assert.match(accountCardSource, /profile\.avatar_url/);
 assert.match(accountCardSource, /referrerPolicy="no-referrer"/);
 assert.match(adminSource, /role=\{temporary \? 'temporary_admin' : 'admin'\}/);
 assert.match(accountCardSource, /ผู้ดูแลระบบชั่วคราว/);
-assert.match(accountCardSource, /aria-label=\{`บัญชี/);
+assert.match(accountCardSource, /aria-label=\{`ดูโปรไฟล์/);
+assert.match(accountCardSource, /aria-haspopup="dialog"/);
+assert.match(accountCardSource, /createPortal/);
+assert.match(accountCardSource, /document\.body/);
+assert.match(accountCardSource, /useModalIsolation\(profileOpen\)/);
+assert.match(accountCardSource, /role="dialog"/);
+assert.match(accountCardSource, /รายละเอียดบัญชี/);
+assert.match(accountCardSource, /<X aria-hidden="true"/);
 
-console.log('Teacher/admin sidebar account cards receive the verified profile, render above navigation, and label every role.');
+console.log('Teacher/admin sidebar account cards receive the verified profile, render above navigation, label every role, and open an isolated full-detail modal.');

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Webcam from 'react-webcam';
-import { Camera, Loader2, ScanFace, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Camera, Loader2, ScanFace, ShieldCheck } from 'lucide-react';
 import CameraQualityControls from '../../components/camera/CameraQualityControls';
+import { useModalIsolation } from '../../components/overlays/useModalIsolation';
 import { useCameraQuality } from '../../hooks/useCameraQuality';
 import { openFaceLandmarkerClient, type FaceLandmarkerClient, type FaceLandmarkerClientEvent } from '../../services/faceLandmarkerRuntime';
 import type {
@@ -26,6 +28,8 @@ export interface LivenessCapture {
 
 interface LivenessScannerProps {
   onCaptureSuccess: (capture: LivenessCapture) => void;
+  onClose: () => void;
+  title?: string;
   challenge: {
     action: HybridLivenessAction;
     promptDelayMs: number;
@@ -57,9 +61,16 @@ function isRearCamera(facingMode: string | undefined, selectedCamera: MediaDevic
   return /back|rear|environment|ultra|telephoto|กล้องหลัง/.test(label);
 }
 
-export default function LivenessScanner({ onCaptureSuccess, challenge }: LivenessScannerProps) {
+export default function LivenessScanner({
+  onCaptureSuccess,
+  onClose,
+  title = 'สแกนใบหน้า',
+  challenge,
+}: LivenessScannerProps) {
   const webcamRef = useRef<Webcam>(null);
   const callbackRef = useRef(onCaptureSuccess);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [instruction, setInstruction] = useState('กำลังเตรียมระบบตรวจใบหน้า...');
   const [progress, setProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +80,35 @@ export default function LivenessScanner({ onCaptureSuccess, challenge }: Livenes
   const [error, setError] = useState('');
   const [attemptKey, setAttemptKey] = useState(0);
   const cameraQuality = useCameraQuality();
+
+  useModalIsolation(true);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   useEffect(() => { callbackRef.current = onCaptureSuccess; }, [onCaptureSuccess]);
   const videoConstraints = useMemo<MediaTrackConstraints>(() => selectedCameraId
@@ -253,32 +293,99 @@ export default function LivenessScanner({ onCaptureSuccess, challenge }: Livenes
     return () => { cancelled = true; window.clearTimeout(timeout); cancelAnimationFrame(animationFrame); client?.close(); };
   }, [attemptKey, challenge, selectedCameraId]);
 
-  return <div className="relative flex min-h-[clamp(20rem,64dvh,27rem)] w-full flex-col items-center justify-center overflow-hidden rounded-2xl bg-gray-950">
-    {isLoading && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 px-5 text-center text-white"><Loader2 className="mb-4 animate-spin motion-reduce:animate-none" size={44} /><p className="font-semibold">กำลังเตรียมระบบตรวจสอบใบหน้า...</p><p className="mt-1 text-xs text-gray-300">โมเดลทำงานบนอุปกรณ์และไม่บันทึกวิดีโอถาวร</p></div>}
-    {error && <div role="alert" className="absolute left-4 right-4 top-36 z-30 rounded-xl bg-red-700 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg"><p>{error}</p><button type="button" onClick={() => { setError(''); setProgress(0); setIsLoading(true); setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...'); setAttemptKey((value) => value + 1); }} className="mt-3 min-h-11 rounded-lg bg-white px-4 font-bold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-white">ลองตรวจอีกครั้ง</button></div>}
-    <CameraQualityControls
-      cameras={cameras}
-      selectedCameraId={selectedCameraId}
-      defaultCameraLabel="กล้องหน้า (อัตโนมัติ)"
-      resolution={cameraQuality.resolution}
-      continuousFocus={cameraQuality.continuousFocus}
-      sharpnessRange={cameraQuality.sharpnessRange}
-      sharpness={cameraQuality.sharpness}
-      zoomRange={cameraQuality.zoomRange}
-      zoom={cameraQuality.zoom}
-      onCameraChange={(deviceId) => {
-        cameraQuality.clear();
-        setIsLoading(true);
-        setProgress(0);
-        setError('');
-        setSelectedCameraId(deviceId);
-      }}
-      onSharpnessChange={(value) => { void cameraQuality.applySharpness(value); }}
-      onZoomChange={(value) => { void cameraQuality.applyZoom(value); }}
-      className="absolute left-3 right-3 top-3 z-40"
-    />
-    <Webcam key={selectedCameraId || 'front-camera'} ref={webcamRef} audio={false} mirrored={mirrorPreview} videoConstraints={videoConstraints} onUserMedia={() => void handleStreamReady()} onUserMediaError={() => { setIsLoading(false); setError('เปิดกล้องไม่ได้ กรุณาอนุญาตสิทธิ์กล้องและตรวจสอบว่าไม่มีโปรแกรมอื่นใช้งานอยู่'); }} className="max-h-[min(35rem,64dvh)] w-full object-contain" />
-    <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-[55%] w-[62%] -translate-x-1/2 -translate-y-[56%] rounded-[48%] border-4 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.18)]" />
-    <div className="absolute bottom-5 left-4 right-4 z-10 rounded-2xl bg-white/95 p-4 text-gray-900 shadow-xl backdrop-blur"><div className="mb-3 h-2 overflow-hidden rounded-full bg-gray-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="ความคืบหน้าการตรวจสอบ"><div className="h-full rounded-full bg-green-600 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.max(6, progress * 100)}%` }} /></div><div className="flex items-center justify-center gap-3 text-center">{progress >= 1 ? <ShieldCheck className="shrink-0 text-green-700" /> : progress > 0 ? <ScanFace className="shrink-0 text-green-700" /> : <Camera className="shrink-0 text-green-700" />}<span role="status" aria-live="polite" className="font-bold">{instruction}</span></div><p className="mt-2 text-center text-xs text-gray-500">ระบบตรวจภาพต่อเนื่องและอาจให้ทำคำสั่งง่าย ๆ 1 ครั้งเพื่อป้องกันการเปิดวิดีโอแทนบุคคลจริง</p></div>
-  </div>;
+  return createPortal(
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="liveness-scanner-title"
+      className="fixed inset-0 isolate overflow-hidden bg-slate-950 text-white"
+      style={{ zIndex: 'var(--z-dialog)' }}
+    >
+      <Webcam
+        key={selectedCameraId || 'front-camera'}
+        ref={webcamRef}
+        audio={false}
+        mirrored={mirrorPreview}
+        videoConstraints={videoConstraints}
+        onUserMedia={() => void handleStreamReady()}
+        onUserMediaError={() => {
+          setIsLoading(false);
+          setError('เปิดกล้องไม่ได้ กรุณาอนุญาตสิทธิ์กล้องและตรวจสอบว่าไม่มีโปรแกรมอื่นใช้งานอยู่');
+        }}
+        className="absolute inset-0 size-full object-cover"
+      />
+
+      <header className="absolute inset-x-0 top-0 z-40 flex items-center gap-3 bg-gradient-to-b from-black/85 to-transparent px-3 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))] min-[375px]:px-4">
+        <button
+          ref={closeButtonRef}
+          type="button"
+          onClick={onClose}
+          className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full border border-white/20 bg-black/45 text-white backdrop-blur transition-colors hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          aria-label="ยกเลิกการสแกนใบหน้าและกลับหน้าก่อนหน้า"
+        >
+          <ArrowLeft aria-hidden="true" size={22} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <h2 id="liveness-scanner-title" className="truncate text-base font-bold min-[375px]:text-lg">{title}</h2>
+          <p className="truncate text-xs text-white/75">วางใบหน้าให้อยู่กลางกรอบ</p>
+        </div>
+        <CameraQualityControls
+          cameras={cameras}
+          selectedCameraId={selectedCameraId}
+          defaultCameraLabel="กล้องหน้า (อัตโนมัติ)"
+          resolution={cameraQuality.resolution}
+          continuousFocus={cameraQuality.continuousFocus}
+          sharpnessRange={cameraQuality.sharpnessRange}
+          sharpness={cameraQuality.sharpness}
+          zoomRange={cameraQuality.zoomRange}
+          zoom={cameraQuality.zoom}
+          onCameraChange={(deviceId) => {
+            cameraQuality.clear();
+            setIsLoading(true);
+            setProgress(0);
+            setError('');
+            setSelectedCameraId(deviceId);
+          }}
+          onSharpnessChange={(value) => { void cameraQuality.applySharpness(value); }}
+          onZoomChange={(value) => { void cameraQuality.applyZoom(value); }}
+          compact
+          className="ml-auto shrink-0"
+        />
+      </header>
+
+      <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-[46%] z-10 h-[min(55dvh,34rem)] w-[min(72vw,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-[48%] border-[3px] border-white/85 shadow-[0_0_0_999px_rgba(2,6,23,0.24)]" />
+
+      {isLoading && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/88 px-5 pt-20 text-center text-white">
+          <Loader2 className="mb-4 animate-spin motion-reduce:animate-none" size={44} aria-hidden="true" />
+          <p className="font-semibold">กำลังเตรียมระบบตรวจสอบใบหน้า...</p>
+          <p className="mt-1 text-xs text-slate-300">โมเดลทำงานบนอุปกรณ์และไม่บันทึกวิดีโอถาวร</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/72 px-4 pt-16 backdrop-blur-sm">
+          <section role="alert" className="w-full max-w-sm rounded-3xl border border-red-300/20 bg-red-950/95 p-5 text-center text-sm text-white shadow-2xl">
+            <p className="font-semibold leading-6">{error}</p>
+            <button type="button" onClick={() => { setError(''); setProgress(0); setIsLoading(true); setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...'); setAttemptKey((value) => value + 1); }} className="mt-4 min-h-11 cursor-pointer rounded-xl bg-white px-5 font-bold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">ลองตรวจอีกครั้ง</button>
+          </section>
+        </div>
+      )}
+
+      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-16 min-[375px]:px-4">
+        <section className="mx-auto w-full max-w-sm rounded-2xl border border-white/20 bg-white/94 p-3 text-slate-900 shadow-2xl backdrop-blur min-[390px]:p-4">
+          <div className="mb-2 h-2 overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="ความคืบหน้าการตรวจสอบ">
+            <div className="h-full rounded-full bg-emerald-600 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.max(6, progress * 100)}%` }} />
+          </div>
+          <div className="flex items-center justify-center gap-2 text-center">
+            {progress >= 1 ? <ShieldCheck className="shrink-0 text-emerald-700" aria-hidden="true" /> : progress > 0 ? <ScanFace className="shrink-0 text-emerald-700" aria-hidden="true" /> : <Camera className="shrink-0 text-emerald-700" aria-hidden="true" />}
+            <span role="status" aria-live="polite" className="font-bold">{instruction}</span>
+          </div>
+          <p className="mt-1.5 text-center text-[11px] leading-4 text-slate-500">ระบบตรวจภาพต่อเนื่องและอาจให้ทำคำสั่งง่าย ๆ 1 ครั้งเพื่อป้องกันการเปิดวิดีโอแทนบุคคลจริง</p>
+        </section>
+      </div>
+    </div>,
+    document.body,
+  );
 }

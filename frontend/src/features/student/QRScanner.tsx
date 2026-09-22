@@ -18,6 +18,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import CameraQualityControls from '../../components/camera/CameraQualityControls';
+import { useModalIsolation } from '../../components/overlays/useModalIsolation';
 import { useCameraQuality } from '../../hooks/useCameraQuality';
 import { apiErrorMessage } from '../../services/apiError';
 import type { HybridLivenessAction } from '../../utils/liveness';
@@ -84,6 +85,8 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
       frameRate: { ideal: 30, max: 30 },
     }, [selectedCameraId]);
 
+  useModalIsolation(true);
+
   const clearPendingWork = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
@@ -94,18 +97,7 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
   }, []);
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    const previousDocumentOverflow = document.documentElement.style.overflow;
-    const appRoot = document.getElementById('root');
-    const rootWasInert = appRoot?.inert ?? false;
-    const previousAriaHidden = appRoot?.getAttribute('aria-hidden') ?? null;
-    document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
     closeButtonRef.current?.focus();
-    if (appRoot) {
-      appRoot.inert = true;
-      appRoot.setAttribute('aria-hidden', 'true');
-    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -133,13 +125,6 @@ export default function QRScanner({ onVerifySuccess, onClose }: QRScannerProps) 
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-      document.documentElement.style.overflow = previousDocumentOverflow;
-      if (appRoot) {
-        appRoot.inert = rootWasInert;
-        if (previousAriaHidden === null) appRoot.removeAttribute('aria-hidden');
-        else appRoot.setAttribute('aria-hidden', previousAriaHidden);
-      }
       clearPendingWork();
     };
   }, [clearPendingWork, onClose]);

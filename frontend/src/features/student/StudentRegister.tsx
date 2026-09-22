@@ -113,6 +113,12 @@ export default function StudentRegister() {
     promptDelayMs: challenge.liveness_prompt_delay_ms,
   } : null, [challenge]);
 
+  const cancelLiveness = () => {
+    setChallenge(null);
+    setErrorMsg('');
+    setPhase('retry');
+  };
+
   return (
     <div className="student-page">
       <div className="rounded-2xl border border-gray-100 bg-white p-[clamp(1rem,4vw,1.25rem)] shadow-sm">
@@ -174,7 +180,12 @@ export default function StudentRegister() {
           </div>
           <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าและทำคำสั่งยืนยัน 1 ครั้ง</h2>
           <p className="text-center text-sm leading-6 text-gray-500">ระบบเก็บภาพต่อเนื่อง 3 เฟรม จากนั้นสุ่มให้กะพริบตาหรือขยับเข้าใกล้กล้องเล็กน้อย</p>
-          <LivenessScanner challenge={livenessChallenge} onCaptureSuccess={(capture) => void handleLivenessCapture(capture)} />
+          <LivenessScanner
+            title="ลงทะเบียนใบหน้า"
+            challenge={livenessChallenge}
+            onClose={cancelLiveness}
+            onCaptureSuccess={(capture) => void handleLivenessCapture(capture)}
+          />
         </section>
       )}
 

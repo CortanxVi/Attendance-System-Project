@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Check, Clock3, ShieldCheck, X } from 'lucide-react';
 import ConfirmDialog from '../../components/overlays/ConfirmDialog';
+import TextPromptDialog from '../../components/overlays/TextPromptDialog';
 import { useNotification } from '../../components/notifications/notificationContext';
 
 interface TemporaryRequest {
@@ -79,8 +80,7 @@ export default function TemporaryAdminRequests() {
     }
   };
 
-  const revoke = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const revoke = async () => {
     if (!revoking || revokeReason.trim().length < 5) { setError('กรุณาระบุเหตุผลเพิกถอนอย่างน้อย 5 ตัวอักษร'); return; }
     setBusy(true); setError('');
     try {
@@ -103,9 +103,33 @@ export default function TemporaryAdminRequests() {
 
       <section aria-labelledby="enrollment-title" className="space-y-3"><div><h3 id="enrollment-title" className="text-lg font-bold text-gray-900">อาจารย์ที่ได้รับอนุมัติแล้ว</h3><p className="text-sm text-gray-500">เพิกถอนเมื่ออุปกรณ์หรือ PIN อาจรั่วไหล หรือไม่มีความจำเป็นต้องใช้สิทธิ์อีก</p></div>{enrollments.length === 0 ? <p className="rounded-xl border border-dashed p-5 text-sm text-gray-500">ยังไม่มีอาจารย์ที่ตั้ง PIN</p> : <div className="grid gap-3 md:grid-cols-2">{enrollments.map((item) => <article key={item.teacher_id} className="rounded-2xl border border-gray-200 bg-white p-4"><p className="font-bold text-gray-900">{item.profiles?.full_name || 'อาจารย์'}</p><p className="text-xs text-gray-500">{item.profiles?.email || item.teacher_id}</p><p className="mt-2 text-xs text-gray-500">ใช้งานล่าสุด: {item.last_used_at ? new Date(item.last_used_at).toLocaleString('th-TH') : 'ยังไม่เคยเปิดสิทธิ์'}</p><button type="button" onClick={() => { setRevoking(item); setError(''); }} className="mt-3 rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">เพิกถอนสิทธิ์</button></article>)}</div>}</section>
 
-      {decision?.value === 'rejected' && <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 'var(--z-backdrop)' }}><button type="button" aria-label="ปิดหน้าต่าง" className="absolute inset-0 bg-slate-950/60" onClick={() => !busy && setDecision(null)} /><form noValidate onSubmit={(event) => { event.preventDefault(); void submitDecision(); }} role="dialog" aria-modal="true" aria-labelledby="reject-title" className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" style={{ zIndex: 'var(--z-dialog)' }}><h3 id="reject-title" className="text-xl font-bold text-gray-900">เหตุผลที่ปฏิเสธคำขอ</h3><p className="mt-2 text-sm text-gray-600">ข้อความนี้จะแสดงให้อาจารย์เห็นและถูกเก็บใน Audit Log</p><label htmlFor="reject-note" className="mt-4 block text-sm font-semibold text-gray-800">เหตุผล</label><textarea autoFocus id="reject-note" value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} rows={4} className="mt-1 w-full resize-none rounded-xl border border-gray-300 p-3 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" /><div className="mt-5 flex justify-end gap-3"><button type="button" disabled={busy} onClick={() => setDecision(null)} className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-semibold">ยกเลิก</button><button type="submit" disabled={busy} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? 'กำลังบันทึก…' : 'ยืนยันการปฏิเสธ'}</button></div></form></div>}
+      <TextPromptDialog
+        open={decision?.value === 'rejected'}
+        title="เหตุผลที่ปฏิเสธคำขอ"
+        description="ข้อความนี้จะแสดงให้อาจารย์เห็นและถูกเก็บใน Audit Log"
+        label="เหตุผล"
+        value={note}
+        confirmLabel="ยืนยันการปฏิเสธ"
+        busy={busy}
+        error={decision?.value === 'rejected' ? error : ''}
+        onChange={setNote}
+        onConfirm={() => void submitDecision()}
+        onCancel={() => { setDecision(null); setNote(''); setError(''); }}
+      />
       <ConfirmDialog open={decision?.value === 'approved'} title="อนุมัติสิทธิ์ผู้ดูแลชั่วคราวหรือไม่" description={`อาจารย์ ${decision?.request.profiles?.full_name || ''} จะมีเวลา ${Math.round(runtimeConfig.temporary_admin_enrollment_seconds / 3600)} ชั่วโมงเพื่อตั้ง PIN หลังจากนั้นเปิดสิทธิ์ได้ครั้งละ ${Math.round(runtimeConfig.temporary_admin_grant_seconds / 60)} นาที`} confirmLabel="อนุมัติคำขอ" busy={busy} onConfirm={submitDecision} onCancel={() => setDecision(null)} />
-      {revoking && <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 'var(--z-backdrop)' }}><button type="button" aria-label="ปิดหน้าต่าง" className="absolute inset-0 bg-slate-950/60" onClick={() => !busy && setRevoking(null)} /><form noValidate onSubmit={revoke} role="alertdialog" aria-modal="true" aria-labelledby="revoke-title" className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" style={{ zIndex: 'var(--z-dialog)' }}><h3 id="revoke-title" className="text-xl font-bold text-gray-900">เพิกถอนสิทธิ์ของ {revoking.profiles?.full_name || 'อาจารย์'}</h3><p className="mt-2 text-sm text-gray-600">PIN เดิมและสิทธิ์ที่กำลังใช้งานจะใช้ต่อไม่ได้ หากต้องการใช้อีกต้องส่งคำขอใหม่</p><label htmlFor="revoke-reason" className="mt-4 block text-sm font-semibold">เหตุผล</label><textarea autoFocus id="revoke-reason" value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} maxLength={500} rows={4} className="mt-1 w-full resize-none rounded-xl border border-gray-300 p-3 text-sm" /><div className="mt-5 flex justify-end gap-3"><button type="button" disabled={busy} onClick={() => setRevoking(null)} className="rounded-xl border px-4 py-2 text-sm font-semibold">ยกเลิก</button><button type="submit" disabled={busy} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{busy ? 'กำลังเพิกถอน…' : 'ยืนยันเพิกถอน'}</button></div></form></div>}
+      <TextPromptDialog
+        open={Boolean(revoking)}
+        title={`เพิกถอนสิทธิ์ของ ${revoking?.profiles?.full_name || 'อาจารย์'}`}
+        description="PIN เดิมและสิทธิ์ที่กำลังใช้งานจะใช้ต่อไม่ได้ หากต้องการใช้อีกต้องส่งคำขอใหม่"
+        label="เหตุผล"
+        value={revokeReason}
+        confirmLabel="ยืนยันเพิกถอน"
+        busy={busy}
+        error={revoking ? error : ''}
+        onChange={setRevokeReason}
+        onConfirm={() => void revoke()}
+        onCancel={() => { setRevoking(null); setRevokeReason(''); setError(''); }}
+      />
     </div>
   );
 }

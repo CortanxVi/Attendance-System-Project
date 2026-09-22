@@ -31,6 +31,7 @@ scripts/verify_face_models.sh
   npm run test:report-export
   npm run test:liveness
   npm run test:sidebar-account
+  npm run test:overlays
   npm run test:face-runtime
   npm run test:camera-quality
   npm run test:api-origin

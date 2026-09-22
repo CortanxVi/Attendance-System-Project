@@ -198,13 +198,12 @@ export default function StudentHome() {
         </div>
       ) : isLivenessActive ? (
         /* ด่านที่ 2: หน้าจอ Liveness Detection */
-        <div className="relative">
-           <button onClick={() => setIsLivenessActive(false)} className="absolute top-4 right-4 z-30 bg-white/80 p-2 rounded-full text-sm font-bold shadow-md">ยกเลิก</button>
-           <LivenessScanner
-             onCaptureSuccess={handleFaceCapture}
-             challenge={livenessChallenge!}
-           />
-        </div>
+        <LivenessScanner
+          title="ยืนยันใบหน้าเพื่อเช็คชื่อ"
+          onClose={() => setIsLivenessActive(false)}
+          onCaptureSuccess={handleFaceCapture}
+          challenge={livenessChallenge!}
+        />
       ) : verifiedCourse ? (
         <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
           <h2 className="text-xl font-bold text-green-700 mb-2">เข้าสู่ห้องเรียน {verifiedCourse} แล้ว</h2>
