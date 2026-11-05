@@ -17,9 +17,9 @@
   "dependencies": {
     "@arcships/light-ocr": "0.5.7",
     "express": "^4.21.2",
-    "multer": "2.3.0"
+    "multer": "2.5.0"
   },
   "overrides": {
-    "qs": "6.16.0"
+    "qs": "6.17.1"
   }
 }
