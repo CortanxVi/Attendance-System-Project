@@ -10,7 +10,7 @@
 Production ใช้ secret จาก `/etc/km-attendance/backend.env` และ
 `/etc/km-attendance/ocr.env` ไม่อ่าน `.env` ใน source tree และ publish FastAPI เฉพาะ
 `127.0.0.1:8000` ส่วน OCR ไม่ publish host port ดูขั้นตอนทั้งหมดใน
-`docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md`
+`docs/HYBRID_VERCEL_MINIPC_DEPLOYMENT_TH.md` (ไฟล์สำรองภายในเครื่องผู้ดูแล ไม่อยู่ใน Git)
 
 ตัวอย่างคำสั่ง Production หลังเตรียมไฟล์ env และโมเดลแล้ว:
 

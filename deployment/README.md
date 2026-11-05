@@ -1,6 +1,6 @@
 # Deployment and staging runbook
 
-Thai operational guides:
+Thai operational guides (kept as local files by the maintainer, not in Git because `docs/` is git-ignored; ask the maintainer for the current copies):
 
 - `docs/MAIN_PRODUCTION_DEPLOYMENT_VERCEL_DOCKER_NGINX_TH.md` — main-only Production deployment with Vercel, Docker Backend/OCR, host Nginx, one-command startup, reboot recovery, and health monitoring
 - `docs/DEPLOYMENT_GUIDE_TH.md` — staging, release bundles, atomic installation, acceptance testing, and rollback

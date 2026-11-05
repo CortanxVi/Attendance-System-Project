@@ -214,7 +214,7 @@ OCR_SERVICE_TOKEN="[ค่าเดียวกับ service]" npm run test:con
 
 การเปิดเว็บบนโทรศัพท์ต้องใช้ HTTPS เพราะ Safari/Chrome ไม่อนุญาต Camera API บน LAN HTTP ธรรมดา
 
-คู่มือสำหรับนำระบบไปใช้งานจริง:
+คู่มือสำหรับนำระบบไปใช้งานจริง (เก็บเป็นไฟล์สำรองภายในเครื่องผู้ดูแล ไม่อยู่ใน Git เพราะโฟลเดอร์ `docs/` ถูก ignore — ขอฉบับล่าสุดจากผู้ดูแลระบบ):
 
 - `docs/USER_GUIDE_TH.md` — คู่มือผู้ใช้แยกตามบทบาท
 - `docs/DEPLOYMENT_GUIDE_TH.md` — คู่มือ Ubuntu Server, Supabase Staging, release bundle, atomic deployment และ rollback
