@@ -44,7 +44,10 @@ export default function Login() {
             ระบบบันทึกเวลาเข้าเรียน
           </h2>
           <p className="mt-2 text-sm text-gray-600">
-            สถาบันเทคโนโลยีพระจอมเกล้าพระนครเหนือ
+            วิทยาลัยเทคโนโลยีอุตสาหกรรม
+          </p>
+          <p className="mt-2 text-sm text-gray-600">
+            มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ
           </p>
         </div>
 

@@ -11,7 +11,11 @@ from starlette.concurrency import run_in_threadpool
 
 from core.config import supabase_db
 from services.temporary_admin_service import extract_verified_session_id, load_valid_grant
-from services.student_year_service import derive_admission_year, derive_study_year
+from services.student_year_service import (
+    derive_admission_year,
+    derive_study_year,
+    sync_stored_study_year,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -156,6 +160,21 @@ async def get_current_user(
             temporary_admin = True
             temporary_admin_expires_at = grant.get("expires_at")
 
+    derived_study_year = (
+        derive_study_year(profile.get("student_id"), email=auth_email)
+        if base_role == "student"
+        else None
+    )
+    if base_role == "student":
+        # Assign the calculated year to the student's account (only writes when it changed).
+        await run_in_threadpool(
+            sync_stored_study_year,
+            supabase_db,
+            user_id,
+            profile.get("academic_year"),
+            derived_study_year,
+        )
+
     return AuthenticatedUser(
         id=user_id,
         email=auth_email,
@@ -167,12 +186,12 @@ async def get_current_user(
         student_id=profile.get("student_id"),
         full_name=profile.get("full_name"),
         academic_year=(
-            derive_study_year(profile.get("student_id"))
+            derived_study_year
             if base_role == "student"
             else profile.get("academic_year")
         ),
         admission_year=(
-            derive_admission_year(profile.get("student_id"))
+            derive_admission_year(profile.get("student_id"), email=auth_email)
             if base_role == "student"
             else None
         ),

@@ -58,7 +58,12 @@ from services.face_enrollment_service import (
     renew_face_enrollment_challenge,
 )
 from services.student_support_service import collect_support_storage_paths, remove_support_storage_paths
-from services.teacher_session_service import find_active_teacher_session
+from services.course_duplicate_service import ensure_course_not_duplicate, is_unique_violation
+from services.teacher_session_service import (
+    elapsed_seconds_since,
+    find_active_teacher_session,
+    normalize_late_threshold_minutes,
+)
 
 # นำเข้า Router สำหรับ Admin
 from routers.admin import admin_router
@@ -1089,8 +1094,18 @@ def start_attendance_session(
             "grace_period_minutes": 15
         }
         
-        response = supabase.table('attendance_sessions').insert(session_data).execute()
-        
+        try:
+            response = supabase.table('attendance_sessions').insert(session_data).execute()
+        except Exception as insert_error:
+            # ฐานข้อมูลมี unique index "หนึ่งวิชา/หนึ่งอาจารย์ เปิดได้ทีละหนึ่งคาบ"
+            # ถ้ากดเปิดซ้อนพร้อมกัน คำขอที่ช้ากว่าจะมาตกที่นี่
+            if is_unique_violation(insert_error):
+                raise HTTPException(
+                    status_code=409,
+                    detail="มีคาบเรียนที่เปิดอยู่แล้ว กรุณาปิดคาบเดิมก่อนเปิดคาบใหม่",
+                ) from insert_error
+            raise
+
         if not response.data:
             raise HTTPException(status_code=400, detail="ไม่สามารถสร้างห้องเรียนได้")
             
@@ -1110,6 +1125,8 @@ def start_attendance_session(
                 "section": course.get("section"),
                 "created_at": response.data[0].get("created_at"),
                 "status": SessionStatus.OPEN.value,
+                "late_threshold_minutes": normalize_late_threshold_minutes(course.get("late_threshold_minutes")),
+                "elapsed_seconds": elapsed_seconds_since(response.data[0].get("created_at")),
             },
         }
         
@@ -1298,6 +1315,14 @@ def create_course(
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     try:
+        ensure_course_not_duplicate(
+            supabase,
+            teacher_id=current_user.id,
+            course_code=payload.course_code,
+            section=payload.section,
+            year=payload.year,
+            semester=payload.semester,
+        )
         course_data = {
             "course_code": payload.course_code.strip(),
             "course_name": payload.course_name.strip(),
@@ -1309,6 +1334,8 @@ def create_course(
         response = supabase.table('courses').insert(course_data).execute()
         return {"status": "success",
                 "course": response.data[0]}
+    except HTTPException:
+        raise
     except Exception as e:
         # 📝 จับและส่ง detail ของ Error ออกไปฟ้องที่หน้าจอ
         raise HTTPException(status_code=500, detail="ไม่สามารถสร้างรายวิชาได้") from e
@@ -1402,7 +1429,16 @@ def update_course_details(
     ],
 ):
     try:
-        require_owned_course(course_id, current_user)
+        course = require_owned_course(course_id, current_user)
+        ensure_course_not_duplicate(
+            supabase,
+            teacher_id=course["teacher_id"],
+            course_code=payload.course_code,
+            section=payload.section,
+            year=payload.year,
+            semester=payload.semester,
+            exclude_course_id=course_id,
+        )
         response = supabase.table('courses').update({
             "course_code": payload.course_code.strip(),
             "course_name": payload.course_name.strip(),

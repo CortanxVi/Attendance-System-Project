@@ -1,4 +1,5 @@
 import hmac
+import json
 import re
 from typing import Annotated, Literal
 from uuid import UUID
@@ -10,10 +11,12 @@ from starlette.concurrency import run_in_threadpool
 from services.attendance_export_service import export_service
 from services.roster_import_service import (
     MAX_ROSTER_FILE_BYTES,
+    MAX_SOURCE_ROWS,
     ParsedRoster,
     RosterImportError,
     parse_roster_file,
     resolve_roster_actions,
+    roster_mismatch_reason,
 )
 from services.student_year_service import with_derived_study_year
 from core.authorization import (
@@ -448,18 +451,48 @@ async def _read_roster_upload(file: UploadFile) -> bytes:
     return content
 
 
+MAX_EXCLUDED_ROWS = 1000
+
+
+def _parse_excluded_rows(raw: str) -> frozenset[int]:
+    """Read the teacher's "do not import these file rows" list sent as a JSON array of row numbers."""
+    if not isinstance(raw, str):
+        # ไม่ได้ส่งฟิลด์มา (เช่น เรียกฟังก์ชันตรงโดยไม่ผ่าน HTTP) ถือว่าไม่ตัดแถวใด
+        return frozenset()
+    text = raw.strip()
+    if not text:
+        return frozenset()
+    try:
+        values = json.loads(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="รายการแถวที่ตัดออกไม่ถูกต้อง") from exc
+    if (
+        not isinstance(values, list)
+        or len(values) > MAX_EXCLUDED_ROWS
+        or not all(type(value) is int and 1 <= value <= MAX_SOURCE_ROWS for value in values)
+    ):
+        raise HTTPException(status_code=400, detail="รายการแถวที่ตัดออกไม่ถูกต้อง")
+    return frozenset(values)
+
+
 def _parse_and_resolve_roster(
     content: bytes,
     file: UploadFile,
     course: dict,
+    excluded_rows: frozenset[int] = frozenset(),
 ) -> tuple[ParsedRoster, dict[str, int], list[str]]:
-    parsed = parse_roster_file(content, file.filename or "", file.content_type)
+    parsed = parse_roster_file(content, file.filename or "", file.content_type, excluded_rows)
     blocking_errors: list[str] = []
-    detected_code = parsed.detected_course_code
-    if detected_code and detected_code != str(course.get("course_code") or "").strip():
+    mismatch_reason = roster_mismatch_reason(parsed, course)
+    if mismatch_reason:
         blocking_errors.append(
-            f"ไฟล์เป็นรายวิชา {detected_code} แต่หน้าปัจจุบันคือ {course.get('course_code')}"
+            f"ไฟล์เป็นรายวิชา {parsed.detected_course_code} แต่หน้าปัจจุบันคือ {course.get('course_code')}"
+            if mismatch_reason == "course"
+            else f"ไฟล์เป็นตอน {parsed.detected_section} แต่หน้าปัจจุบันคือตอน {course.get('section')}"
         )
+        # ผิดวิชา: ไม่ต้องเทียบรายชื่อกับฐานข้อมูลต่อ (ประหยัดและไม่เปิดเผยข้อมูลสมาชิกโดยไม่จำเป็น)
+        summary = {"enroll": 0, "create_invite": 0, "link_invite": 0, "unchanged": 0, "invalid": 0}
+        return parsed, summary, blocking_errors
     summary = resolve_roster_actions(parsed, str(course["id"]))
     return parsed, summary, blocking_errors
 
@@ -468,22 +501,31 @@ def _parse_and_resolve_roster(
 async def preview_course_roster_import(
     course_id: str,
     file: UploadFile = File(...),
+    excluded_rows: str = Form(""),
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     course = await run_in_threadpool(
         require_course_management_permission, course_id, current_user
     )
+    excluded = _parse_excluded_rows(excluded_rows)
     content = await _read_roster_upload(file)
     try:
         parsed, summary, blocking_errors = await run_in_threadpool(
-            _parse_and_resolve_roster, content, file, course
+            _parse_and_resolve_roster, content, file, course, excluded
         )
     except RosterImportError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
+    mismatch_reason = roster_mismatch_reason(parsed, course)
+    course_mismatch = mismatch_reason is not None
     return {
         "status": "success",
         "ready": summary["invalid"] == 0 and not blocking_errors,
+        "course_mismatch": course_mismatch,
+        "mismatch_reason": mismatch_reason,
+        "excluded_count": parsed.excluded_count,
+        "expected_course_code": course.get("course_code"),
+        "expected_section": course.get("section"),
         "file": {
             "name": parsed.filename,
             "type": parsed.file_type,
@@ -496,11 +538,12 @@ async def preview_course_roster_import(
             "course_code": parsed.detected_course_code,
             "course_name": parsed.detected_course_name,
             "academic_year": parsed.detected_academic_year,
+            "section": parsed.detected_section,
         },
         "summary": summary,
         "warnings": parsed.warnings,
         "blocking_errors": blocking_errors,
-        "rows": [row.as_dict() for row in parsed.rows],
+        "rows": [] if course_mismatch else [row.as_dict() for row in parsed.rows],
     }
 
 
@@ -509,15 +552,17 @@ async def commit_course_roster_import(
     course_id: str,
     file: UploadFile = File(...),
     expected_sha256: str = Form(...),
+    excluded_rows: str = Form(""),
     current_user: AuthenticatedUser = Depends(require_roles("teacher", "admin")),
 ):
     course = await run_in_threadpool(
         require_course_management_permission, course_id, current_user
     )
+    excluded = _parse_excluded_rows(excluded_rows)
     content = await _read_roster_upload(file)
     try:
         parsed, summary, blocking_errors = await run_in_threadpool(
-            _parse_and_resolve_roster, content, file, course
+            _parse_and_resolve_roster, content, file, course, excluded
         )
     except RosterImportError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

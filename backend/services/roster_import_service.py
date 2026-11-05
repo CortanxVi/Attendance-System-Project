@@ -95,6 +95,8 @@ class ParsedRoster:
     detected_academic_year: int | None
     rows: list[ParsedRosterRow]
     warnings: list[str]
+    detected_section: int | None = None
+    excluded_count: int = 0
 
 
 def _clean_text(value: Any) -> str:
@@ -168,6 +170,23 @@ def _extract_metadata(rows: list[list[Any]]) -> tuple[str | None, str | None, in
     return course_match.group(1), _clean_text(course_match.group(2)), academic_year
 
 
+# "ตอน 1", "ตอนเรียน: 003", "Section 2", "Sec. 2" — the number must follow the keyword directly.
+SECTION_PATTERN = re.compile(
+    r"(?<![A-Za-z])(?:ตอนเรียน|ตอน|section|sec)\s*\.?\s*[:：]?\s*0*([0-9]{1,3})(?![0-9])",
+    re.IGNORECASE,
+)
+
+
+def _extract_section(preamble_rows: list[list[Any]]) -> int | None:
+    """Read the section number from the lines above the table header, if one is printed."""
+    preamble = "\n".join(
+        " ".join(_clean_text(cell) for cell in row if _clean_text(cell))
+        for row in preamble_rows[:20]
+    )
+    match = SECTION_PATTERN.search(preamble)
+    return int(match.group(1)) if match else None
+
+
 def _derive_study_year(student_id: str, academic_year: int | None) -> int | None:
     if academic_year is None:
         return None
@@ -194,14 +213,20 @@ def _rows_to_roster(
     digest: str,
     sheet_name: str | None,
     encoding: str | None,
+    excluded_rows: frozenset[int] = frozenset(),
 ) -> ParsedRoster:
     header_index, data_start, columns = _find_header(rows)
     course_code, course_name, source_academic_year = _extract_metadata(rows)
     parsed: list[ParsedRosterRow] = []
+    excluded_count = 0
 
     for index, source in enumerate(rows[data_start:], start=data_start + 1):
         if any(_clean_text(value).startswith("พิมพ์ ณ วันที่") for value in source):
             break
+        if index in excluded_rows:
+            # แถวที่อาจารย์เลือกตัดออก: ข้ามก่อนตรวจซ้ำ/ตรวจบัญชี (ไม่แก้ไฟล์ต้นฉบับ)
+            excluded_count += 1
+            continue
 
         def value_for(field_name: str) -> Any:
             column = columns.get(field_name)
@@ -257,6 +282,8 @@ def _rows_to_roster(
             )
 
     if not parsed:
+        if excluded_count:
+            raise RosterImportError("ไม่เหลือรายชื่อให้นำเข้าหลังตัดรายการออก กรุณาเลือกไฟล์ใหม่")
         raise RosterImportError("ไม่พบแถวรายชื่อนักศึกษาในไฟล์")
 
     duplicate_ids: dict[str, list[ParsedRosterRow]] = {}
@@ -288,6 +315,8 @@ def _rows_to_roster(
         detected_academic_year=source_academic_year,
         rows=parsed,
         warnings=warnings,
+        detected_section=_extract_section(rows[:header_index]),
+        excluded_count=excluded_count,
     )
 
 
@@ -400,7 +429,12 @@ def _read_csv_rows(content: bytes) -> tuple[list[list[str]], str]:
     return rows, encoding
 
 
-def parse_roster_file(content: bytes, filename: str, content_type: str | None) -> ParsedRoster:
+def parse_roster_file(
+    content: bytes,
+    filename: str,
+    content_type: str | None,
+    excluded_rows: frozenset[int] = frozenset(),
+) -> ParsedRoster:
     if not content:
         raise RosterImportError("ไฟล์ว่างเปล่า")
     if len(content) > MAX_ROSTER_FILE_BYTES:
@@ -422,6 +456,7 @@ def parse_roster_file(content: bytes, filename: str, content_type: str | None) -
             digest=digest,
             sheet_name=sheet_name,
             encoding=None,
+            excluded_rows=excluded_rows,
         )
 
     if suffix == ".csv":
@@ -435,9 +470,50 @@ def parse_roster_file(content: bytes, filename: str, content_type: str | None) -
             digest=digest,
             sheet_name=None,
             encoding=encoding,
+            excluded_rows=excluded_rows,
         )
 
     raise RosterImportError("รองรับเฉพาะไฟล์ .xlsx และ .csv")
+
+
+def _course_code_key(value: Any) -> str:
+    """Compare course codes ignoring case, spaces and dashes (030513-300 == 030513300)."""
+    return re.sub(r"[^0-9a-z\u0e00-\u0e7f]", "", str(value or "").casefold())
+
+
+def roster_course_mismatch(parsed: ParsedRoster, course_code: Any) -> bool:
+    """True when the file names a course and it is not the course being edited.
+
+    A file that names no course is not a mismatch here: the import page already
+    warns about it and uses the course the teacher selected.
+    """
+    detected = parsed.detected_course_code
+    if not detected:
+        return False
+    return _course_code_key(detected) != _course_code_key(course_code)
+
+
+def roster_section_mismatch(parsed: ParsedRoster, section: Any) -> bool:
+    """True when the file prints a section number and it differs from the course's section.
+
+    No section printed in the file (or an unusable section on the course) means
+    there is nothing reliable to compare, so the file is not rejected.
+    """
+    if parsed.detected_section is None:
+        return False
+    try:
+        return parsed.detected_section != int(section)
+    except (TypeError, ValueError):
+        return False
+
+
+def roster_mismatch_reason(parsed: ParsedRoster, course: dict) -> str | None:
+    """Return "course" or "section" when the file belongs elsewhere, else None."""
+    if roster_course_mismatch(parsed, course.get("course_code")):
+        return "course"
+    if roster_section_mismatch(parsed, course.get("section")):
+        return "section"
+    return None
 
 
 def _chunks(values: list[str], size: int = 100) -> Iterable[list[str]]:

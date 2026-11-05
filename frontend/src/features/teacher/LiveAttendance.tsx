@@ -1,11 +1,13 @@
-﻿import { useCallback, useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../../lib/supabaseClient';
-import { Clock, Users, XCircle, AlertTriangle, CreditCard, ToggleLeft, ToggleRight, Maximize2, Minimize2 } from 'lucide-react';
+import { Users, XCircle, AlertTriangle, CreditCard, ToggleLeft, ToggleRight, Maximize2, Minimize2, PictureInPicture2 } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import { apiErrorMessage } from '../../services/apiError';
 import { usePresentationMode } from '../../components/presentation/usePresentationMode';
+import { useTeacherAttendance } from '../../contexts/teacherAttendanceState';
+import { buildQrPayload } from '../../hooks/useQrTokenRotation';
 
 interface LiveAttendanceProps {
   courseCode?: string;
@@ -22,12 +24,17 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
     toggle: togglePresentation,
     exit: exitPresentation,
   } = usePresentationMode<HTMLDivElement>();
-  const [token, setToken] = useState<string>(''); 
-  const [countdown, setCountdown] = useState<number>(15);
-  const [refreshSeconds, setRefreshSeconds] = useState<number>(15);
-  const [tokenError, setTokenError] = useState<string | null>(null);
-  const [rotationAttempt, setRotationAttempt] = useState(0);
-  
+  // The QR token is rotated once by TeacherAttendanceProvider and shared with the floating window.
+  const {
+    qrToken: token,
+    qrError: tokenError,
+    autoCloseMinutes,
+    pipSupported,
+    pipOpen,
+    openQrPip,
+    closeQrPip,
+  } = useTeacherAttendance();
+
   const [attendanceCount, setAttendanceCount] = useState<number>(0);
 
   // --- NFC States ---
@@ -35,21 +42,6 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
   const [scanUid, setScanUid] = useState('');
   const [nfcStatus, setNfcStatus] = useState({ text: '', type: '' });
   const rfidInputRef = useRef<HTMLInputElement>(null);
-
-  // --- QR Token Logic ---
-  const rotateToken = useCallback(async () => {
-    try {
-      const res = await axios.post(`/api/v1/sessions/${activeSessionId}/rotate-token`);
-      setToken(res.data.qr_token);
-      const nextRefresh = Number(res.data.qr_refresh_rate_seconds) || 15;
-      setRefreshSeconds(nextRefresh);
-      setCountdown(nextRefresh);
-      setTokenError(null);
-    } catch (err: unknown) {
-      setTokenError(apiErrorMessage(err, 'ไม่สามารถหมุน QR Code ใหม่ได้ กรุณาลองใหม่'));
-      setRotationAttempt((value) => value + 1);
-    }
-  }, [activeSessionId]);
 
   // --- Realtime DB Logic ---
   useEffect(() => {
@@ -71,19 +63,6 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
 
     return () => { window.clearTimeout(initialTimer); clearInterval(interval); };
   }, [activeSessionId]);
-
-  // --- QR Timer ---
-  useEffect(() => {
-    const initialTimer = window.setTimeout(() => { void rotateToken(); }, 0);
-    return () => window.clearTimeout(initialTimer);
-  }, [rotateToken]);
-
-  useEffect(() => {
-    if (!token && !tokenError) return;
-    const rotationTimer = window.setTimeout(() => { void rotateToken(); }, tokenError ? 5000 : refreshSeconds * 1000);
-    const countdownTimer = window.setInterval(() => setCountdown((value) => Math.max(0, value - 1)), 1000);
-    return () => { window.clearTimeout(rotationTimer); window.clearInterval(countdownTimer); };
-  }, [token, tokenError, refreshSeconds, rotateToken, rotationAttempt]);
 
   // --- NFC Logic ---
   useEffect(() => {
@@ -127,14 +106,21 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
     }
   };
 
-  const qrData = JSON.stringify({
-    session_id: activeSessionId, 
-    token: token
-  });
+  const qrData = buildQrPayload(activeSessionId, token);
 
   const closeWindow = async () => {
     await exitPresentation();
     onClose?.();
+  };
+
+  const togglePip = async () => {
+    if (pipOpen) {
+      closeQrPip();
+      return;
+    }
+    const opened = await openQrPip();
+    // Minimize this dialog so the page behind it is usable while the QR floats on top.
+    if (opened) await closeWindow();
   };
 
   return (
@@ -152,15 +138,28 @@ export default function LiveAttendance({ courseCode = '', courseName = '', activ
           
           <div className={`relative mb-6 aspect-square w-full rounded-xl border border-gray-200 bg-white p-3 shadow-sm sm:p-4 ${presentationActive ? 'max-w-[min(64vmin,38rem)]' : 'max-w-[250px]'}`}>
              <QRCodeSVG value={qrData} size={250} level={"H"} className="h-auto w-full max-w-full" />
-             <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl text-orange-500 shadow-md border border-gray-100">
-                {countdown}
-             </div>
           </div>
-          
-          <div className="flex items-center gap-2 rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-center text-sm font-medium text-orange-700">
-            <Clock size={16} />
-            Dynamic QR เปลี่ยน token ทุก {refreshSeconds} วินาที
-          </div>
+
+          {!presentationActive && (
+            <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+              <button
+                type="button"
+                onClick={() => void togglePip()}
+                disabled={!pipSupported}
+                aria-pressed={pipOpen}
+                className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-300 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <PictureInPicture2 size={18} aria-hidden="true" />
+                {pipOpen ? 'ปิดหน้าต่าง QR ลอย' : 'เปิด QR เป็นหน้าต่างลอย (PiP)'}
+              </button>
+              <p className="text-xs text-slate-500">
+                {pipSupported
+                  ? 'หน้าต่างลอยย้ายตำแหน่งได้ และอยู่เหนือโปรแกรมอื่น'
+                  : 'เบราว์เซอร์นี้ไม่รองรับหน้าต่างลอย (ใช้ Chrome หรือ Edge บนคอมพิวเตอร์)'}
+                {autoCloseMinutes !== null && ` ระบบจะปิดการเช็คชื่อและหน้าต่างลอยอัตโนมัติเมื่อครบ ${autoCloseMinutes} นาทีนับจากเปิดคาบ`}
+              </p>
+            </div>
+          )}
 
           {tokenError && (
             <div className="flex items-center gap-2 text-sm font-medium text-red-600 bg-red-50 px-4 py-2 rounded-full border border-red-200 mt-3">

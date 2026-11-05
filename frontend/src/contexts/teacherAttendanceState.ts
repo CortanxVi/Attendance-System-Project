@@ -8,6 +8,10 @@ export interface ActiveTeacherSession {
   section?: number | null;
   created_at?: string | null;
   status: 'open';
+  /** Course late threshold; the session closes automatically when it passes. */
+  late_threshold_minutes?: number;
+  /** Seconds the session had been open when the server answered. */
+  elapsed_seconds?: number;
 }
 
 export type AttendancePanel = 'qr' | 'nfc' | null;
@@ -18,6 +22,15 @@ export interface TeacherAttendanceContextValue {
   loading: boolean;
   mutating: boolean;
   recoveryError: string;
+  /** Minutes after opening at which the session closes by itself (null = no open session). */
+  autoCloseMinutes: number | null;
+  /** Shared QR token; rotated in one place so the dialog and floating window never fight. */
+  qrToken: string;
+  qrError: string | null;
+  pipSupported: boolean;
+  pipOpen: boolean;
+  openQrPip: () => Promise<boolean>;
+  closeQrPip: () => void;
   refreshActiveSession: () => Promise<void>;
   startSession: (course: { id: string; course_code: string; course_name: string; section?: number | null }) => Promise<void>;
   closeSession: () => Promise<void>;

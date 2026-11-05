@@ -16,6 +16,7 @@
     "test:face-runtime": "node scripts/test-face-runtime.mjs",
     "test:camera-quality": "node --experimental-strip-types scripts/test-camera-quality.mts",
     "test:api-origin": "node --experimental-strip-types scripts/test-api-origin.mts",
+    "test:session-deadline": "node --experimental-strip-types scripts/test-session-deadline.mts",
     "preview": "vite preview"
   },
   "dependencies": {

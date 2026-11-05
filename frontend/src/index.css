@@ -100,6 +100,9 @@ body {
 }
 
 .student-content-scroll {
+  /* Positioned so absolutely placed children (e.g. sr-only file inputs) are
+     contained and clipped here instead of stretching the whole document. */
+  position: relative;
   min-height: 0;
   flex: 1 1 auto;
   overflow-x: hidden;

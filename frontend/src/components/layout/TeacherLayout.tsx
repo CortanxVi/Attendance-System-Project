@@ -98,7 +98,7 @@ export default function TeacherLayout({ profile }: { profile: SidebarAccountProf
       </aside>
 
       {/* พื้นที่หลักแสดงเนื้อหา (Main Content) */}
-      <main className="h-svh min-w-0 flex-1 overflow-y-auto">
+      <main className="relative h-svh min-w-0 flex-1 overflow-y-auto">
         <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between border-b border-gray-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:px-5 lg:px-8">
           <div className="flex min-w-0 items-center gap-3 sm:gap-4">
             <button ref={triggerRef} type="button" aria-label="เปิดเมนูด้านข้าง" aria-controls="teacher-navigation" aria-expanded={isSidebarOpen} onClick={() => setIsSidebarOpen(true)} className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-slate-800 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 lg:hidden">

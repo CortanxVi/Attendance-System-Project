@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from core.config import supabase_db as supabase
 from core.security import AuthenticatedUser, require_roles
-from services.student_year_service import with_derived_study_year
+from services.student_year_service import (
+    resolve_student_id,
+    sync_stored_study_year,
+    with_derived_study_year,
+)
 
 student_router = APIRouter(
     prefix="/api/v1/students",
@@ -27,7 +31,19 @@ def get_my_student_profile(
         enrollment_response = supabase.table("enrollments").select(
             "course_id", count="exact"
         ).eq("student_id", current_user.id).execute()
-        profile = with_derived_study_year(profile_response.data[0])
+        stored_profile = profile_response.data[0]
+        profile = with_derived_study_year(stored_profile)
+        # Show the student id cut from the verified e-mail (falls back to the stored one).
+        profile["student_id"] = resolve_student_id(
+            stored_profile.get("email"),
+            stored_profile.get("student_id"),
+        ) or stored_profile.get("student_id")
+        sync_stored_study_year(
+            supabase,
+            current_user.id,
+            stored_profile.get("academic_year"),
+            profile["academic_year"],
+        )
         profile["nfc_registered"] = bool(profile.pop("nfc_uid", None))
         profile["enrolled_course_count"] = enrollment_response.count or 0
         profile["avatar_url"] = current_user.avatar_url

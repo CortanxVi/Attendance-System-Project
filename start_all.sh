@@ -72,11 +72,11 @@ backend_pid=$!
 
 (
   cd "$project_root/frontend"
-  exec npm run dev -- --host 127.0.0.1 --port 5180
+  exec npm run dev -- --host 127.0.0.1 --port 5181
 ) &
 frontend_pid=$!
 
 echo "Backend : http://127.0.0.1:8080"
 echo "OCR     : http://127.0.0.1:3001 (ready)"
-echo "Frontend: http://127.0.0.1:5180"
+echo "Frontend: http://127.0.0.1:5181"
 wait -n "$backend_pid" "$ocr_pid" "$frontend_pid"
