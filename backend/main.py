@@ -136,7 +136,7 @@ app.add_middleware(SupportUploadLimitMiddleware)
 app.add_middleware(OperationalHeadersMiddleware, production=APP_ENV == "production")
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 
-# เกณฑ์คะแนนความเหมือนใบหน้า (0.45 - 0.50 ถือว่าแม่นยำและปลอดภัยสูงสำหรับ CPU)
+
 FACE_THRESHOLD = 0.45
 SUPABASE_ERROR_MESSAGES = {
     '23505': 'นักศึกษาเช็คชื่อในคาบนี้ไปแล้ว',
@@ -243,19 +243,6 @@ async def read_student_card(
     return {"success": True, "foundId": student_id}
 
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
-    """
-    แปลงไฟล์ bytes จากหน้าบ้านให้เป็นภาพ BGR สำหรับ OpenCV
-
-    🌟 [แก้ไข] เพิ่มการแก้ไข EXIF Orientation ก่อนแปลงเป็นภาพ
-    เหตุผล: ภาพถ่ายจากมือถือหลายรุ่น (โดยเฉพาะตอนถ่ายแนวตั้ง) จะไม่หมุนพิกเซลจริง แต่จะแนบ
-    EXIF tag บอกทิศทางที่ควรหมุนตอนแสดงผลแทน เบราว์เซอร์/แอปดูรูปจะหมุนให้อัตโนมัติตาม tag นี้
-    ทำให้ผู้ใช้เห็นภาพหน้าตรงปกติในหน้าพรีวิว แต่ cv2.imdecode (วิธีเดิม) ไม่รู้จัก EXIF เลย
-    จะอ่านพิกเซลดิบตามที่บันทึกจริง ซึ่งอาจเอียง/หมุนไป 90/180/270 องศาโดยไม่รู้ตัว ส่งผลให้
-    โมเดล AI ตรวจจับใบหน้าผิดพลาด (คะแนนความชัดตก หรือเจอจุดปลอมถูกตีความเป็นใบหน้าที่ 2)
-
-    วิธีแก้: ใช้ Pillow เปิดภาพ แล้วเรียก ImageOps.exif_transpose() เพื่อหมุนพิกเซลจริง
-    ให้ตรงกับที่ EXIF ระบุไว้ก่อน ค่อยแปลงเป็น array ให้ OpenCV ใช้งานต่อ
-    """
     try:
         # เปิดภาพด้วย Pillow (อ่านค่า EXIF ได้ ต่างจาก cv2.imdecode)
         pil_image = Image.open(io.BytesIO(image_bytes))
@@ -267,8 +254,6 @@ def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
         rgb_array = np.array(pil_image)
         return cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
     except Exception as e:
-        # 🛡️ Fallback: ถ้า Pillow เปิดไฟล์ไม่ได้ไม่ว่าด้วยเหตุผลใด (ไฟล์เสีย/ฟอร์แมตแปลกๆ)
-        # ให้ใช้วิธีเดิม (cv2.imdecode) แทน เพื่อไม่ให้ทั้งระบบพังเพราะไฟล์เดียว
         print(f"⚠️ อ่านภาพแบบรู้จัก EXIF ไม่สำเร็จ กำลังใช้วิธีสำรอง: {str(e)}")
         nparr = np.frombuffer(image_bytes, np.uint8)
         return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -284,7 +269,7 @@ def resize_image_if_needed(img: np.ndarray, max_dimension: int = 1280) -> np.nda
     height, width = img.shape[:2]
     longest_side = max(height, width)
     if longest_side <= max_dimension:
-        return img  # ภาพเล็กพออยู่แล้ว ไม่ต้องย่อ
+        return img
     scale = max_dimension / longest_side
     new_size = (int(width * scale), int(height * scale))
     return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
@@ -331,7 +316,6 @@ def parse_supabase_error(error_str_or_dict) -> str:
 
         code = error_dict.get("code")
         
-        # 🌟 คลังคำศัพท์ Error ภาษาไทยที่พบบ่อย 🌟
         if code == "23505":
             return "นักศึกษาคนนี้ได้ทำการเช็คชื่อในคาบเรียนนี้ไปเรียบร้อยแล้ว (ข้อมูลซ้ำ)"
         elif code == "23503":
@@ -831,7 +815,6 @@ async def verify_hybrid_face_attendance(
                 detail="นักศึกษาท่านนี้ยังไม่ได้ลงทะเบียนใบหน้าตั้งต้นในระบบ"
             )
 
-        # 🌟 ล้างข้อมูลและแปลงเป็น Numpy Array (Float32) 🌟
         if isinstance(registered_embedding_data, str):
             clean_str = registered_embedding_data.replace('{', '[').replace('}', ']')
             registered_embedding_list = json.loads(clean_str)
@@ -877,7 +860,7 @@ async def verify_hybrid_face_attendance(
             "student_name": full_name,
             "method": "face_ocr",
             "score": round(similarity_score, 4),
-            "calculated_status": calculated_status,  # 🌟 [เพิ่มใหม่] present / late / absent ให้ Frontend โชว์ได้ตรงจริง
+            "calculated_status": calculated_status,
             "check_in_time": checked_in_at,
             "message": f"เช็คชื่อคุณ {full_name} สำเร็จเรียบร้อยแล้ว!"
         }
@@ -1081,7 +1064,7 @@ def start_attendance_session(
                 detail=f"มีคาบ {open_session['course_code'] or 'อื่น'} เปิดอยู่ กรุณาปิดคาบเดิมก่อน",
             )
         course = require_owned_course(payload.course_id, current_user)
-        # 🌟 2. เจนเนอเรต Token ก้อนแรกขึ้นมาสำหรับเซสชันนี้
+
         initial_token = str(uuid.uuid4())
 
         session_data = {
@@ -1168,10 +1151,6 @@ def close_attendance_session(
         print(f"❌ [Error] Close Session Failed: {str(e)}")
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
-# 🌟 [เพิ่มใหม่] API สำหรับ "หมุน" QR Token จริงๆ (แก้บั๊กเดิมที่ฝั่ง React เขียนลงคอลัมน์
-# current_token/expires_at ที่ไม่มีอยู่จริงในตาราง — ที่ถูกต้องคือต้องอัปเดตคอลัมน์ qr_token
-# เพราะ endpoint /api/v1/attendance/checkin เช็คกับคอลัมน์นี้เท่านั้น)
-# ฝั่งอาจารย์ (LiveAttendance.tsx) ควรเรียก endpoint นี้ทุกๆ qr_refresh_rate_seconds แทนการยิง Supabase ตรงๆ
 @app.post("/api/v1/sessions/{session_id}/rotate-token")
 def rotate_session_qr_token(
     session_id: str,
@@ -1199,8 +1178,6 @@ def rotate_session_qr_token(
     except Exception as e:
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
-# 🌟 [เพิ่มใหม่] API ให้นักศึกษาตรวจสอบว่า QR ที่สแกนมายังใช้ได้อยู่ไหม ก่อนจะไปขั้นตอนสแกนหน้า
-# (แก้บั๊กเดิมที่ QRScanner.tsx ไป query ตาราง active_sessions ที่ไม่มีอยู่จริงในระบบ)
 @app.post("/api/v1/sessions/{session_id}/validate")
 def validate_session_qr_token(
     session_id: str,
@@ -1337,7 +1314,6 @@ def create_course(
     except HTTPException:
         raise
     except Exception as e:
-        # 📝 จับและส่ง detail ของ Error ออกไปฟ้องที่หน้าจอ
         raise HTTPException(status_code=500, detail="ไม่สามารถสร้างรายวิชาได้") from e
 
 @app.get(
@@ -1371,9 +1347,7 @@ def get_courses_by_teacher(
     except HTTPException:
         raise
     except Exception as e:
-        # 🌟 ตรงนี้สำคัญ: พิมพ์ Error ลงใน Terminal ของหลังบ้านให้เราเห็นด้วย
         print(f"DEBUG ERROR: {str(e)}") 
-        # ส่ง Error กลับไปที่หน้าเว็บให้ชัดเจน
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายในระบบ") from e
 
 # 3. API บันทึกการตั้งค่าเกณฑ์วิชา
@@ -1480,10 +1454,7 @@ def delete_course(
             try:
                 remove_support_storage_paths(support_paths)
             except Exception:
-                # Rows were deleted successfully and the private objects are no
-                # longer addressable; operational cleanup can be retried later.
                 logger.exception("Failed to remove detached support attachments for course %s", course_id)
-        # หมายเหตุ: หากฐานข้อมูลมีข้อมูลตารางอื่นผูกอยู่ ต้องแน่ใจว่าตั้งค่า ON DELETE CASCADE ไว้ที่ Supabase
         return {"status": "success", "message": "ลบรายวิชาเรียบร้อยแล้ว"}
     except HTTPException:
         raise
@@ -1505,14 +1476,12 @@ def get_course_attendance_summary(
             raise HTTPException(status_code=404, detail="ไม่พบข้อมูลรายวิชา")
         course = course_res.data[0]
         
-        total_sessions = course['total_sessions']        # เช่น 15 ครั้ง
-        max_absent_pct = course['max_absence_percent']  # เช่น 20%
+        total_sessions = course['total_sessions']
+        max_absent_pct = course['max_absence_percent']
         
-        # คำนวณจำนวนครั้งสูงสุดที่ขาดได้: 15 ครั้ง * (20/100) = ขาดได้ไม่เกิน 3 ครั้ง หากขาด >= 4 ครั้ง ได้ Fa
         allowed_absent_count = total_sessions * (max_absent_pct / 100)
 
         # 2. ดึงรายชื่อนักศึกษาทั้งหมดในวิชานี้พร้อมข้อมูลประวัติการเช็คชื่อ
-        # (หมายเหตุ: ปรับโครงสร้าง Query ตามความสัมพันธ์ตารางจริงของคุณ)
         records_res = supabase.table('attendance_records') \
             .select('student_id, status, attendance_sessions!inner(course_id, archived_at)') \
             .eq('attendance_sessions.course_id', course_id) \
@@ -1533,10 +1502,9 @@ def get_course_attendance_summary(
         for s_id, summary in student_summary.items():
             absent_count = summary['absent']
             attendance_points = summary['present'] + (summary['late'] * 0.5)
-            # คำนวณอัตราส่วนการขาดเรียนจริงเป็นเปอร์เซ็นต์
             absence_rate = (absent_count / total_sessions) * 100
             
-            # ตัดสินเกรด Fa
+
             grade_status = "Normal"
             if absent_count > allowed_absent_count:
                 grade_status = "Fa"  # สอบตกเนื่องจากเวลาเรียนไม่พอ (Failed Attendance)
@@ -1570,12 +1538,4 @@ app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
-    # 🌟 [หมายเหตุสำคัญสำหรับตอน Deploy จริง] คำสั่งนี้ (reload=True) เหมาะกับตอนพัฒนา/แก้โค้ดเท่านั้น
-    # และรันได้แค่ 1 worker process เท่านั้น (reload=True ใช้พร้อม workers หลายตัวไม่ได้)
-    #
-    # ตอน deploy ใช้งานจริง ควรปิด reload แล้วรันหลาย worker process แทน เพื่อให้ต่อให้ worker
-    # ตัวหนึ่งกำลังยุ่งอยู่กับการประมวลผลเช็คชื่อ (หนักๆ) worker ตัวอื่นก็ยังรับ request จาก
-    # หน้า Admin/อาจารย์ ได้ตามปกติ (เสริมจากการแก้ให้ไม่บล็อก event loop ในโค้ดข้างบนแล้ว)
-    # ตัวอย่างคำสั่งรันจริง (ไม่ต้องใช้ reload=True ในไฟล์นี้แล้ว):
-    #   uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
