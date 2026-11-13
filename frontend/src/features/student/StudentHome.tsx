@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
+import TestModePanel from './TestModePanel';
+import { TEST_MODE } from '../../config/testMode';
 import { faceService } from '../../services/api';
 import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
@@ -68,6 +70,28 @@ export default function StudentHome() {
     setLivenessToken(info.livenessToken);
     setLivenessAction(info.livenessAction);
     setLivenessPromptDelayMs(info.livenessPromptDelayMs);
+  };
+
+  // Test mode only: the QR step is replaced by a direct start from the session list.
+  const handleTestChallenge = (info: VerifiedSessionInfo) => {
+    handleVerifySuccess(info);
+    setIsLivenessActive(true);
+  };
+
+  // Test mode only: forget the previous attempt so the next press asks for a fresh
+  // random liveness action (blink or move closer).
+  const resetAttempt = () => {
+    setVerifiedCourse(null);
+    setChallengeId(null);
+    setChallengeExpiresAt(null);
+    setLivenessToken(null);
+    setLivenessAction(null);
+    setLivenessPromptDelayMs(null);
+    setCapturedFaceData(null);
+    setCapturedPassiveData(null);
+    setCapturedActionData(null);
+    setCapturedRecoveryData(null);
+    setLivenessEvidence(null);
   };
 
   const closeQrScanner = useCallback(() => {
@@ -166,7 +190,7 @@ export default function StudentHome() {
            <XCircle size={64} className="mx-auto text-red-500 mb-4" />
            <h2 className="text-2xl font-bold text-red-700 mb-2">เช็คชื่อไม่สำเร็จ</h2>
            <p className="text-gray-600 mb-4">{resultMessage}</p>
-           <button onClick={() => { setFinalResult(null); setResultMessage(''); }} className="bg-red-600 text-white px-6 py-2 rounded-lg font-bold">ลองใหม่อีกครั้ง</button>
+           <button onClick={() => { setFinalResult(null); setResultMessage(''); if (TEST_MODE) resetAttempt(); }} className="bg-red-600 text-white px-6 py-2 rounded-lg font-bold">ลองใหม่อีกครั้ง</button>
         </div>
       ) : capturedFaceData ? (
         /* ด่านที่ 3: ถ่ายหน้าเสร็จแล้ว กดยืนยัน */
@@ -209,7 +233,7 @@ export default function StudentHome() {
           <h2 className="text-xl font-bold text-green-700 mb-2">เข้าสู่ห้องเรียน {verifiedCourse} แล้ว</h2>
           <div className="mx-auto my-4 flex size-16 items-center justify-center rounded-full bg-white text-green-700 shadow-sm"><ScanFace size={32} /></div>
           <p className="mb-4 text-sm leading-6 text-gray-600">ขั้นตอนต่อไปสแกนใบหน้าเพียงอย่างเดียว ไม่ต้องถ่ายหรืออัปโหลดบัตรนักศึกษา</p>
-          {challengeExpiresAt && (
+          {challengeExpiresAt && !TEST_MODE && (
             <p className="mb-3 text-xs text-gray-500">
               สิทธิ์จาก QR ใช้ลองสแกนซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
               {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 20 วินาที
@@ -229,7 +253,13 @@ export default function StudentHome() {
       ) : (
         /* หน้าจอเริ่มต้น */
         <div className="flex flex-col gap-4">
-          <section className="overflow-hidden rounded-3xl bg-slate-900 text-white shadow-lg shadow-slate-900/10">
+          {TEST_MODE && (
+            <TestModePanel
+              disabled={faceRuntime.status !== 'ready'}
+              onChallenge={handleTestChallenge}
+            />
+          )}
+          <section hidden={TEST_MODE} className="overflow-hidden rounded-3xl bg-slate-900 text-white shadow-lg shadow-slate-900/10">
             <div className="px-[clamp(1rem,5vw,1.5rem)] pb-5 pt-6">
               <p className="text-xs font-bold tracking-wide text-orange-300">DYNAMIC QR CHECK-IN</p>
               <h2 className="mt-2 text-[clamp(1.35rem,6vw,1.75rem)] font-black leading-tight">สแกน QR หน้าห้องเรียน</h2>

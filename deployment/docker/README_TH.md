@@ -192,3 +192,87 @@ docker compose -f deployment/docker/compose.staging.yml build --no-cache
 ชุด Staging นี้ไม่แทน Production deployment: Production ต้องใช้ hostname/TLS คงที่,
 environment secrets แยก, Supabase Production ที่ผ่าน migration review, monitoring,
 backup/restore และ rollback ที่ทดสอบแล้ว
+
+## 8. ทางเลือก: รัน Backend และ OCR ด้วยสคริปต์แทน Docker (สำหรับทดสอบผ่าน ngrok)
+
+ใช้เมื่อต้องการทดสอบโค้ดของ branch ปัจจุบันบนเครื่องพัฒนาโดยตรง และเปิดเฉพาะ Backend ให้ Frontend Preview
+ที่โฮสต์อยู่ที่อื่น (เช่น Vercel) เรียกผ่าน ngrok สคริปต์คือ `scripts/start_backend_ngrok.sh`
+
+```text
+Vercel Preview --HTTPS--> ngrok --> uvicorn 127.0.0.1:8000 --> Light OCR 127.0.0.1:3001
+                                              `--> Supabase (ตามที่ backend/.env ชี้)
+```
+
+ข้อควรรู้
+
+- สคริปต์อ่านข้อมูล Supabase จาก `backend/.env` จึงเขียนข้อมูลลงโปรเจกต์เดียวกับที่ไฟล์นั้นชี้ ใช้เฉพาะบัญชีและวิชาทดสอบ
+- Backend รันด้วย `APP_ENV=production` เพื่อปิด `/docs`, `/redoc`, `/openapi.json` และบังคับ CORS เป็น HTTPS ตรงตัว
+- ต่างจาก Docker: process รันด้วยสิทธิ์ผู้ใช้ปัจจุบัน ไม่มี non-root/`cap_drop`/จำกัดหน่วยความจำของคอนเทนเนอร์
+- ngrok สิ้นสุด TLS ที่ปลายทางของ ngrok ภาพใบหน้าและ access token จึงผ่านผู้ให้บริการนี้ระหว่างทาง เปิด tunnel เฉพาะช่วงทดสอบ
+- บัญชี ngrok ฟรีมีโควตารายเดือน (ข้อมูลออก 1 GB, HTTP 20,000 request ตามเอกสาร ngrok) ตรวจแผนบัญชีก่อนทดสอบจำนวนมาก
+
+### 8.1 เตรียมครั้งแรก
+
+1. ใช้ Node.js 22.12+ (`nvm use 22`; สคริปต์พยายามโหลด nvm ให้เอง) และมี `backend/.venv`, `backend/.env`, `ocr-service/.env`
+2. ถ้าเคยรัน Docker staging ให้หยุดก่อนเพื่อคืนพอร์ต 8000:
+   `docker compose -f deployment/docker/compose.staging.yml down`
+3. รันสคริปต์ครั้งแรก มันจะสร้างไฟล์ตั้งค่าส่วนตัวนอก repo ที่ `~/.config/km-attendance/staging.env`
+   (สิทธิ์ 600) ที่มี `LIVENESS_SIGNING_KEY` และ `TEMP_ADMIN_PIN_PEPPER` ที่สุ่มให้ และ `STAGING_FRONTEND_ORIGINS`
+   แล้วออกจากโปรแกรม ให้ตรวจ/แก้ไฟล์นี้ แล้วรันใหม่
+   - `STAGING_FRONTEND_ORIGINS` ต้องเป็น origin แบบ `https://host` คั่นด้วย `,` ไม่มี path และไม่มี `/` ท้าย
+   - ต้องเพิ่ม URL ของ Preview ของ branch ที่ทดสอบ มิฉะนั้นเบราว์เซอร์จะติด CORS
+   - ห้ามส่งไฟล์นี้ใน chat หรือ commit
+4. `OCR_SERVICE_TOKEN` ใน `backend/.env` และ `ocr-service/.env` ต้องตรงกันและยาวอย่างน้อย 32 ตัวอักษร
+
+### 8.2 ใช้งาน
+
+```bash
+scripts/start_backend_ngrok.sh
+```
+
+สคริปต์เปิด ngrok ก่อนเพื่ออ่านโดเมนสาธารณะ จากนั้นเปิด OCR และ Backend (`TRUSTED_HOSTS` ใส่โดเมนนั้นให้อัตโนมัติ)
+รอ `/health/ready` แล้วตรวจตัวเองสองข้อ คือเข้า `/health/live` ผ่าน ngrok ได้ 200 และ `/docs` ได้ 404
+จากนั้นพิมพ์ `VITE_API_ORIGIN` ที่ต้องตั้งในโฮสต์ Frontend กด Ctrl+C เพื่อหยุดทุกอย่างรวมทั้ง tunnel
+
+```bash
+scripts/start_backend_ngrok.sh status
+scripts/start_backend_ngrok.sh stop
+```
+
+ปรับพอร์ตได้ด้วย `STAGING_BACKEND_PORT` และ `STAGING_OCR_PORT` ล็อกอยู่ที่
+`~/.local/state/km-attendance-staging/`
+
+### 8.3 ฝั่ง Frontend Preview และ Supabase
+
+- ตั้งค่า Environment Variables แบบ Preview ของ branch ที่ทดสอบตามตัวอย่าง `frontend/.env.staging.example`
+  (`VITE_API_ORIGIN`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`) แล้ว redeploy เพราะค่าถูกฝังตอน build
+- เพิ่ม URL ของ Preview ใน Supabase Authentication → URL Configuration → Redirect URLs
+- ถ้า Vercel เปิด Deployment Protection ไว้ ผู้ทดสอบภายนอกอาจต้องล็อกอิน Vercel หรือใช้ลิงก์แชร์
+
+### 8.4 โหมดทดสอบ: ไม่ต้องสแกน QR และไม่มีตัวจับเวลา (เฉพาะวิชาทดสอบ)
+
+ใช้เมื่อต้องทดลองโมเดลใบหน้าซ้ำหลายครั้งโดยไม่ต้องให้ผู้สอนแสดง QR ทุกรอบ ระบบเปลี่ยนเฉพาะขั้น QR:
+นักศึกษาที่เป็นสมาชิกวิชาทดสอบเห็นรายการคาบที่เปิดอยู่และกด "เริ่มสแกนใบหน้า" ได้ทันที
+
+| ถูกข้าม | ยังทำงานเหมือนเดิม |
+|---|---|
+| QR token และการหมุน QR, ตัวกันสแกนถี่ 3 วินาที, อายุสิทธิ์ 420 วินาที (ใน test mode อายุ 4 ชั่วโมง), ตัวปิดคาบอัตโนมัติฝั่งผู้สอน | ล็อกอินและตรวจ token, บทบาท, การเป็นสมาชิกวิชา, คาบต้องเปิดอยู่, เช็คชื่อได้ครั้งเดียวต่อคาบ, Liveness (รวมเวลาภายใน), PAD, เทียบใบหน้า, บันทึกผลจริงลงฐานข้อมูล |
+
+ประตูกันพลาด (ตรวจด้วยชุดทดสอบอัตโนมัติ)
+
+1. เปิดได้ต่อเมื่อมี `ATTENDANCE_TEST_MODE=1` ร่วมกับ `ATTENDANCE_TEST_MODE_ACK` ที่เป็นข้อความยืนยันตรงตัว และ
+   `ATTENDANCE_TEST_COURSE_IDS` ที่เป็น UUID ของรายวิชาทดสอบอย่างน้อย 1 รายวิชา มิฉะนั้น Backend ไม่ยอมเริ่มทำงาน
+2. ใช้ได้เฉพาะรายวิชาในรายการ วิชาจริงที่นักศึกษาเป็นสมาชิกอยู่ถูกปฏิเสธ (403)
+3. ไฟล์ติดตั้ง production ต้องไม่มีตัวแปรเหล่านี้ `scripts/production_preflight.py` และ `scripts/build_release_bundle.sh`
+   ปฏิเสธ `ATTENDANCE_TEST_MODE*` และ `VITE_TEST_MODE`
+
+วิธีใช้
+
+1. หา UUID ของวิชาทดสอบ (ไม่ใช่รหัสวิชา เพราะรหัสเดียวกันมีได้หลายตอน/ภาคเรียน) จาก Supabase Table Editor ตาราง `courses`
+2. ใส่ใน `~/.config/km-attendance/staging.env`: `STAGING_TEST_COURSE_IDS=<uuid>,<uuid>`
+3. รัน `scripts/start_backend_ngrok.sh start --test-mode`
+4. ใน Vercel Preview ของ branch ทดสอบ ตั้ง `VITE_TEST_MODE=1` แล้ว redeploy หน้าเว็บจะมีแถบแดง "โหมดทดสอบ"
+5. ผู้สอนทดสอบเปิดคาบของวิชาทดสอบตามปกติ (จะยังเห็น QR ได้แต่ไม่จำเป็นต้องใช้) นักศึกษาทดสอบกดเริ่มสแกนใบหน้าจากรายการ
+
+ข้อควรรู้: ผลเช็คชื่อ **ถูกบันทึกจริง** ลงฐานเดียวกับระบบ (เลือกแบบนี้แทน dry-run) จึงเช็คชื่อซ้ำในคาบเดียวไม่ได้
+ต้องให้ผู้สอนปิดและเปิดคาบใหม่ สถานะ มาเรียน/สาย/ขาด ยังคำนวณจากเวลาที่ผ่านไปตามเกณฑ์ของวิชา

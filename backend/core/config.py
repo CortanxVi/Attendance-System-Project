@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from core.test_mode import load_test_mode_settings
+
 # Resolve the environment file from this module so startup works from the
 # repository root and from the backend directory on every supported Linux OS.
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -48,6 +50,11 @@ ATTENDANCE_VERIFY_REQUEST_MAX_BYTES = int(
 )
 QR_REFRESH_SECONDS = int(os.getenv("QR_REFRESH_SECONDS", "12"))
 QR_CHALLENGE_SECONDS = int(os.getenv("QR_CHALLENGE_SECONDS", "420"))
+# Test-only shortcut (no QR, no timers) for listed test courses. Off by default;
+# the loader raises when the settings are inconsistent. See core/test_mode.py.
+_test_mode_settings = load_test_mode_settings(os.environ)
+ATTENDANCE_TEST_MODE = _test_mode_settings.enabled
+ATTENDANCE_TEST_COURSE_IDS = _test_mode_settings.course_ids
 SUPPORT_ATTACHMENT_MAX_BYTES = int(
     os.getenv("SUPPORT_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024))
 )

@@ -146,6 +146,15 @@ def main() -> int:
     }
     if forbidden_frontend_names.intersection(frontend):
         failures.append("frontend environment contains a forbidden server credential name")
+    # The QR/timer-free test mode must never ship: it is for listed test courses only.
+    falsy_values = {"", "0", "false", "no", "off"}
+    for label, values, names in (
+        ("backend", backend, ("ATTENDANCE_TEST_MODE", "ATTENDANCE_TEST_MODE_ACK", "ATTENDANCE_TEST_COURSE_IDS")),
+        ("frontend", frontend, ("VITE_TEST_MODE",)),
+    ):
+        for name in names:
+            if (values.get(name) or "").strip().lower() not in falsy_values:
+                failures.append(f"{label} {name} enables the test mode and is forbidden in a release")
     if frontend.get("VITE_SUPABASE_ANON_KEY") in {
         backend.get("SUPABASE_KEY"),
         backend.get("OCR_SERVICE_TOKEN"),

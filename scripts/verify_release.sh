@@ -36,6 +36,7 @@ scripts/verify_face_models.sh
   npm run test:camera-quality
   npm run test:api-origin
   npm run test:session-deadline
+  npm run test:test-mode
   npm run build
   npm audit --audit-level=moderate
 )

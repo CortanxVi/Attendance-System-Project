@@ -27,6 +27,8 @@ from core.authorization import (
 from core.config import (
     APP_ENV,
     APP_VERSION,
+    ATTENDANCE_TEST_COURSE_IDS,
+    ATTENDANCE_TEST_MODE,
     CORS_ORIGINS,
     OCR_SERVICE_TOKEN,
     OCR_SERVICE_URL,
@@ -169,6 +171,18 @@ app.include_router(temporary_admin_router)
 app.include_router(support_router)
 app.include_router(course_membership_router)
 
+# Test-only shortcut. The router is not even imported unless the mode was
+# switched on with its acknowledgement phrase and a list of test courses.
+if ATTENDANCE_TEST_MODE:
+    from routers.test_mode import router as test_mode_router
+
+    app.include_router(test_mode_router)
+    logger.warning(
+        "ATTENDANCE_TEST_MODE IS ON: QR and its timers are skipped for %d listed test course(s). "
+        "Never use this in production.",
+        len(ATTENDANCE_TEST_COURSE_IDS),
+    )
+
 
 @app.get("/health/live", include_in_schema=False)
 def health_live():
@@ -227,6 +241,7 @@ def get_runtime_config(
         "ocr_provider": "Light OCR Node.js",
         "attendance_methods": ["face_ocr", "nfc", "manual"],
         "email_policy": "KMUTNB Google accounts only",
+        "test_mode": ATTENDANCE_TEST_MODE,
     }
 
 
