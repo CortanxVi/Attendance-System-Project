@@ -114,7 +114,7 @@ export function TeacherAttendanceProvider({ children }: { children: ReactNode })
   }, [activeSession, applyActiveSession]);
 
   // --- Shared QR token: rotates while the QR dialog or the floating window is showing ---
-  const qrNeeded = Boolean(activeSession) && (activePanel === 'qr' || pipWindow !== null);
+  const qrNeeded = !TEST_MODE && Boolean(activeSession) && (activePanel === 'qr' || pipWindow !== null);
   const { token: qrToken, error: qrError } = useQrTokenRotation(activeSession?.id ?? null, qrNeeded);
 
   // --- Floating window: only while a session is open ---

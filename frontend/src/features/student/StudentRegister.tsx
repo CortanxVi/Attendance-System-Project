@@ -11,13 +11,21 @@ import {
   subscribeFaceLandmarkerRuntime,
 } from '../../services/faceLandmarkerRuntime';
 import { useNotification } from '../../components/notifications/notificationContext';
+import { TEST_MODE } from '../../config/testMode';
+import { useDeviceSupport } from '../../hooks/useDeviceSupport';
+import UnsupportedDeviceNotice from '../../components/UnsupportedDeviceNotice';
+import PadRetryChecklist from '../../components/PadRetryChecklist';
+import { isPadFailureMessage } from '../../utils/padFailure';
+import { holdAppUpdates } from '../../pwa/registerServiceWorker';
+import { enrollmentHoldsPage } from '../../pwa/updateGate';
 
-type RegistrationPhase = 'card' | 'challenge' | 'liveness' | 'saving' | 'retry';
+type RegistrationPhase = 'card' | 'start' | 'challenge' | 'liveness' | 'saving' | 'retry';
 
 export default function StudentRegister() {
   const { notify } = useNotification();
   const navigate = useNavigate();
-  const [phase, setPhase] = useState<RegistrationPhase>('card');
+  const deviceSupport = useDeviceSupport();
+  const [phase, setPhase] = useState<RegistrationPhase>(TEST_MODE ? 'start' : 'card');
   const [studentId, setStudentId] = useState('');
   const [challenge, setChallenge] = useState<EnrollmentLivenessChallenge | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -32,7 +40,8 @@ export default function StudentRegister() {
   }, []);
 
   const requestLivenessChallenge = async (card: File | null = verifiedCard) => {
-    if (!card) {
+    // Build ทดสอบข้ามบัตร/OCR จึงไม่ต้องมีภาพบัตร (Backend ปกติยังบังคับอยู่)
+    if (!card && !TEST_MODE) {
       setErrorMsg('ไม่พบภาพบัตรที่ผ่านการตรวจ กรุณาอัปโหลดบัตรใหม่');
       setPhase('card');
       return;
@@ -60,6 +69,11 @@ export default function StudentRegister() {
       setErrorMsg(error instanceof Error ? error.message : 'เตรียม Liveness ไม่สำเร็จ');
       setPhase('retry');
     }
+  };
+
+  const handleStartWithoutCard = () => {
+    setVerifiedCard(null);
+    void requestLivenessChallenge(null);
   };
 
   const handleIdCardUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -108,6 +122,10 @@ export default function StudentRegister() {
   };
 
   const runtimeReady = faceRuntime.status === 'ready';
+  // A new web build never reloads the page while an enrollment challenge is unused, the scan runs,
+  // or the evidence is being saved.
+  const holdsPage = enrollmentHoldsPage({ hasChallenge: challenge !== null, phase });
+  useEffect(() => (holdsPage ? holdAppUpdates() : undefined), [holdsPage]);
   const livenessChallenge = useMemo(() => challenge ? {
     action: challenge.liveness_action,
     promptDelayMs: challenge.liveness_prompt_delay_ms,
@@ -124,17 +142,53 @@ export default function StudentRegister() {
       <div className="rounded-2xl border border-gray-100 bg-white p-[clamp(1rem,4vw,1.25rem)] shadow-sm">
       <header className="mb-6 text-center">
         <h1 className="text-2xl font-bold text-gray-800">ลงทะเบียนใบหน้า</h1>
-        <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าด้วย Hybrid Liveness ชุดเดียวกับการเช็คชื่อ</p>
+        <p className="mt-2 text-sm leading-6 text-gray-500">{TEST_MODE ? 'โหมดทดสอบ: ไม่ต้องใช้บัตรนักศึกษา สแกนใบหน้าด้วย Hybrid Liveness ชุดเดียวกับการเช็คชื่อ' : 'ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าด้วย Hybrid Liveness ชุดเดียวกับการเช็คชื่อ'}</p>
       </header>
 
-      {errorMsg && (
+      {deviceSupport.status === 'unsupported' && (
+        <div className="flex justify-center">
+          <UnsupportedDeviceNotice androidMajor={deviceSupport.androidMajor} />
+        </div>
+      )}
+
+      {errorMsg && deviceSupport.status !== 'unsupported' && (
         <div id="registration-error" role="alert" className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <AlertCircle className="mt-0.5 shrink-0" size={20} aria-hidden="true" />
           <span>{errorMsg}</span>
         </div>
       )}
 
-      {phase === 'card' && (
+      {deviceSupport.status !== 'unsupported' && phase === 'start' && TEST_MODE && (
+        <section className="space-y-5 text-center">
+          <div
+            role={faceRuntime.status === 'error' ? 'alert' : 'status'}
+            className={`flex min-h-16 items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm ${
+              runtimeReady ? 'border-green-200 bg-green-50 text-green-800' : faceRuntime.status === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-blue-200 bg-blue-50 text-blue-800'
+            }`}
+          >
+            {runtimeReady
+              ? <ShieldCheck className="shrink-0" aria-hidden="true" />
+              : faceRuntime.status === 'error'
+                ? <AlertCircle className="shrink-0" aria-hidden="true" />
+                : <Loader2 className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold">{runtimeReady ? 'โมเดลตรวจจับใบหน้าพร้อมใช้งาน' : faceRuntime.status === 'error' ? 'โหลดโมเดลตรวจจับใบหน้าไม่สำเร็จ' : 'กำลังเตรียมโมเดลตรวจจับใบหน้า...'}</p>
+              {faceRuntime.status === 'error' && <p className="mt-1 text-sm">{faceRuntime.error}</p>}
+            </div>
+            {faceRuntime.status === 'error' && (
+              <button type="button" onClick={() => void retryFaceLandmarkerPreload().catch(() => undefined)} className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg border border-red-300 bg-white px-3 font-semibold hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600">
+                <RotateCw size={16} aria-hidden="true" />ลองใหม่
+              </button>
+            )}
+          </div>
+          <p className="text-sm leading-6 text-gray-600">เมื่อลงทะเบียนใบหน้าเสร็จ ระบบจะให้คุณเข้าร่วมวิชาทดสอบให้อัตโนมัติ</p>
+          <button type="button" onClick={handleStartWithoutCard} disabled={!runtimeReady} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 focus-visible:ring-offset-2">
+            <Camera size={18} aria-hidden="true" />เริ่มลงทะเบียนใบหน้า
+          </button>
+        </section>
+      )}
+
+      {deviceSupport.status !== 'unsupported' && phase === 'card' && !TEST_MODE && (
         <section className="space-y-5">
           <div
             role={faceRuntime.status === 'error' ? 'alert' : 'status'}
@@ -175,7 +229,7 @@ export default function StudentRegister() {
       {phase === 'liveness' && challenge && livenessChallenge && (
         <section className="space-y-4">
           <div className="flex items-center justify-between gap-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-            <span className="flex items-center gap-2 font-semibold"><CheckCircle size={18} aria-hidden="true" />ยืนยันรหัส {studentId} แล้ว</span>
+            <span className="flex items-center gap-2 font-semibold"><CheckCircle size={18} aria-hidden="true" />{TEST_MODE ? 'พร้อมสแกนใบหน้า' : `ยืนยันรหัส ${studentId} แล้ว`}</span>
             <span className="text-xs">สิทธิ์ถึง {new Date(challenge.challenge_expires_at).toLocaleTimeString('th-TH')}</span>
           </div>
           <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าและทำคำสั่งยืนยัน 1 ครั้ง</h2>
@@ -199,9 +253,10 @@ export default function StudentRegister() {
 
       {phase === 'retry' && (
         <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
-          <p className="font-semibold text-amber-900">รหัสนักศึกษา {studentId || 'ยังไม่พร้อม'} ผ่านการตรวจบัตรแล้ว</p>
-          <p className="mt-2 text-sm text-amber-800">สร้างสิทธิ์ใหม่แล้วสแกนใบหน้าอีกครั้ง โดยไม่ต้องอัปโหลดบัตรซ้ำ</p>
-          <button type="button" onClick={() => void requestLivenessChallenge()} disabled={!verifiedCard || !runtimeReady} className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 focus-visible:ring-offset-2">
+          <p className="font-semibold text-amber-900">{TEST_MODE ? 'ยังลงทะเบียนใบหน้าไม่สำเร็จ' : `รหัสนักศึกษา ${studentId || 'ยังไม่พร้อม'} ผ่านการตรวจบัตรแล้ว`}</p>
+          <p className="mt-2 text-sm text-amber-800">{TEST_MODE ? 'สร้างสิทธิ์ใหม่แล้วสแกนใบหน้าอีกครั้ง' : 'สร้างสิทธิ์ใหม่แล้วสแกนใบหน้าอีกครั้ง โดยไม่ต้องอัปโหลดบัตรซ้ำ'}</p>
+          {isPadFailureMessage(errorMsg) && <div className="mt-3"><PadRetryChecklist /></div>}
+          <button type="button" onClick={() => void requestLivenessChallenge(TEST_MODE ? null : verifiedCard)} disabled={(!TEST_MODE && !verifiedCard) || !runtimeReady} className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 focus-visible:ring-offset-2">
             <RotateCw size={18} aria-hidden="true" />เริ่มสแกนใบหน้าใหม่
           </button>
         </section>

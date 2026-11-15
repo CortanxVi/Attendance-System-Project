@@ -14,7 +14,7 @@ interface TestModePanelProps {
   onChallenge: (info: VerifiedSessionInfo) => void;
 }
 
-const REFRESH_MS = 5_000;
+const REFRESH_MS = 2_000;
 
 /**
  * Test-only replacement for the QR step. It lists the open sessions of the
@@ -47,9 +47,15 @@ export default function TestModePanel({ disabled, onChallenge }: TestModePanelPr
   useEffect(() => {
     const first = window.setTimeout(() => { void load(); }, 0);
     const interval = window.setInterval(() => { void load(); }, REFRESH_MS);
+    // Refresh at once when the student comes back to the tab or the phone wakes up.
+    const onVisible = () => { if (document.visibilityState === 'visible') void load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
     return () => {
       window.clearTimeout(first);
       window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
       controllerRef.current?.abort();
     };
   }, [load]);
@@ -79,8 +85,9 @@ export default function TestModePanel({ disabled, onChallenge }: TestModePanelPr
         คาบทดสอบที่เปิดอยู่
       </h2>
       <p className="mt-1 text-sm leading-6 text-slate-600">
-        เมื่ออาจารย์เปิดคาบของวิชาทดสอบที่คุณเป็นสมาชิก จะแสดงที่นี่ กดเพื่อเริ่มสแกนใบหน้าได้ทันที
-        ระบบตรวจบุคคลจริงและเทียบใบหน้ายังทำงานตามปกติ
+        เมื่ออาจารย์เปิดคาบของวิชาที่คุณเป็นสมาชิก จะแสดงที่นี่ กดเพื่อเริ่มสแกนใบหน้าได้ทันที
+        ระบบตรวจบุคคลจริงและเทียบใบหน้ายังทำงานตามปกติ เช็คชื่อซ้ำได้ไม่จำกัด
+        และผลทุกครั้ง (สำเร็จ/ไม่สำเร็จ พร้อมคะแนนความเหมือนและเหตุผล) ถูกบันทึกในตารางผลทดสอบ
       </p>
 
       {error && (
@@ -97,16 +104,13 @@ export default function TestModePanel({ disabled, onChallenge }: TestModePanelPr
           >
             <div className="min-w-0">
               <p className="truncate text-sm font-bold text-slate-900">
-                {session.courseCode || 'รายวิชาทดสอบ'} {session.courseName}
+                {session.courseCode || 'รายวิชา'} {session.courseName}
               </p>
-              {session.alreadyCheckedIn && (
-                <p className="text-xs font-semibold text-amber-700">เช็คชื่อในคาบนี้แล้ว</p>
-              )}
             </div>
             <button
               type="button"
               onClick={() => { void start(session.sessionId); }}
-              disabled={disabled || session.alreadyCheckedIn || startingId !== null}
+              disabled={disabled || startingId !== null}
               className="flex min-h-11 cursor-pointer items-center gap-2 rounded-xl bg-green-600 px-4 text-sm font-bold text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300"
             >
               {startingId === session.sessionId
@@ -118,7 +122,7 @@ export default function TestModePanel({ disabled, onChallenge }: TestModePanelPr
         ))}
         {!loading && sessions.length === 0 && !error && (
           <li className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm text-slate-500">
-            ยังไม่มีคาบที่เปิดอยู่ในวิชาทดสอบของคุณ
+            ยังไม่มีคาบที่เปิดอยู่ในวิชาที่คุณเป็นสมาชิก
           </li>
         )}
       </ul>

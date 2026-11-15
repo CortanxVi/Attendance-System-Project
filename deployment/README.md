@@ -46,7 +46,8 @@ to the public internet.
 2. Confirm the InsightFace pretrained-model license is suitable for the intended
    deployment. Code and pretrained-model licensing are separate. Do not release
    until the project owner has documented this decision.
-3. Copy the three required buffalo_s model files into
+3. Copy the four required buffalo_s model files (`det_500m.onnx`, `w600k_mbf.onnx`,
+   `1k3d68.onnx` and `2d106det.onnx` for the second blink rule) into
    `/var/lib/km-attendance/insightface/models/buffalo_s` and run
    `INSIGHTFACE_MODEL_ROOT=/var/lib/km-attendance/insightface scripts/verify_face_models.sh`.
 4. Create the `kmattendance` system user, `/opt/km-attendance`,
@@ -54,6 +55,12 @@ to the public internet.
    be owned by root, group-readable by `kmattendance`, and mode `0640` or tighter.
 5. Create independent random secrets with `openssl rand -hex 32`; do not reuse
    the OCR token as the liveness key or PIN pepper.
+   Liveness rule settings (see `deployment/backend.env.example`): the passive PAD
+   rule defaults to `LIVENESS_PAD_RULE=median` (median of 3 frames >= 0.60 and every
+   frame >= 0.30; chosen on 42 genuine scans, no consented attack data yet);
+   `LIVENESS_PAD_RULE=all_frames` is the kill switch back to every frame >= 0.65.
+   `LIVENESS_BLINK_106_ENABLED=false` turns off the second blink rule. Preflight
+   refuses a PAD median below 0.50 or a per-frame floor below 0.20.
 6. Build the frontend with its production environment: `cd frontend && npm ci && npm run build`.
 7. Build an immutable bundle with `scripts/build_release_bundle.sh`, install it
    with `scripts/install_production_release.sh`, and enable the two systemd units. The initial backend worker count is

@@ -14,6 +14,7 @@ dist-ssr
 *.local
 .env
 .env.local
+.env.staging
 !.env.local.example
 
 # Editor directories and files

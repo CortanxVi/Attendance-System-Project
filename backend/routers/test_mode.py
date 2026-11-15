@@ -5,26 +5,55 @@ core/test_mode.py for the gates). Everything that protects identity stays:
 authenticated student, course membership, an open session, the signed liveness
 challenge, PAD, the face comparison and the atomic finalize step. What is
 removed is the QR token, the 3-second scan throttle and the short challenge
-lifetime, and only for the courses listed in ATTENDANCE_TEST_COURSE_IDS.
+lifetime, for the courses listed in ATTENDANCE_TEST_COURSE_IDS or, when the
+all-courses acknowledgement is set, for every course the student belongs to. A student
+may ask for a new check-in right as often as needed: test check-ins are recorded in
+face_checkin_attempts and never in attendance_records.
 """
 
 from datetime import datetime, timedelta, timezone
 import logging
+from typing import Callable, TypeVar
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.authorization import require_course_enrollment
-from core.config import ATTENDANCE_TEST_COURSE_IDS, supabase_db as supabase
+from core.config import (
+    ATTENDANCE_TEST_ALL_COURSES,
+    ATTENDANCE_TEST_COURSE_IDS,
+    supabase_db as supabase,
+)
 from core.security import AuthenticatedUser, require_roles
 from core.test_mode import TEST_CHALLENGE_SECONDS
 from services.liveness_service import create_attendance_liveness_challenge
+from services.test_mode_service import ensure_test_course_sessions_throttled
 
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+def _read_with_retry(run: Callable[[], T]) -> T:
+    """Run one read query again when the pooled HTTP/2 connection was closed by the server.
+
+    The student page polls /open-sessions every 2 seconds, and Supabase drops idle HTTP/2
+    connections ("Server disconnected"). Only reads are retried, once, because they are safe
+    to repeat.
+    """
+    try:
+        return run()
+    except httpx.TransportError as exc:
+        logger.warning("Supabase connection was reset; retrying the read once (%s)", type(exc).__name__)
+        return run()
+
+
 router = APIRouter(prefix="/api/v1/test", tags=["Test mode (QR and timers removed)"])
 
 
 def _require_listed_course(course_id: str) -> None:
+    if ATTENDANCE_TEST_ALL_COURSES:
+        return
     if str(course_id).lower() not in ATTENDANCE_TEST_COURSE_IDS:
         raise HTTPException(
             status_code=403,
@@ -36,40 +65,32 @@ def _require_listed_course(course_id: str) -> None:
 def list_open_test_sessions(
     current_user: AuthenticatedUser = Depends(require_roles("student")),
 ):
-    """Open sessions of the listed test courses that this student belongs to."""
+    """Open sessions of the courses (listed, or all) that this student belongs to."""
 
-    listed = sorted(ATTENDANCE_TEST_COURSE_IDS)
-    enrolled = (
+    enrollment_query = (
         supabase.table("enrollments")
         .select("course_id")
         .eq("student_id", current_user.id)
-        .in_("course_id", listed)
-        .execute()
     )
+    if not ATTENDANCE_TEST_ALL_COURSES:
+        enrollment_query = enrollment_query.in_("course_id", sorted(ATTENDANCE_TEST_COURSE_IDS))
+    enrolled = _read_with_retry(enrollment_query.execute)
     course_ids = [row["course_id"] for row in (enrolled.data or [])]
     if not course_ids:
         return {"status": "success", "sessions": []}
 
-    sessions = (
+    # A test course always has an open session: recreate it if the teacher closed it.
+    ensure_test_course_sessions_throttled(course_ids)
+
+    sessions = _read_with_retry(
         supabase.table("attendance_sessions")
         .select("id, course_id, created_at, courses(course_code, course_name)")
         .in_("course_id", course_ids)
         .eq("status", "open")
         .is_("archived_at", "null")
-        .execute()
+        .execute
     )
     rows = sorted(sessions.data or [], key=lambda row: row.get("created_at") or "", reverse=True)
-    checked_in: set[str] = set()
-    if rows:
-        records = (
-            supabase.table("attendance_records")
-            .select("session_id")
-            .eq("student_id", current_user.id)
-            .in_("session_id", [row["id"] for row in rows])
-            .execute()
-        )
-        checked_in = {record["session_id"] for record in (records.data or [])}
-
     return {
         "status": "success",
         "sessions": [
@@ -79,7 +100,8 @@ def list_open_test_sessions(
                 "course_code": (row.get("courses") or {}).get("course_code"),
                 "course_name": (row.get("courses") or {}).get("course_name"),
                 "opened_at": row.get("created_at"),
-                "already_checked_in": row["id"] in checked_in,
+                # Test check-ins never write attendance_records, so a student can always check in again.
+                "already_checked_in": False,
             }
             for row in rows
         ],
@@ -109,16 +131,6 @@ def issue_test_challenge(
         raise HTTPException(status_code=400, detail="คาบเรียนนี้ปิดระบบเช็คชื่อไปแล้ว")
     _require_listed_course(session_row["course_id"])
     require_course_enrollment(session_row["course_id"], current_user.id)
-
-    existing_record = (
-        supabase.table("attendance_records")
-        .select("id")
-        .eq("session_id", session_id)
-        .eq("student_id", current_user.id)
-        .execute()
-    )
-    if existing_record.data:
-        raise HTTPException(status_code=409, detail="คุณเช็คชื่อในคาบนี้แล้ว")
 
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=TEST_CHALLENGE_SECONDS)
     challenge_response = supabase.table("attendance_checkin_challenges").insert({

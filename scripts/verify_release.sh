@@ -37,6 +37,12 @@ scripts/verify_face_models.sh
   npm run test:api-origin
   npm run test:session-deadline
   npm run test:test-mode
+  npm run test:device-support
+  npm run test:blink-profiles
+  npm run test:passive-gate
+  npm run test:scan-guards
+  npm run test:scan-robustness
+  npm run test:retry-challenge
   npm run build
   npm audit --audit-level=moderate
 )

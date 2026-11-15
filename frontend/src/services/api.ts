@@ -1,6 +1,9 @@
 import axios from 'axios';
 import { apiErrorMessage } from './apiError';
 import type { HybridLivenessAction, HybridLivenessEvidence } from '../utils/liveness';
+import { serializeClientDiagnostics, type ClientDiagnostics } from '../utils/clientDiagnostics';
+import { TEST_MODE } from '../config/testMode';
+import { AttendanceVerifyError, retryChallengeFromBody } from './retryChallenge';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
 const API_BASE_URL = '/api/v1';
@@ -39,9 +42,10 @@ export interface EnrollmentLivenessChallenge {
 }
 
 export const faceService = {
-  createEnrollmentLivenessChallenge: async (studentCardImage: File): Promise<EnrollmentLivenessChallenge> => {
+  // studentCardImage เป็น null ได้เฉพาะ build ทดสอบ (ไม่มีขั้นตอน OCR บัตร) ส่วน Backend ปกติจะปฏิเสธ (422)
+  createEnrollmentLivenessChallenge: async (studentCardImage: File | null): Promise<EnrollmentLivenessChallenge> => {
     const formData = new FormData();
-    formData.append('student_card_image', studentCardImage);
+    if (studentCardImage) formData.append('student_card_image', studentCardImage);
     try {
       const response = await axios.post<EnrollmentLivenessChallenge>(
         `${API_BASE_URL}/enrollment/liveness-challenge`,
@@ -115,6 +119,7 @@ export const faceService = {
     challengeId: string,
     livenessToken: string,
     livenessEvidence: HybridLivenessEvidence,
+    clientDiagnostics?: ClientDiagnostics,
   ): Promise<VerifyResponse> => {
     const formData = new FormData();
     passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
@@ -123,6 +128,11 @@ export const faceService = {
     formData.append('challenge_id', challengeId);
     formData.append('liveness_token', livenessToken);
     formData.append('liveness_evidence', JSON.stringify(livenessEvidence));
+    // Test builds only: device summary as its own field (enums/numbers, <= 1024 bytes, no identifiers).
+    if (TEST_MODE && clientDiagnostics) {
+      const diagnosticsJson = serializeClientDiagnostics(clientDiagnostics);
+      if (diagnosticsJson) formData.append('client_diagnostics', diagnosticsJson);
+    }
 
     try {
       const response = await axios.post<VerifyResponse>(
@@ -137,8 +147,13 @@ export const faceService = {
       );
       return response.data;
     } catch (error: unknown) {
-      throw new Error(
+      // `detail` stays the message; a 422 may also carry a retry challenge (validated by the page).
+      const retryChallenge = axios.isAxiosError(error)
+        ? retryChallengeFromBody(error.response?.status, error.response?.data)
+        : null;
+      throw new AttendanceVerifyError(
         apiErrorMessage(error, 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบว่าระบบหลังบ้านทำงานอยู่'),
+        retryChallenge,
         { cause: error },
       );
     }

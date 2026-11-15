@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { apiErrorMessage } from '../../services/apiError';
+import { TEST_MODE } from '../../config/testMode';
 
 export default function Login() {
   const [loading, setLoading] = useState<boolean>(false);
@@ -75,8 +76,14 @@ export default function Login() {
         </div>
 
         <div className="text-xs text-gray-500 pt-4 border-t border-gray-100 space-y-1">
-          <p>นักศึกษา: @email.kmutnb.ac.th</p>
-          <p>อาจารย์/เจ้าหน้าที่: @&lt;dept&gt;.kmutnb.ac.th</p>
+          {TEST_MODE ? (
+            <p>โหมดทดสอบ: ใช้ Google Account อะไรก็ได้ (ระบบจริงจำกัดเฉพาะอีเมล มจพ.)</p>
+          ) : (
+            <>
+              <p>นักศึกษา: @email.kmutnb.ac.th</p>
+              <p>อาจารย์/เจ้าหน้าที่: @&lt;dept&gt;.kmutnb.ac.th</p>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -34,6 +34,8 @@ docs/
 
 # Environment variables
 .env
+# Backups and copies such as .env.old hold real keys too.
+.env.*
 !.env.example
 start_mobile_test.sh
 
