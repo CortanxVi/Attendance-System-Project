@@ -483,3 +483,28 @@ UUID ของวิชาต้องอยู่ใน `STAGING_TEST_DB_COURSE
 - **ขยับเข้าใกล้ง่ายขึ้น:** แถบบอกระยะสด, ถอยกลับหลังขยับเข้าใกล้ยอม ±0.15 (Backend ±0.20; ความเสี่ยงที่ยอมรับ ดู `recovery_scale` หลัง deploy)
 - **เฟรมนิ่งแรก:** ต้องเห็นใบหน้าต่อเนื่อง 500 ms และมีประวัติความคมก่อน (เดิมเก็บเร็วเกินไปขณะกล้องยังปรับแสง ทำให้ PAD เฟรมแรกต่ำ)
 - **อัปเดตหน้าเว็บ:** service worker ตรวจเวอร์ชันใหม่ทุก 5 นาที/เมื่อกลับมาที่หน้า และรีโหลดเมื่อไม่ได้สแกนหรือถือสิทธิ์ QR อยู่ รุ่นทดสอบแสดงรหัส build บนแถบด้านบน; หลัง PAD ตกแสดงรายการคำแนะนำ (หันเข้าแสง, ระดับสายตา 30–40 ซม., ถือนิ่ง, เช็ดเลนส์, เปิดใน Chrome/Safari)
+
+### 8.15 ตารางเก็บผลการเช็คชื่อสำหรับเก็บข้อมูลตัวอย่าง 30–50 คน (2026-11-15, ฐานทดสอบเท่านั้น)
+
+- **ไฟล์:** `supabase/test-only/20261115180000_pilot_checkin_log.sql` (apply แล้วที่โปรเจกต์ทดสอบ ห้าม apply ที่ระบบจริง)
+- **ตาราง `public.pilot_checkin_log`:** 1 แถวต่อการสแกน 1 ครั้ง ทั้งผ่านและตก
+  - คอลัมน์: `user_id` (uuid), `email`, `student_code`, `course_code`, `attempt_no` (ครั้งที่เท่าไรของคนนั้น), `outcome`, `attendance_status`, `similarity_score`, `threshold_used`, `face_match`, `liveness_action`, `failure_stage`, `failure_reason`
+  - ระบบคัดลอกให้เองด้วย trigger บน `face_checkin_attempts` จึงไม่ต้องแก้ Backend ถ้าการคัดลอกมีปัญหา การเช็คชื่อยังทำงานตามปกติ
+  - ตารางนี้เก็บเฉพาะการสแกนที่ระบบบันทึกลง `face_checkin_attempts` อยู่แล้ว คือวิชาทดสอบในโหมดทดสอบ
+- **view `public.pilot_checkin_summary`:** 1 แถวต่อคน ได้แก่ จำนวนครั้ง, ผ่าน/ตก, ผ่านครั้งแรกหรือไม่, ต้องลองกี่ครั้งถึงผ่าน, คะแนนเฉลี่ยและต่ำสุดตอนผ่าน, สาเหตุที่ตกบ่อยที่สุด
+- **อ่านผล:** ใช้ SQL Editor ของ Supabase หรือกด Export CSV ได้ทันที
+  ```sql
+  select * from public.pilot_checkin_summary order by attempts desc;
+  select created_at, email, student_code, attempt_no, outcome, similarity_score, failure_stage, failure_reason
+  from public.pilot_checkin_log order by created_at;
+  ```
+- **ปิด/เปิดการเก็บ:** `update public.test_mode_flags set enabled = false, updated_at = now() where key = 'pilot_checkin_log';` ใช้ `true` เพื่อเปิดใหม่
+- **ข้อมูลส่วนบุคคล:** ตารางมีอีเมลและรหัสนักศึกษาอยู่คู่กับคะแนนใบหน้า
+  - เก็บเฉพาะจากผู้ที่ยินยอม
+  - เมื่อจบการเก็บ ให้ export แล้วลบด้วย `truncate public.pilot_checkin_log;`
+  - ถ้าลบโปรไฟล์ แถวของคนนั้นจะถูกลบตาม
+  - ไม่มีรูปภาพ, embedding หรือชื่อในตารางนี้
+  - เบราว์เซอร์อ่านไม่ได้ (RLS ปฏิเสธทั้งหมด)
+- **ระยะ B ที่ทำพร้อมกัน:**
+  - `backend/.dockerignore` และ `ocr-service/.dockerignore` ไม่คัดลอก `.env.*` (เช่น `.env.old`) เข้า image แล้ว
+  - เทสต์ `backend/tests/test_deploy_guards.py` บังคับ `--workers 1` ใน Dockerfile/systemd และห้าม compose override คำสั่ง เพราะการสลับเป็นขยับเข้าใกล้จำสถานะไว้ในหน่วยความจำของ process เดียว
