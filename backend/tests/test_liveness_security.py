@@ -68,7 +68,7 @@ class EnrollmentHybridLivenessSecurityTests(unittest.TestCase):
         self.assertGreaterEqual(self.challenge.prompt_delay_ms, 500)
         self.assertLessEqual(self.challenge.prompt_delay_ms, 1_400)
 
-    def test_accepts_low_fps_attempt_but_rejects_over_20_seconds(self):
+    def test_accepts_low_fps_attempt_but_rejects_over_30_seconds(self):
         evidence = self.evidence()
         evidence["effectiveFps"] = 8.2
         result = verify_liveness_submission(
@@ -80,7 +80,7 @@ class EnrollmentHybridLivenessSecurityTests(unittest.TestCase):
         )
         self.assertGreater(result.total_duration_ms, 1_600)
 
-        evidence["completedAtMs"] = 25_000
+        evidence["completedAtMs"] = 35_000
         with self.assertRaises(HTTPException):
             verify_liveness_submission(
                 self.challenge.token,

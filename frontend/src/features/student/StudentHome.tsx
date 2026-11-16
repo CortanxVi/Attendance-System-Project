@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
+import FaceScanPrepGate from './FaceScanPrepGate';
 import TestModePanel from './TestModePanel';
 import { TEST_MODE } from '../../config/testMode';
 import { faceService } from '../../services/api';
@@ -312,13 +313,15 @@ export default function StudentHome() {
            </button>
         </div>
       ) : isLivenessActive ? (
-        /* ด่านที่ 2: หน้าจอ Liveness Detection */
-        <LivenessScanner
-          title="ยืนยันใบหน้าเพื่อเช็คชื่อ"
-          onClose={() => setIsLivenessActive(false)}
-          onCaptureSuccess={handleFaceCapture}
-          challenge={livenessChallenge!}
-        />
+        /* ด่านที่ 2: หน้าจอ Liveness Detection (คำแนะนำก่อนเปิดกล้องทุกครั้ง) */
+        <FaceScanPrepGate onCancel={() => setIsLivenessActive(false)}>
+          <LivenessScanner
+            title="ยืนยันใบหน้าเพื่อเช็คชื่อ"
+            onClose={() => setIsLivenessActive(false)}
+            onCaptureSuccess={handleFaceCapture}
+            challenge={livenessChallenge!}
+          />
+        </FaceScanPrepGate>
       ) : verifiedCourse ? (
         <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
           <h2 className="text-xl font-bold text-green-700 mb-2">เข้าสู่ห้องเรียน {verifiedCourse} แล้ว</h2>
@@ -327,7 +330,7 @@ export default function StudentHome() {
           {challengeExpiresAt && !TEST_MODE && (
             <p className="mb-3 text-xs text-gray-500">
               สิทธิ์จาก QR ใช้ลองสแกนซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
-              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 20 วินาที
+              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 30 วินาที
             </p>
           )}
           <button 

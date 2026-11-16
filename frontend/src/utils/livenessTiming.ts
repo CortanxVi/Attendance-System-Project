@@ -8,8 +8,8 @@
  *
  *   Backend                                   Scanner
  *   gap between still frames 250-2000 ms      450 (SAMPLE_INTERVAL_MS) - 1800 ms
- *   recovery - action <= 3000 ms              <= 2700 ms
- *   completed - started 900-20000 ms          1000-19500 ms
+ *   recovery - action <= 5000 ms              <= 4700 ms
+ *   completed - started 900-30000 ms          1000-29500 ms
  *   effective fps 8-35                        8-34
  *   first still >= started, prompt >= last still + delay, action >= prompt,
  *   action < recovery <= completed            identical (no margin needed: exact ordering)
@@ -24,11 +24,11 @@ export const HYBRID_TIMING_LIMITS = Object.freeze({
   minSampleGapMs: 300,
   /** Backend MAX_SAMPLE_INTERVAL_MS is 2000. */
   maxSampleGapMs: 1_800,
-  /** Backend: recovery_at - action_at > 3000 is refused. */
-  maxActionToRecoveryMs: 2_700,
-  /** Backend MIN_ATTEMPT_DURATION_MS / MAX_ATTEMPT_DURATION_MS are 900 / 20000. */
+  /** Backend: recovery_at - action_at > 5000 is refused. */
+  maxActionToRecoveryMs: 4_700,
+  /** Backend MIN_ATTEMPT_DURATION_MS / MAX_ATTEMPT_DURATION_MS are 900 / 30000. */
   minAttemptMs: 1_000,
-  maxAttemptMs: 19_500,
+  maxAttemptMs: 29_500,
   /** Backend MIN_EFFECTIVE_FPS / MAX_EFFECTIVE_FPS are 8 / 35. */
   minFps: 8,
   maxFps: 34,

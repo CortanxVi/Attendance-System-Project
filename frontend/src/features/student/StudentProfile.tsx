@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import axios from 'axios';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabaseClient';
 import {
   BookOpen,
@@ -31,12 +31,22 @@ interface Profile {
   avatar_url?: string | null;
 }
 
+// How long the face-scan row blinks after arriving from the reminder.
+const FACE_ROW_HIGHLIGHT_MS = 6_000;
+
 export default function StudentProfile() {
   const { notify } = useNotification();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState('');
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Arriving from the "not registered" reminder: the face-scan row blinks for a few seconds.
+  const [highlightFace, setHighlightFace] = useState(
+    () => Boolean((location.state as { highlightFaceRow?: boolean } | null)?.highlightFaceRow),
+  );
+  const faceRowRef = useRef<HTMLLIElement>(null);
 
   useEffect(() => {
     document.title = 'โปรไฟล์นักศึกษา — KMUTNB Attendance';
@@ -51,6 +61,17 @@ export default function StudentProfile() {
       });
     return () => controller.abort();
   }, []);
+
+  const profileLoaded = profile !== null;
+  const highlightStarted = useRef(false);
+  useEffect(() => {
+    if (!highlightFace || !profileLoaded || highlightStarted.current) return;
+    highlightStarted.current = true;
+    // Forget the request so Back/refresh does not blink again, then bring the row into view.
+    navigate(location.pathname, { replace: true, state: null });
+    faceRowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    window.setTimeout(() => setHighlightFace(false), FACE_ROW_HIGHLIGHT_MS);
+  }, [highlightFace, profileLoaded, navigate, location.pathname]);
 
   const initials = useMemo(() => (profile?.full_name || 'นักศึกษา')
     .trim()
@@ -104,6 +125,8 @@ export default function StudentProfile() {
 
         <ProfileRow icon={<BookOpen />} label="รายวิชาที่ลงทะเบียน" value={`${profile.enrolled_course_count} รายวิชา`} action={<Link to="/student/courses" aria-label="จัดการรายวิชาที่ลงทะเบียน" className="inline-flex min-h-10 items-center gap-1 rounded-xl px-2 text-xs font-bold text-orange-700 hover:bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-300">จัดการ<ChevronRight size={17} /></Link>} />
         <ProfileRow
+          rowRef={faceRowRef}
+          highlight={highlightFace && !profile.face_registered}
           icon={<ScanFace />}
           label="การสแกนใบหน้า"
           value={profile.face_registered ? 'ลงทะเบียนแล้ว' : 'ยังไม่ได้ลงทะเบียน'}
@@ -138,7 +161,10 @@ export default function StudentProfile() {
   </div>;
 }
 
-function ProfileRow({ icon, label, value, ready, description, action }: {
+function ProfileRow({ icon, label, value, ready, description, action, rowRef, highlight }: {
+  rowRef?: Ref<HTMLLIElement>;
+  /** Blinks the row (a still ring with reduced motion) to show where to act. */
+  highlight?: boolean;
   icon: ReactNode;
   label: string;
   value: string;
@@ -146,7 +172,7 @@ function ProfileRow({ icon, label, value, ready, description, action }: {
   description?: string;
   action?: ReactNode;
 }) {
-  return <li className="flex items-center gap-3 px-5 py-4">
+  return <li ref={rowRef} data-highlight={highlight ? 'true' : undefined} className={`flex items-center gap-3 px-5 py-4 ${highlight ? 'attention-blink' : ''}`}>
     <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600" aria-hidden="true">{icon}</span>
     <div className="min-w-0 flex-1">
       <p className="text-sm font-semibold text-slate-800">{label}</p>

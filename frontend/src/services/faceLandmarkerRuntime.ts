@@ -25,6 +25,11 @@ export type FaceLandmarkerRuntimeStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type FaceLandmarkerRuntimeSnapshot = {
   status: FaceLandmarkerRuntimeStatus;
   error: string;
+  /**
+   * The raw browser/MediaPipe text behind `error`, cut to RAW_ERROR_MAX_CHARS. Only test builds show
+   * it (in the scanner's test panel); the person always sees the Thai `error` message.
+   */
+  detail?: string;
 };
 
 export type FaceLandmarkerResult = {
@@ -88,6 +93,7 @@ const clients = new Map<number, ClientListener>();
 // compiles WASM. Thirty seconds was too short on throttled cellular connections.
 const INITIALIZATION_TIMEOUT_MS = 120_000;
 const FACE_RUNTIME_ASSET_VERSION = 'tasks-vision-1.0.1-64184e22';
+const RAW_ERROR_MAX_CHARS = 160;
 
 let worker: Worker | null = null;
 let mainThreadLandmarker: FaceLandmarker | null = null;
@@ -106,6 +112,11 @@ let switchPending = false;
 let deferredSwitch: FaceLandmarkerDelegate | null = null;
 let switchDone: Promise<void> = Promise.resolve();
 let resolveSwitchDone: () => void = () => undefined;
+// A worker that died while it ran on the GPU (or while it switched engines) is replaced once by a
+// fresh worker on the CPU before the failure is reported (see restartWorker).
+let crashRecoveryUsed = false;
+// Raw text of the last crash that was recovered on the CPU (test builds show it in the scanner).
+let lastRecoveryDetail: string | null = null;
 
 /** Which engine the loaded model really runs on (null until it is ready). */
 export function getFaceLandmarkerDelegate(): FaceLandmarkerDelegate | null {
@@ -115,6 +126,11 @@ export function getFaceLandmarkerDelegate(): FaceLandmarkerDelegate | null {
 /** Where the model runs: a worker, the main thread (iOS), or null before it is ready. */
 export function getFaceLandmarkerRuntimeMode(): 'worker' | 'main-thread' | null {
   return runtimeMode;
+}
+
+/** Raw text of the last worker crash that was recovered by restarting on the CPU, if any. */
+export function getLastRuntimeRecovery(): string | null {
+  return lastRecoveryDetail;
 }
 
 /** How long the last blend-shape on/off switch took, in milliseconds (test builds read this). */
@@ -157,11 +173,83 @@ function broadcast(event: FaceLandmarkerEngineEvent): void {
 }
 
 function requestDelegateSwitch(target: FaceLandmarkerDelegate): void {
-  if (!worker) return;
+  if (!worker || runtimeMode !== 'worker') return;
+  restartWorker(target);
+}
+
+function rawErrorText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error ?? '');
+  return text.length > RAW_ERROR_MAX_CHARS ? `${text.slice(0, RAW_ERROR_MAX_CHARS - 1)}…` : text;
+}
+
+/**
+ * Change engine by replacing the whole worker instead of rebuilding the graph inside it.
+ *
+ * Field case (2026-11-16, vivo V23e in Chrome; earlier the Messenger in-app browser): the GPU ran at
+ * ~155-221 ms per frame, the tuner asked for the CPU, and the in-worker rebuild (close the GPU graph,
+ * create a CPU graph in the same WASM heap) failed, so the worker died with "runtime status error".
+ * A new worker starts with an empty WASM heap and no WebGL context, which is the same path that
+ * already works when a phone starts on the CPU. Results of a frame that was in flight in the old
+ * worker are lost; the scanner restarts its attempt on the 'switched' event anyway.
+ */
+function restartWorker(target: FaceLandmarkerDelegate, cause?: unknown): void {
+  const generation = ++initializationGeneration;
+  if (initializationTimeout !== null) {
+    window.clearTimeout(initializationTimeout);
+    initializationTimeout = null;
+  }
+  worker?.terminate();
+  worker = null;
+  activeDelegate = null;
   switchPending = true;
   switchDone = new Promise<void>((resolve) => { resolveSwitchDone = resolve; });
-  worker.postMessage({ type: 'switch', delegate: target });
   broadcast({ type: 'engine', phase: 'switching', delegate: target });
+  publish({ status: 'loading', error: '', detail: cause === undefined ? undefined : rawErrorText(cause) });
+  const publicBase = new URL(import.meta.env.BASE_URL, window.location.origin).toString();
+  const timeout = new Promise<never>((_, reject) => {
+    initializationTimeout = window.setTimeout(() => {
+      reject(new Error('Face Landmarker initialization timed out'));
+    }, INITIALIZATION_TIMEOUT_MS);
+  });
+  const pending = Promise.race([initializeWorker(publicBase, generation, target), timeout]).then(
+    () => {
+      if (generation !== initializationGeneration) return;
+      if (initializationTimeout !== null) {
+        window.clearTimeout(initializationTimeout);
+        initializationTimeout = null;
+      }
+      switchPending = false;
+      publish({ status: 'ready', error: '' });
+      resolveSwitchDone();
+      broadcast({ type: 'engine', phase: 'switched', delegate: activeDelegate ?? target });
+    },
+    (error) => {
+      rejectLoad(error, generation);
+    },
+  );
+  initialization = pending;
+  void pending.finally(() => {
+    if (initialization === pending) initialization = null;
+  });
+}
+
+/**
+ * True when a worker that just died should be replaced by a fresh CPU worker instead of failing the
+ * scan: only once per runtime, only for a failure on the GPU or during an engine switch.
+ */
+function shouldRecoverOnCpu(): boolean {
+  return !crashRecoveryUsed && runtimeMode === 'worker' && (activeDelegate === 'GPU' || switchPending);
+}
+
+function recoverOnCpu(cause: Error): void {
+  crashRecoveryUsed = true;
+  lastRecoveryDetail = rawErrorText(cause);
+  console.error('Face Landmarker worker stopped; restarting on the CPU:', cause);
+  tuner?.finish();
+  deferredSwitch = null;
+  // Remember the CPU so the next visit (or "try again") does not start on the failing GPU path.
+  saveDelegateChoice(safeLocalStorage(), { delegate: 'CPU', gpuMs: Number.NaN, cpuMs: null }, Date.now());
+  restartWorker('CPU', cause);
 }
 
 /** A switch back that waited for the scanner to close (at most one switch per attempt). */
@@ -228,6 +316,7 @@ function disposeRuntime(): void {
   tuner = null;
   switchPending = false;
   deferredSwitch = null;
+  crashRecoveryUsed = false;
   resolveSwitchDone();
   clients.clear();
 }
@@ -243,13 +332,21 @@ function rejectLoad(error: unknown, generation: number): void {
   initializationGeneration += 1;
   initialization = null;
   disposeRuntime();
-  publish({ status: 'error', error: message });
+  publish({ status: 'error', error: message, detail: rawErrorText(failure) });
   // A new build is waiting: the failure is most likely the old build's files being gone after the
   // update (the worker URL now returns the new index.html). Reload instead of a misleading error.
   appUpdateGate.reloadNowIfPending();
 }
 
-function initializeWorker(publicBase: string, generation: number): Promise<void> {
+/**
+ * Start a worker. `forcedDelegate` is set when an engine switch or a crash replaces the worker: the
+ * engine is then fixed and the running tuner (if any) keeps measuring across the new worker.
+ */
+function initializeWorker(
+  publicBase: string,
+  generation: number,
+  forcedDelegate?: FaceLandmarkerDelegate,
+): Promise<void> {
   let nextWorker: Worker;
   try {
     nextWorker = new Worker(
@@ -269,6 +366,10 @@ function initializeWorker(publicBase: string, generation: number): Promise<void>
         nextWorker.terminate();
         if (worker === nextWorker) worker = null;
         reject(error);
+      } else if (generation !== initializationGeneration) {
+        // An old worker that was already replaced: nothing to report.
+      } else if (shouldRecoverOnCpu()) {
+        recoverOnCpu(error);
       } else {
         rejectLoad(error, generation);
       }
@@ -281,9 +382,11 @@ function initializeWorker(publicBase: string, generation: number): Promise<void>
         initializing = false;
         runtimeMode = 'worker';
         activeDelegate = message.delegate ?? 'CPU';
-        // Measure only a GPU start (a GPU that already fell back to the CPU needs no comparison).
-        tuner = tunable && activeDelegate === 'GPU' ? new DelegateTuner('GPU') : null;
-        switchPending = false;
+        if (forcedDelegate === undefined) {
+          // Measure only a GPU start (a GPU that already fell back to the CPU needs no comparison).
+          tuner = tunable && activeDelegate === 'GPU' ? new DelegateTuner('GPU') : null;
+          switchPending = false;
+        }
         resolve();
         return;
       }
@@ -337,7 +440,7 @@ function initializeWorker(publicBase: string, generation: number): Promise<void>
       type: 'init',
       wasmRoot: `${publicBase}mediapipe/wasm`,
       modelUrl: `${publicBase}models/face_landmarker.task?v=${FACE_RUNTIME_ASSET_VERSION}`,
-      delegate: preferredDelegate(),
+      delegate: forcedDelegate ?? preferredDelegate(),
     });
   });
 }

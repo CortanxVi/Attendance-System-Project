@@ -2,29 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { Link, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabaseClient';
-import { AlertTriangle, BookOpen, CalendarClock, CheckCircle2, ChevronRight, Clock3, Search, X, XCircle } from 'lucide-react';
+import { AlertTriangle, BookOpen, CalendarClock, ChevronRight, Search, X } from 'lucide-react';
 import { apiErrorMessage } from '../../services/apiError';
-
-interface CourseSummary {
-  course_id: string; course_code: string; course_name: string; total_sessions: number;
-  present: number; late: number; absent: number; absence_percentage: number; evaluation: 'Normal' | 'Fa';
-}
-interface HistoryItem {
-  course_id: string | null; course_code: string; course_name: string; check_in_time: string;
-  status: 'pending' | 'present' | 'late' | 'absent'; method: 'face_ocr' | 'nfc' | 'manual' | null;
-}
-const METHOD_LABEL: Record<string, string> = { face_ocr: 'สแกนใบหน้า', nfc: 'บัตร NFC', manual: 'อาจารย์แก้ไข' };
-
-function StatusBadge({ status }: { status: HistoryItem['status'] }) {
-  const config = {
-    present: { text: 'มาเรียน', color: 'bg-green-100 text-green-700', icon: CheckCircle2 },
-    late: { text: 'มาสาย', color: 'bg-orange-100 text-orange-700', icon: Clock3 },
-    absent: { text: 'ขาดเรียน', color: 'bg-red-100 text-red-700', icon: XCircle },
-    pending: { text: 'รอตรวจสอบ', color: 'bg-gray-100 text-gray-600', icon: Clock3 },
-  }[status];
-  const Icon = config.icon;
-  return <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${config.color}`}><Icon size={12} />{config.text}</span>;
-}
+import CourseHistoryDetail, { type CourseSummary, type HistoryItem } from './CourseHistoryDetail';
 
 export default function AttendanceHistory() {
   const { courseId } = useParams<{ courseId: string }>();
@@ -52,23 +32,13 @@ export default function AttendanceHistory() {
     const normalized = query.trim().toLocaleLowerCase('th-TH');
     return normalized ? courseSummary.filter((course) => `${course.course_code} ${course.course_name}`.toLocaleLowerCase('th-TH').includes(normalized)) : courseSummary;
   }, [courseSummary, query]);
-  const formatDateTime = (date: string) => new Date(date).toLocaleString('th-TH', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   if (loading) return <div role="status" className="mt-10 p-6 text-center text-gray-500">กำลังโหลดประวัติการเข้าเรียน...</div>;
   if (errorMsg) return <div role="alert" className="mx-4 mt-6 rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-600"><AlertTriangle className="mx-auto mb-2" size={28} />{errorMsg}</div>;
 
   if (courseId) {
     if (!selectedCourse) return <div role="alert" className="m-4 rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">ไม่พบรายวิชานี้ในประวัติของคุณ</div>;
-    return <div className="student-page space-y-4">
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="font-mono text-xs font-bold text-orange-700">{selectedCourse.course_code}</p><h1 className="mt-1 text-xl font-bold text-slate-900">{selectedCourse.course_name}</h1>
-        <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs"><Stat value={selectedCourse.present} label="มาเรียน" tone="green" /><Stat value={selectedCourse.late} label="มาสาย" tone="orange" /><Stat value={selectedCourse.absent} label="ขาดเรียน" tone="red" /></div>
-        <p className="mt-4 text-xs text-slate-500">ขาดเรียน {selectedCourse.absence_percentage}% จากแผนทั้งหมด {selectedCourse.total_sessions} ครั้ง</p>
-      </section>
-      <section aria-labelledby="course-history-title"><h2 id="course-history-title" className="mb-2 px-1 text-sm font-bold text-slate-600">รายการเข้าเรียน</h2>
-        {selectedHistory.length ? <ul className="space-y-2">{selectedHistory.map((item, index) => <li key={`${item.check_in_time}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm"><div className="min-w-0"><p className="text-sm font-semibold text-slate-800">{formatDateTime(item.check_in_time)}</p><p className="mt-0.5 text-xs text-slate-500">{item.method ? METHOD_LABEL[item.method] || item.method : 'ไม่ระบุวิธี'}</p></div><StatusBadge status={item.status} /></li>)}</ul> : <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">ยังไม่มีรายการเช็คชื่อในวิชานี้</div>}
-      </section>
-    </div>;
+    return <CourseHistoryDetail course={selectedCourse} history={selectedHistory} />;
   }
 
   return <div className="student-page space-y-5">
@@ -78,7 +48,3 @@ export default function AttendanceHistory() {
   </div>;
 }
 
-function Stat({ value, label, tone }: { value: number; label: string; tone: 'green' | 'orange' | 'red' }) {
-  const classes = tone === 'green' ? 'bg-green-50 text-green-700' : tone === 'orange' ? 'bg-orange-50 text-orange-700' : 'bg-red-50 text-red-700';
-  return <div className={`rounded-lg py-2 ${classes}`}><p className="text-base font-bold">{value}</p><p>{label}</p></div>;
-}

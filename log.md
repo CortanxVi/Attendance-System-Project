@@ -2293,3 +2293,408 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - **Database or deployment impact:** Migration applied to the TEST project `kmutnb-attendance-test` only (project URL checked against the test ref before applying). Production database untouched; this file must never be applied there. No Backend restart needed for the table. Docker images now exclude `.env.*`.
 - **Verification performed:** In a rolled-back transaction on the test project: a failed then a successful attempt produced attempt_no 1 and 2 with e-mail, student id and course code copied, face_match true for 0.71 vs 0.45, summary row attempts=2/ok=1/fail=1/first_try=false/until=2/common=pad; with the switch off no row was copied. Afterwards: 0 rows in the log, switch on, RLS on, no browser privileges. Supabase security advisor: no new findings (two pre-existing). `docker build` of backend and OCR images exit 0; backend image contains only `.env.example`, runs as non-root `attendance`, imports fastapi/onnxruntime 1.26.0/insightface/cv2. `scripts/verify_release.sh` exit 0: 4 face models OK, backend Ran 492 tests OK (skipped=1), frontend lint/tests/build, production audit 0 vulnerabilities (4 pre-existing low dev advisories).
 - **Remaining risks or handoff work:** Not verified: a live check-in writing a real pilot row (needs the test stack running), container start with real env and mounted models. The pilot log only covers attempts the Backend records (test courses in test mode). Consented attack testing (Phase B item 5) still needs participants. `backend/.env.old` should still be moved out of the repository and its key rotated if it was ever shared. Nothing committed.
+
+## 2026-11-15 18:43 - Claude - Consolidated tuning report ReportTuning.md
+
+- **Objective:** The owner asked for one detailed report of the whole face-model tuning work from the start: topics and details of each change, the errors found, and the results after each fix, written as `ReportTuning.md`.
+- **Files or components changed:** new `ReportTuning.md` (Thai): executive summary with measured before/after numbers, how the liveness checks work, timeline of every round (2026-11-13 to 2026-11-15), per-round problem/fix/result sections 4.1-4.10, before/after threshold tables for the Backend and the web, a list of 27 system defects and 4 of my own analysis mistakes, combined results and test-count history, security trade-offs with kill switches, remaining risks and a proposed next plan. No code changed.
+- **Implementation rationale:** Compiled only from `TuningModelLog.md` entries 1-8, earlier `log.md` entries from 2026-11-13 22:30 onward and `README_TH.md` 8.7-8.15, so every number has a source; places where only simulations or calibration photos back a number say so. The success criteria in the next-plan table are labelled as my proposals. The owner's satisfactory result after the Realme round is reported as their statement, not as measured data.
+- **Security and privacy impact:** none. The report has no names, e-mail addresses, student ids, URLs, keys or images (checked with a search for @, URLs and 13-digit numbers: no hits).
+- **Database or deployment impact:** none.
+- **Verification performed:** cross-checked key numbers against the source entries and corrected three statements before saving (the original web recovery limit, a recovery_scale failure in round two, and the proposed status of the success criteria). The file is git-ignored by the existing `*.md` rule like the other reports.
+- **Remaining risks or handoff work:** the report must be updated after the 30-50 person pilot and the consented attack test. Nothing committed.
+
+## 2026-11-15 20:30 - Claude - Diagnosis: face runtime "crashed" error in the Messenger in-app browser
+- **Objective:** Explain a tester screenshot showing "runtime status error" (face detector stopped mid-scan) on Android inside Messenger's in-app browser.
+- **Files changed:** `TuningModelLog.md` (appended entry 9: report and proposed plan). No code changed.
+- **Rationale / findings:** The message is the `crashed` class from `classifyRuntimeLoadError`. The debug panel showed GPU at 221 ms/frame (4 fps), above the tuner's 110 ms limit, so a mid-scan GPU→CPU rebuild is requested after 15 frames; a failed rebuild, a GPU fault or a killed worker all end in `rejectLoad` and this same message. The raw error goes only to `console.error`, so the exact branch is unconfirmed (hypothesis: WebView memory/GPU limits).
+- **Security & privacy:** None. No user data, URLs or images recorded.
+- **Database / deployment:** None.
+- **Verification:** Code reading only; not reproduced on a device.
+- **Remaining risks / handoff:** Proposed (not done): show a truncated raw error in the test panel; on a GPU/switch crash retry on CPU and remember it; avoid mid-scan delegate switches in in-app browsers; stronger "open in Chrome" prompt.
+
+## 2026-11-15 21:00 - Claude - Action timing inventory and laptop PAD 0.00 diagnosis
+- **Objective:** (1) List every timing limit that governs the blink / move_closer challenge, so the owner can choose longer values before any change. (2) Diagnose a Lenovo Yoga 6 13ABR8 tester failing face enrollment with PAD live scores 0.00 on all three frames.
+- **Files changed:** `TuningModelLog.md` (appended entry 10). No code or database changes.
+- **Rationale / findings:** There is no dedicated clock for performing the action; the user-felt limits are action→recovery (Backend 3,000 ms, web 2,700 ms) and the 20 s whole-attempt budget (both sides). The PAD crop box is computed server-side, so a coordinate mismatch is unlikely; scores below 0.005 on every frame point to camera-side processing (Lenovo/Windows camera effects), a wrong camera (IR/virtual) or harsh laptop lighting. Hypotheses only.
+- **Security & privacy:** Read-only SELECT on the TEST project's `face_checkin_attempts` (scores and client fields only; no identities recorded here). No thresholds were lowered.
+- **Database / deployment:** None.
+- **Verification:** Code reading plus one read-only TEST query; laptop issue not reproduced.
+- **Remaining risks / handoff:** Owner to pick new timing values (both Backend and web constants must move together). Proposed: log failed enrollments to a test table, show the active camera label in the test panel, and collect tester feedback after disabling camera effects.
+
+## 2026-11-15 21:20 - Claude - Longer liveness action window (5 s) and attempt budget (30 s)
+- **Objective:** Owner chose 5 s for action→recovery and 30 s for the whole scan after testers reported running out of time.
+- **Files changed:** `backend/services/liveness_service.py` (MAX_ACTION_SPAN_MS 3000→5000, MAX_ATTEMPT_DURATION_MS 20000→30000; the owner's own inline comment kept), `backend/main.py` (RETRY_CHALLENGE_MIN_SECONDS 15→35 and its comment), `frontend/src/utils/livenessTiming.ts` (maxActionToRecoveryMs 2700→4700, maxAttemptMs 19500→29500, comments), `frontend/src/features/student/LivenessScanner.tsx` (ATTEMPT_TIMEOUT_MS 30000), `frontend/src/features/student/StudentHome.tsx` (text "30 วินาที"), `frontend/src/utils/liveness.ts` (comment), tests: `backend/tests/test_attempt_diagnostics.py`, `test_failure_diagnostics.py`, `test_liveness_security.py`, `frontend/scripts/test-scan-guards.mts`, `test-scan-robustness.mts`; `TuningModelLog.md` entry 10.D.
+- **Rationale:** Both sides must move together; the web keeps the same safety margins below the Backend (300 ms and 500 ms) so a too-slow scan is retried locally before any upload. The retry challenge minimum was raised so a replacement challenge is never issued with less time than one full scan.
+- **Security & privacy:** Slightly longer window for frame substitution between action and recovery (+2 s); PAD, continuity and randomized prompt delay unchanged. No data handling change.
+- **Database / deployment:** None. Backend and frontend must be deployed together (an old web build against the new Backend is harmless; a new web build against an old Backend would send 20-30 s scans that the old Backend refuses).
+- **Verification:** Backend `.venv/bin/python -m unittest discover -s tests`: Ran 492 tests, OK (skipped=1). Frontend on Node 22.23.2: all 17 `test:*` scripts exit 0, `npm run lint` exit 0, `npm run build` exit 0, `tsc -b` exit 0. Not verified on a real phone.
+- **Remaining risks / handoff:** Unrelated uncommitted change present in `backend/main.py` (FACE_THRESHOLD 0.45→0.50, made by the owner, left untouched). Measure `timing_action_span`/`duration` failure rates in `pilot_checkin_log` after the change.
+
+## 2026-11-15 21:45 - Claude - Liveness scanner layout: instruction card on top, face guide lower
+- **Objective:** Owner asked to move the liveness instruction box to the top of the scanner and shift the white face oval down a little.
+- **Files changed:** `frontend/src/features/student/LivenessScanner.tsx` only: the instruction card (progress bar, instruction text, move-closer size guide) now sits right under the header; the oval moved from top 46% to 54% and was made slightly smaller (h min(55dvh,34rem)→min(48dvh,31rem), w min(72vw,24rem)→min(68vw,23rem)) so it never sits under the card; the in-app/low-light hints and the small explanatory line stay at the bottom; the test-mode stats panel moved to the lower left so it no longer covers the card.
+- **Rationale:** Instructions near the top are closer to the camera, so people read them without looking away from the lens. No scan logic, thresholds or face-position checks changed (the quality gate measures the face against the camera frame, not the drawn oval; 54% is about as close to the frame centre as the old 46%).
+- **Security & privacy:** None. **Database / deployment:** None (frontend only).
+- **Verification:** Node 22.23.2: all 17 `test:*` scripts exit 0, `npm run lint` exit 0, `npm run build` exit 0. Layout checked with a static mock of the same classes at 375×667 and 390×844 using the longest instruction plus the size guide: card and oval do not overlap. Not checked on a real phone with the live camera.
+- **Remaining risks / handoff:** Very short screens (<640 px tall) or a two-line notice from the browser could bring the card close to the oval top; check on the testers' phones.
+
+## [2026-11-15 22:10] Claude: Update ReportTuning.md with the evening tester-feedback rounds
+- **Objective:** Owner asked for a detailed, plain-language update of the tuning report.
+- **Files changed:**
+  - `ReportTuning.md` (modified) and `docs/ReportTuning.md` (kept as an identical copy).
+    - Header now cites TuningModelLog entries 1–10.
+    - Executive summary gained a bullet on the tester-feedback round and a note about the uncommitted `FACE_THRESHOLD = 0.50`.
+    - Timeline gained four rows.
+    - New sections 4.11–4.14:
+      - 4.11: Messenger in-app browser crash.
+      - 4.12: Lenovo Yoga 6 PAD 0.00.
+      - 4.13: 5 s / 30 s timing change.
+      - 4.14: scanner layout change, plus the 0.45 vs 0.50 note.
+    - Updated the threshold tables in sections 5.1 and 5.2.
+    - Added bug rows 28–32 to section 6.1.
+    - Added the price of the longer timing to 7.3 and a timing row to section 8.
+    - Added risks 8–11 to section 9.1 and plan items 9–12 to section 9.2.
+- **Rationale:** The report stopped at round 4.10 (18:30). Everything added comes from TuningModelLog entries 9–10 and the log.md entries of 20:30–21:45. No new measurements.
+- **Security/privacy:** The report contains no names, emails, student codes, images, keys or private URLs. Device model names only.
+- **DB/deploy:** none.
+- **Verification:**
+  - Every replacement anchor was asserted to match exactly once.
+  - Confirmed sections 4.11–4.14 are present (665 lines).
+  - The `docs/` copy was synced with `cp`.
+  - No code changed, so no tests were run.
+- **Remaining risks/handoff:**
+  - The `FACE_THRESHOLD` 0.50 decision is still the owner's to make.
+  - The entry 9 and 10 code proposals are not implemented.
+  - Nothing is committed.
+
+## [2026-11-16] Claude: Adopt face-match threshold 0.50 (owner decision)
+- **Objective:** The owner chose `FACE_THRESHOLD = 0.50` instead of 0.45. The value was already in the working tree but uncommitted. The task was to make the docs agree with it and check its impact.
+- **Files changed:**
+  - `backend/main.py`: no new edit; the 0.50 value is kept as the owner made it.
+  - `deployment/docker/README_TH.md`: the `identity` row now says 0.50. Added a note under the forehead-occlusion table that the 125% case (minimum 0.50) sits exactly on the new line.
+  - `ReportTuning.md` and `docs/ReportTuning.md`:
+    - New section 4.15 covering the decision, the trade-off and a back-test.
+    - Updated the summary, timeline, tables 5.1 and 8, risk 11 and plan item 9.
+  - `TuningModelLog.md`: entry 11.
+- **Rationale:**
+  - The constant is the single source for the decision, the test-mode message and the stored `threshold_used`.
+  - Test fixtures that pass `threshold_used=0.45` are only stored-value examples, so they were left alone.
+  - `test_mode_service.THRESHOLD_KEY` is unused.
+- **Security/privacy:**
+  - Stricter identity matching means fewer impostor and look-alike accepts, and more false rejects for genuine users.
+  - The back-test was a read-only aggregate on the TEST project. No identifiers were read or recorded.
+- **DB/deploy:**
+  - No schema change.
+  - Rollback: set the constant back to 0.45 and restart the Backend. There is no env switch.
+- **Verification:**
+  - Backend unittest: `Ran 492 tests`, `OK (skipped=1)`.
+  - Back-test on 77 scored attempts from 14 testers: 0 below 0.50; 6 in the 0.50–0.60 range; min 0.553; p05 0.581; median 0.727.
+- **Remaining risks/handoff:**
+  - The margin is only about 0.05 above the lowest genuine score, and the sample is small.
+  - Monitor `identity` failures in `pilot_checkin_log`.
+  - Nothing is committed.
+
+## [2026-11-16] Claude: CompareFaceExplain.pdf (face embedding storage and matching explainer)
+- **Objective:** Owner asked for the face-embedding explanation as a PDF.
+- **Files changed:** `CompareFaceExplain.pdf` (created, project root, 3 pages, Thai). No code changed.
+- **Content:**
+  - How enrollment stores one 512-d embedding per account in `profiles.face_embedding` (`vector(512)`), written by `finalize_face_enrollment` with no overwrite.
+  - How check-in compares only against the logged-in account's own embedding (1:1, threshold 0.50).
+  - The three ways another user's name could appear.
+  - How 1:N systems store and decide: a templates table, an HNSW index, a stricter threshold, a top-1/top-2 margin, a duplicate check at enrollment, and audit logging.
+  - A recommendation: a duplicate-face check at enrollment.
+- **Rationale:** The PDF was rendered with WeasyPrint from HTML in a scratch venv; nothing was added to the project dependencies. LibreOffice was tried first and rejected because its Thai layout was poor.
+- **Security/privacy:** The PDF contains no PII, images, embeddings or keys.
+- **DB/deploy:** none.
+- **Verification:**
+  - 3 pages.
+  - Checked the rendered pages visually: Thai text and digits are correct, and tables are not split badly.
+- **Remaining risks/handoff:**
+  - The duplicate-face check is only a proposal.
+  - Nothing is committed.
+
+## [2026-11-16] Claude: Read-only usage summary of the TEST database
+- **Objective:** Owner asked which accounts have used check-in and how many there are. Answer in chat only; no document.
+- **Files changed:** none (this log entry only).
+- **Method:**
+  - Read-only SELECTs on TEST project `kmutnb-attendance-test`.
+  - Tables read: `profiles`, `auth.users` (`last_sign_in_at` only), `face_checkin_attempts`, `attendance_records`, `pilot_checkin_log`.
+  - `face_embedding` was not selected.
+  - Production was not touched.
+- **Aggregate results (no PII):**
+  - 25 accounts: 24 students and 1 teacher. 15 students use the university domain and 9 use external domains.
+  - 18 students are face-registered.
+  - 20 students tried a face check-in; 17 of them succeeded at least once.
+  - 154 attempts in total (87 success, 67 failed), between 2026-11-13 and 2026-11-16. One account alone made 87 of them.
+  - Top failure stages: pad 26, blink 16, not_enrolled 7, move_closer 6.
+  - `attendance_records` has 0 rows. `pilot_checkin_log` has 48 rows.
+- **Security/privacy:** Names and emails were shown to the owner in chat only and are not recorded here.
+- **DB/deploy:** none.
+- **Verification:** Per-account sums match the totals (154 = 87 + 67, and the failure stages sum to 67).
+- **Remaining risks/handoff:** none.
+
+## [2026-11-16 17:55] Claude: reportResultFaceCheckin.pdf (face check-in usage report, TEST data)
+- **Objective:** Owner asked which tables the usage numbers came from, with an explanation, as a PDF.
+- **Files changed:** `reportResultFaceCheckin.pdf` (created, project root). No code changed.
+- **Content:**
+  - Summary KPIs.
+  - The five source tables with the columns used: `profiles`, `auth.users` (`last_sign_in_at` only), `face_checkin_attempts` (main source), `attendance_records` (0 rows), `pilot_checkin_log` (48 rows, count only).
+  - Join keys, the SQL, definitions and consistency checks.
+  - Per-tester table, logged-in-but-never-scanned list, failure stages and attempts per day.
+- **Security/privacy:**
+  - **The PDF contains tester names (PII). It is marked internal on every page and must not be committed or shared.**
+  - Emails appear only as a type (university or external). No student codes, embeddings, images or tokens.
+  - `*.pdf` is not git-ignored, so the owner must keep it out of commits.
+- **DB/deploy:** none. Read-only TEST queries; production was not touched.
+- **Verification:** 4 pages, rendered with WeasyPrint. Checked the pages visually: Thai text, tables and page breaks are fine, and the totals match (154 = 87 + 67).
+- **Remaining risks/handoff:** Consider adding these reports to `.gitignore`. Nothing is committed.
+
+## [2026-11-16 18:40] Claude: Fix "runtime status error" after the GPU→CPU switch (vivo V23e, Chrome)
+- **Objective:** A tester screenshot from a vivo V23e in Chrome showed "ระบบตรวจจับใบหน้าหยุดทำงานกลางคัน / runtime status error", with GPU at 155 ms per frame and 5.8 fps. Explain the cause and fix it.
+- **Root cause:** Same mechanism as TuningModelLog entry 9, but in a normal browser.
+  - The tuner asked for the CPU. The worker closed its GPU graph and rebuilt a CPU graph in the same WASM heap; that rebuild failed and the whole runtime became `error`.
+  - No CPU choice was saved, so "try again" started on the GPU again and crashed again.
+  - The raw error text went only to the console.
+- **Files changed:**
+  - `frontend/src/services/faceLandmarkerRuntime.ts`:
+    - `requestDelegateSwitch` now calls a new `restartWorker(target)`. It terminates the worker and starts a fresh one on the target engine (`initializeWorker` takes an optional `forcedDelegate`). The runtime stays `loading` until the new worker is ready, the tuner is kept, and the scanner gets 'switching' then 'switched'.
+    - A worker that dies while on the GPU or mid-switch is replaced once by a fresh CPU worker (`shouldRecoverOnCpu` / `recoverOnCpu`, guarded by `crashRecoveryUsed`). The CPU choice is saved, and the raw text is kept in `getLastRuntimeRecovery()`.
+    - `rejectLoad` puts the raw text, cut to 160 characters, in the new optional `snapshot.detail`.
+    - Old workers' late failures are ignored by a generation check.
+  - `frontend/src/features/student/LivenessScanner.tsx`:
+    - The test-mode error detail now shows `runtime status error: <raw>`.
+    - The test panel shows a "กู้ระบบ→CPU" line after a recovery.
+    - `restartAfterEngineSwitch` resets `processing`, because the in-flight frame of the old worker never answers.
+  - `frontend/scripts/test-runtime-recovery.mjs` (new): a behaviour test that loads the real runtime through Vite SSR with a fake Worker. Wired into `package.json` as `test:runtime-recovery` and into `scripts/verify_release.sh`.
+  - `frontend/scripts/test-scan-robustness.mts`: wiring assertions for the new paths.
+  - `TuningModelLog.md`: entry 12.
+- **Rationale:**
+  - A new worker starts with an empty WASM heap and no WebGL context, which is the path already proven on CPU-start phones.
+  - Recovery is limited to one attempt per runtime to avoid restart loops.
+  - Backend thresholds are unchanged.
+- **Security/privacy:**
+  - No security gate changed; the Backend still decides everything.
+  - The raw error text is shown only in test builds and is not sent or stored. It is MediaPipe or browser text, which may contain asset URLs but no personal data.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - `test:runtime-recovery` passes. Run against the old runtime it fails at "the GPU worker is terminated instead of rebuilding inside it", so it detects the bug.
+  - All 18 frontend `test:*` scripts pass.
+  - `npm run lint`, `tsc -b` and `npm run build` pass.
+- **Remaining risks/handoff:**
+  - Not tried on a real vivo V23e. If its CPU is also below 8 fps, the scan now stops with the slow-device message instead of crashing.
+  - The in-worker 'switch' message handler is kept but unused.
+  - Nothing is committed.
+
+## [2026-11-16 21:45] Claude (lead, with 3 subagents): Scan UX from real-user feedback
+- **Objective:** Five owner requests from tester feedback:
+  1. Instructions in the scan frame change too fast; each should stay until the user has done it.
+  2. Show a preparation modal with a "เข้าใจแล้ว" button before the camera opens, every time.
+  3. Make the blink step clearly mean "close eyes for about 1 second, then open".
+  4. Make the instruction more visible.
+  5. Delay the final still capture until the eyes are fully open, and slow other steps a little.
+- **Work split (no file overlap):**
+  - Agent 1: `utils/liveness.ts` and `test-blink-profiles.mts`.
+  - Agent 2: `LivenessScanner.tsx`, new `utils/instructionPacer.ts`, new `test-instruction-pacer.mts` and `test-scan-robustness.mts`.
+  - Agent 3: new `FaceScanPrepGate.tsx`, `StudentHome.tsx`, `StudentRegister.tsx` and new `test-scan-prep-gate.mts`.
+  - Lead: `package.json`, `verify_release.sh`, `test-passive-gate.mts`, the logs and the final checks.
+- **Files changed:**
+  - `frontend/src/utils/liveness.ts`:
+    - `maxHoldMs` 600→1000.
+    - New `HYBRID_RECOVERY_LIMITS`: fullOpenRatio 0.85, recoveryHoldMs 500, recoveryHoldFrames 3, minRecoveryAfterActionMs 700, recoveryFallbackAfterMs 2000, settleFloorRatio 0.55.
+    - The `HybridActionMonitor` recovery phase now waits for a settled run, using a median over the hold window, with a 0.70 fallback after 2 s.
+    - New getter `shortClosureDropped`.
+    - New texts: `BLINK_PROMPT`, `BLINK_RETRY_PROMPT`, `BLINK_TOO_SHORT_MESSAGE`, `BLINK_OPEN_MESSAGE`.
+    - `hybridRecoveryDetected` is unchanged.
+  - `frontend/src/utils/instructionPacer.ts` (new): pure dwell scheduler. A hint is held at least 1500 ms, the latest hint wins, and a step message shows at once.
+  - `frontend/src/features/student/LivenessScanner.tsx`:
+    - All frame-loop instructions go through the pacer, with a 250 ms flush.
+    - The get-ready text shows for max(promptDelayMs, 1500); `promptAt` is the time the prompt is really shown.
+    - `SAMPLE_INTERVAL_MS` 450→550.
+    - Uses the blink too-short and open texts.
+    - The instruction card is solid and larger, with an icon and a "ขั้นที่ N/3" pill.
+  - `frontend/src/features/student/FaceScanPrepGate.tsx` (new): an accessible modal that does not mount the scanner, and so starts no camera, worker or 30 s timer, until "เข้าใจแล้ว" is pressed. It is shown on every mount.
+  - `StudentHome.tsx`, `StudentRegister.tsx`: wrap `LivenessScanner` in the gate. The Register helper text no longer says "กะพริบ".
+  - Tests: new `test-instruction-pacer.mts` and `test-scan-prep-gate.mts`, both registered in `package.json` and `scripts/verify_release.sh`. `test-blink-profiles.mts` and `test-scan-robustness.mts` were updated.
+  - `test-passive-gate.mts`: the slow-camera assertion now also accepts the current wording "เปลี่ยนอุปกรณ์". An earlier unlogged edit to `slowCameraMessage` had made it fail; that wording was kept.
+  - `TuningModelLog.md`: entry 13.
+- **Rationale:**
+  - Hints were set on every frame, so they flickered. Step changes are already event-driven and stay immediate.
+  - The final frame is also the face-match image, so eyes fully open helps both liveness and matching.
+  - Showing the prompt later than the signed delay is allowed by the Backend (`prompt_at >= last_sample + delay`).
+  - 550 rather than 600 ms keeps the pose restart (550 + 1200 = 1750) before the 1800 ms gap guard.
+- **Security/privacy:**
+  - No gate is loosened. The final frame still has to pass `hybridRecoveryDetected`, and spoof styles (photo, wink, squint, nod) are still 0% in the simulation.
+  - Backend unchanged. No data is stored by the modal.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - All 20 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+  - Simulated longest action→recovery span: 2.6–3.6 s at 8–30 fps, against a 4.7 s limit.
+  - The prep-gate test fails when the gate renders its children early.
+- **Remaining risks/handoff:**
+  - Not tried on a real phone or browser. All new values are UX values, unmeasured.
+  - About 500 ms less slack before the 4.7 s recovery limit at 8 fps.
+  - Modal distance ("arm's length") vs `PAD_RETRY_CHECKLIST` (30–40 cm) needs an owner decision.
+  - Backend messages still say "กะพริบ/กระพริบ".
+  - A 3-line instruction card may sit close to the face guide at 360×640.
+  - Stale "450" comments remain in `livenessTiming.ts` and `captureQuality.ts`.
+  - Nothing is committed.
+
+## [2026-11-16 22:05] Claude: Prep modal: 30–40 cm distance and top-right X cancel button
+- **Objective:** The owner chose "30–40 ซม." for the phone distance and asked for an X cancel button in the top-right corner of the prep modal, so a person who is not ready can leave the scan step.
+- **Files changed:**
+  - `frontend/src/features/student/FaceScanPrepGate.tsx`:
+    - The tip text is now "ห่างจากใบหน้าประมาณ 30–40 ซม.", which matches `PAD_RETRY_CHECKLIST`.
+    - New X button (lucide `X`, 44 px, `absolute right-2 top-2`, `aria-label` "ยกเลิกการสแกนใบหน้า"). It is rendered when `onCancel` is given and calls `onCancel` only.
+    - Tab and Shift+Tab now cycle between the X and the "เข้าใจแล้ว" button. Initial focus stays on "เข้าใจแล้ว".
+    - The title has right padding so it is not covered.
+  - `frontend/scripts/test-scan-prep-gate.mts`: now expects 2 buttons (the X with its label and position, and "เข้าใจแล้ว"), checks that the X is wired only to `onCancel`, and checks the distance text.
+  - `TuningModelLog.md`: section 13.E.
+- **Rationale:** Both parents already pass `onCancel`: StudentHome closes the scanner, and StudentRegister calls `cancelLiveness`, the same handler as the scanner's own close. Cancelling never mounts the scanner, so no camera starts and no challenge is used.
+- **Security/privacy:** none. No data is stored.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - `test:scan-prep-gate` passes. It fails when the X button is removed (checked, then the file was restored).
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+- **Remaining risks/handoff:**
+  - Not tried in a real browser or phone.
+  - Nothing is committed.
+
+## [2026-11-16 22:30] Claude: Reminder for students without a registered face, with profile-row highlight
+- **Objective:** On first login, or whenever the account has no registered face, show a clear, human-sounding reminder. It needs a button that goes to the profile page, where the face-scan row blinks so it is easy to find, and an X button that closes the reminder.
+- **Files changed:**
+  - `frontend/src/features/student/FaceRegistrationReminder.tsx` (new):
+    - Loads `/api/v1/students/me/profile` and shows only when `face_registered === false`. Nothing is shown while loading or on a failed load.
+    - Hidden on `/student/profile` and `/student/register`. While unregistered it asks again on each page change, so it disappears right after enrolment.
+    - Text: title "คุณยังไม่ได้ลงทะเบียนใบหน้า" and a gender-neutral explanation that tells the person to open the profile and press "ลงทะเบียนใบหน้า" in the face-scan row.
+    - Button "ไปที่หน้าโปรไฟล์" navigates with router state `{ highlightFaceRow: true }`.
+    - Top-right 44 px X button (`aria-label` "ปิดการแจ้งเตือน"). It hides the reminder for the browser session only (sessionStorage, wrapped in try/catch), so the next login reminds again.
+    - `role="alert"`.
+  - `frontend/src/components/layout/StudentLayout.tsx`: renders the reminder above `<Outlet />`, so it appears on every student page.
+  - `frontend/src/features/student/StudentProfile.tsx`: when it arrives with that state, the face-scan row (`ProfileRow` gained `rowRef` and `highlight`) is scrolled into view and blinks for 6 s. The router state is then cleared so Back/refresh does not repeat it. The highlight starts only once and only while the face is unregistered.
+  - `frontend/src/index.css`: `.attention-blink` (orange ring and background pulse, 6 × 1 s). With `prefers-reduced-motion` it becomes a still ring.
+  - `frontend/scripts/test-face-reminder.mts` (new): registered as `test:face-reminder` in `package.json` and `scripts/verify_release.sh`.
+- **Rationale:** The layout is the one place every student page passes through. sessionStorage gives "close for now" without permanently hiding a required step.
+- **Security/privacy:** reads the student's own existing profile endpoint, with no new data. sessionStorage holds only the flag "1".
+- **DB/deploy:** none. Frontend only; one extra profile GET per student page change while unregistered.
+- **Verification (Node 22):**
+  - All 21 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+- **Remaining risks/handoff:**
+  - Not viewed in a browser or phone; the reminder and blink are checked only by source tests.
+  - Nothing is committed.
+
+## [2026-11-16 23:00] Claude: Five layout proposals for the student "รายวิชา" tab (mockup only)
+- **Objective:** The owner asked for 5 redesign options for the student courses tab, with grouped, orderly sections instead of scattered cards.
+- **Files changed:** `docs/design/courses-tab-variants.html` (new). It is a static mockup of 5 phone screens on the same sample data, using the app's palette, shell and type. The courses are fictional sample data with no real people.
+  - **A:** two tabs plus a floating join button.
+  - **B:** grouped list (studying / pending / closed) with a one-line join bar.
+  - **C:** status counters as filters.
+  - **D:** courses grouped by semester, with the pending request pinned at the top.
+  - **E:** join panel, then "ต้องติดตาม", then current courses.
+- **Rationale:** The current tab repeats the page title in a dark header card, gives the join form a large block, and splits courses and requests into separate stacks of cards.
+- **Security/privacy:** none. No real data. The page loads the Noto Sans Thai font from Google Fonts for the mockup only.
+- **DB/deploy:** none. `StudentCourses.tsx` is unchanged.
+- **Verification:**
+  - Rendered in the browser pane at 1280 px with 360 px phone frames.
+  - Fixed the design-hook contrast and tiny-text findings: placeholder, nav and count colours, 12 px minimum text, the E button colour, the B button wrap and the C chip scrollbar.
+- **Remaining risks/handoff:**
+  - The owner must pick a direction before `StudentCourses.tsx` is implemented.
+  - D needs past-semester courses from the API, which it does not return today.
+  - Nothing is committed.
+
+## [2026-11-16 23:30] Claude: Student "รายวิชา" tab rebuilt as layout A (tabs + join sheet)
+- **Objective:** The owner chose layout A from `docs/design/courses-tab-variants.html`: two tabs, "วิชาของฉัน" and "คำขอ", plus a "เข้าร่วมวิชา" button that opens the class-code form.
+- **Files changed:**
+  - `frontend/src/features/student/StudentCourses.tsx`:
+    - Removed the dark header card that repeated the page title.
+    - Added a segmented tablist (WAI-ARIA tabs: roving tabindex, arrow and Home/End keys, labelled panels). The course count shows on the courses tab, and an amber pending count on the requests tab (announced as "รออนุมัติ N รายการ").
+    - On the first load, if there are no courses but there is a pending request, the requests tab opens first.
+    - Courses are rows in one list, each linking to `/student/history/{id}`.
+    - Requests are one list with status icon and text, the teacher's note, and a cancel button for pending requests.
+    - The "เข้าร่วมวิชา" button is sticky inside the page scroller, so it never covers the bottom nav.
+    - It opens a `JoinSheet` bottom sheet: a portal dialog with `useModalIsolation`, a focus trap, and Escape/X/backdrop to close (but not while sending). Focus returns to the button, and the sheet respects the bottom safe area.
+    - After sending, the sheet closes and the requests tab opens.
+    - The failed-load state now has a "ลองโหลดใหม่" button.
+    - The join and cancel API calls, the validation text and `ConfirmDialog` are unchanged.
+  - `frontend/scripts/test-student-courses.mts` (new): registered as `test:student-courses` in `package.json` and `scripts/verify_release.sh`.
+- **Security/privacy:** none. Same endpoints, no new data.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - All 22 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+  - Viewed in the browser pane through a temporary Vite harness (MemoryRouter, mocked axios, fictional data; deleted afterwards), at 375×812 and 320×640:
+    - the tabs, rows, badges and sticky button render correctly;
+    - the sheet opens with focus on the input, the code formats as `ABCD-23`, and the app root is inert;
+    - Escape closes the sheet and focus returns to "เข้าร่วมวิชา";
+    - with no courses and a pending request, the requests tab opens first.
+- **Remaining risks/handoff:**
+  - Not tried against the real API or on a phone.
+  - `/student/history/{id}` assumes `course.id` equals the history page's `course_id`, as AttendanceHistory reads it.
+  - Nothing is committed.
+
+## [2026-11-16 23:55] Claude: Five proposals for the course detail page in the student history tab (mockup only)
+- **Objective:** The owner asked for 5 design options for `/student/history/:courseId` that show the details more clearly.
+- **Files changed:** `docs/design/course-history-detail-variants.html` (new). A static mockup of 5 phone screens on the same fictional sample data (15 planned sessions, 20% absence limit; 11 checked: 8 present, 2 late, 1 absent).
+  - **A:** "ขาดได้อีก N ครั้ง" summary with a limit bar, then sessions by month.
+  - **B:** a 15-cell strip for the whole term, with a tapped-cell detail.
+  - **C:** per-session timeline with large dates.
+  - **D:** counter strip, absence verdict line and a filterable table.
+  - **E:** plain-language verdict banner, a proportion bar and month sections that collapse.
+- **Rationale:** The current page does not say how many absences are left, does not show the Normal/Fa evaluation, and lists each check-in without session number or weekday. Every number in the proposals comes from fields the student endpoint already returns (`total_sessions`, `max_absence_percent`, counts, `evaluation`, history rows), so no Backend change is needed.
+- **Security/privacy:** none. No real data. Google Fonts is loaded for the mockup only.
+- **DB/deploy:** none. `AttendanceHistory.tsx` is unchanged.
+- **Verification:** All 5 rendered in the browser pane at 1280 px with 360 px phone frames. The design hook reported no issues.
+- **Remaining risks/handoff:**
+  - The owner must pick a direction.
+  - The frontend `CourseSummary` type does not yet declare `max_absence_percent`, although the API sends it.
+  - "Sessions remaining" assumes `total_sessions` is the planned count.
+  - Nothing is committed.
+
+## [2026-11-17 00:20] Claude: Interactive prototype of the course detail page (timeline C + detail card B)
+- **Objective:** The owner chose to combine layout C (timeline) with B's detail card. Tapping a date number should open the full detail of that session. A working prototype was requested before the real build.
+- **Files changed:** `docs/design/course-history-detail-prototype.html` (new). A self-contained interactive prototype on fictional data.
+  - **Summary:** counts, sessions left, and "ขาดได้อีก N ครั้ง" from `total_sessions` and `max_absence_percent`.
+  - **Timeline:** each date is a button. The detail card shows session N of 15, the full Thai date, the check-in time, the method, a status note, a petition link for late/absent sessions, and previous/next buttons.
+  - **Two presentation modes,** switched from a side panel:
+    - bottom sheet: scrim, X, Escape, focus trap, focus return;
+    - inline expand: under the tapped date, with `aria-expanded`.
+  - On a phone the page fills the screen and uses the sheet. Reduced motion turns the transitions off.
+- **Verification (browser pane):**
+  - Opening session 5 showed the sheet. "ครั้งถัดไป" moved to session 6, and Escape closed the sheet and returned focus to that date button.
+  - Inline mode opened session 8 under its date.
+  - At 375×812 there is no horizontal overflow.
+  - Fixed during the check: focus was lost after closing because the list re-renders; the selected date stretched to the full row height in inline mode; the sheet header ran under the X; the active nav colour was raised for contrast.
+- **Security/privacy/DB/deploy:** none. No real data; `AttendanceHistory.tsx` is unchanged.
+- **Remaining risks/handoff:**
+  - The owner picks sheet or inline before implementation.
+  - The real build needs `max_absence_percent` added to the frontend `CourseSummary` type.
+  - Nothing is committed.
+
+## [2026-11-17 00:50] Claude: Course detail page in the history tab rebuilt (timeline + bottom-sheet detail)
+- **Objective:** Owner's choice after the prototype: layout C's timeline with layout B's full-detail card in a bottom sheet. The detail text beside the date must also open it, and the viewed date must be highlighted.
+- **Files changed:**
+  - `frontend/src/features/student/CourseHistoryDetail.tsx` (new). It owns the `CourseSummary`/`HistoryItem` types; `CourseSummary` gains `max_absence_percent`, which the API already sends.
+    - **Summary card:** counts, sessions left, and "ขาดได้อีก N ครั้ง ก่อนถึงเกณฑ์ X%". This uses the Backend rule (Fa when absent > total × percent / 100) and is hidden when no limit or total is set. A red line appears when the evaluation is Fa.
+    - **Timeline:** newest first, with session numbers in date order. Each row is ONE button covering the date, dot and details text, labelled with session number, date and status.
+    - **Highlight:** the viewed row gets an orange ring and background and a dark date block, with `aria-current`.
+    - **`SessionSheet`:** a portal dialog with `useModalIsolation`, a focus trap, and Escape/scrim/X to close. Focus returns to the row, the bottom safe area is respected, and the slide-up animation is motion-safe only.
+    - **Sheet content:** session N of total, the full Thai date, check-in time, method, a status note, a "ยื่นคำร้องถึงอาจารย์" link to `/student/requests` for non-present sessions, and previous/next buttons. Stepping moves the highlight and scrolls that row into view.
+  - `frontend/src/features/student/AttendanceHistory.tsx`: the `courseId` branch now renders `CourseHistoryDetail`; helpers that moved there were removed. The course list view is unchanged.
+  - `frontend/src/index.css`: `sheet-up` and `sheet-fade` keyframes.
+  - `frontend/scripts/test-course-history-detail.mts` (new): registered as `test:course-history-detail` in `package.json` and `scripts/verify_release.sh`.
+- **Security/privacy:** none. Same endpoint and data; the petition link goes to an existing page.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - All 23 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+  - Browser pane at 375×812 through a temporary harness (fictional data; deleted afterwards):
+    - tapping the details text of a row opens the sheet and highlights that row in the middle of the screen;
+    - "ครั้งถัดไป" moves from session 7 to 8 and the highlight follows;
+    - Escape closes the sheet, focus returns to session 8's row, and the app root is no longer inert;
+    - there is no horizontal overflow.
+- **Remaining risks/handoff:**
+  - Not tried against the real API or on a phone.
+  - "Sessions left" relies on the teacher's planned `total_sessions`.
+  - Nothing is committed.

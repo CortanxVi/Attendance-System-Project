@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Webcam from 'react-webcam';
-import { ArrowLeft, Camera, Loader2, ScanFace, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Camera, Eye, EyeClosed, Loader2, ScanFace, ShieldCheck, ZoomIn, ZoomOut } from 'lucide-react';
 import CameraQualityControls from '../../components/camera/CameraQualityControls';
 import { TEST_MODE } from '../../config/testMode';
 import { useModalIsolation } from '../../components/overlays/useModalIsolation';
@@ -11,6 +11,7 @@ import {
   getFaceLandmarkerRuntimeMode,
   getFaceLandmarkerRuntimeSnapshot,
   getLastBlendshapeSwitchMs,
+  getLastRuntimeRecovery,
   openFaceLandmarkerClient,
   type FaceLandmarkerClient,
   type FaceLandmarkerClientEvent,
@@ -47,6 +48,7 @@ import {
 import { BUILD_INFO, buildDiagnostics, buildLabel } from '../../config/buildInfo';
 import { holdAppUpdates } from '../../pwa/registerServiceWorker';
 import { ENGINE_SWITCH_TIMEOUT_MS, EngineSwitchGuard } from '../../utils/engineSwitchGuard';
+import { INSTRUCTION_MIN_DWELL_MS, InstructionPacer } from '../../utils/instructionPacer';
 import {
   LOW_LIGHT_MESSAGE,
   LUMA_SAMPLE_EVERY_MS,
@@ -71,9 +73,11 @@ import type {
   SizeGuide,
 } from '../../utils/liveness';
 import {
+  BLINK_OPEN_MESSAGE,
   BLINK_PROMPT,
   BLINK_RETRY_AFTER_MS,
   BLINK_RETRY_PROMPT,
+  BLINK_TOO_SHORT_MESSAGE,
   HybridActionMonitor,
   MIN_READABLE_EAR,
   MOVE_CLOSER_HOLD_MESSAGE,
@@ -94,21 +98,32 @@ import {
 } from '../../utils/liveness';
 
 const SAMPLE_COUNT = 3 as const;
-// Minimum gap between still frames. The upper bound (Backend 2000 ms) is enforced by
-// passiveSampleGapExpired in utils/livenessTiming.ts, which restarts the set at 1800 ms.
-const SAMPLE_INTERVAL_MS = 450;
+// Minimum gap between still frames (a little slower than before, so the person has time to settle).
+// The upper bound (Backend 2000 ms) is enforced by passiveSampleGapExpired in utils/livenessTiming.ts,
+// which restarts the set at 1800 ms. SAMPLE_INTERVAL_MS + PASSIVE_POSE_LIMITS.restartAfterMs (1200)
+// must stay below 1800, so the pose-specific restart message can still come before the gap restart
+// (checked in scripts/test-scan-robustness.mts).
+const SAMPLE_INTERVAL_MS = 550;
+// The "get ready" text before the challenge prompt stays at least this long (the signed promptDelayMs
+// is only 500-1400 ms, too short to read). The Backend only needs prompt >= last still + promptDelayMs.
+const PREPARE_NOTICE_MIN_MS = 1_500;
+// A paced instruction that waits for its turn is shown by this timer even when no frame arrives.
+const INSTRUCTION_FLUSH_MS = 250;
 // Consecutive good frames before the first still frame (together with the camera warm-up).
 const REQUIRED_STABLE_FRAMES = 4;
 // After a restart ("frames not continuous", "too slow, do it again") the routine instructions
 // wait this long, so the notice can be read.
 const NOTICE_MS = 1_500;
-const ATTEMPT_TIMEOUT_MS = 20_000;
+const ATTEMPT_TIMEOUT_MS = 30_000;
 // The server only ever receives images with a longest side of 640 px (see frameToJpeg), so the
 // face landmarker does not need the camera's full 1280x720 frame either. Handing it the smaller
 // bitmap cuts the per-frame copy/upload/preprocessing cost on phones with slow CPUs or GPUs.
 const ANALYSIS_MAX_SIDE = 640;
 // The Backend rejects an attempt whose measured frame rate is below this (MIN_EFFECTIVE_FPS).
 const REQUIRED_FPS = 8;
+// Step indicator in the instruction card, derived from the progress bar (3 still frames = 0.6, action
+// captured = 0.8).
+const STEP_LABELS = { 1: 'มองตรงนิ่ง ๆ', 2: 'ทำตามคำสั่ง', 3: 'กลับท่าเดิม' } as const;
 
 interface ScannerStats {
   cameraFps: number | null;
@@ -120,6 +135,8 @@ interface ScannerStats {
   analysis: string;
   engine: string;
   blendshapeSwitchMs: number | null;
+  /** Raw text of a worker crash that was recovered on the CPU during this page visit. */
+  recovery: string | null;
   eyes: string;
   limit: string;
   frameErrors: string;
@@ -319,7 +336,10 @@ function LivenessScannerInner({
     let stableFrames = 0;
     let lastSampleAt = 0;
     let phase: 'passive' | 'wait_prompt' | 'action' | 'recovery' = 'passive';
+    // Moment the challenge prompt was really shown (set then); before it the "get ready" text runs
+    // until prepareUntil.
     let promptAt = 0;
+    let prepareUntil = 0;
     const poseGate = new PassivePoseGate();
     // Set once the scan was stopped by the app itself (too slow), so late results are ignored.
     let halted = false;
@@ -356,6 +376,15 @@ function LivenessScannerInner({
     };
     // A restart notice stays readable this long before the routine instructions replace it.
     let noticeUntil = 0;
+    // Every frame-loop instruction goes through the pacer, so the text never flips every frame:
+    // a hint stays at least INSTRUCTION_MIN_DWELL_MS; a step (new phase or notice) shows at once.
+    // Errors bypass it (fail() sets the error overlay directly).
+    const pacer = new InstructionPacer({ minDwellMs: INSTRUCTION_MIN_DWELL_MS });
+    const display = (text: string) => { if (!cancelled) setInstruction(text); };
+    const showStep = (text: string) => display(pacer.request(text, performance.now(), 'step'));
+    const showHint = (text: string) => display(pacer.request(text, performance.now(), 'hint'));
+    const flushInstruction = () => { if (!cancelled && !halted) display(pacer.tick(performance.now())); };
+    const instructionTimer = window.setInterval(flushInstruction, INSTRUCTION_FLUSH_MS);
     // Advisory low-light hint: a tiny canvas is read at most every LUMA_SAMPLE_EVERY_MS.
     const lightMonitor = new LowLightMonitor();
     let lowLightShown = false;
@@ -414,6 +443,7 @@ function LivenessScannerInner({
         setStats({
           engine: getFaceLandmarkerDelegate() ?? '-',
           blendshapeSwitchMs: getLastBlendshapeSwitchMs(),
+          recovery: getLastRuntimeRecovery(),
           cameraFps: cameraSupported ? (cameraFrames - windowCameraFrames) / seconds : null,
           pipelineFps: windowResults / seconds,
           overallFps: measuredFps(observedTimestamps),
@@ -511,7 +541,7 @@ function LivenessScannerInner({
       stableFrames = 0;
       presenceSince = null;
       setProgress(0);
-      setInstruction(message);
+      showStep(message);
       noticeUntil = timestampMs + NOTICE_MS;
     };
     const qualityOk = (observation: LivenessObservation) => observation.faceCount === 1
@@ -528,7 +558,10 @@ function LivenessScannerInner({
         const runtime = getFaceLandmarkerRuntimeSnapshot();
         if (runtime.status === 'error') {
           // The model itself stopped (for example the worker crashed): its own message names the cause.
-          fail(runtime.error || FRAME_ERROR_MESSAGES.runtime, 'runtime status error');
+          fail(
+            runtime.error || FRAME_ERROR_MESSAGES.runtime,
+            `runtime status error${runtime.detail ? `: ${runtime.detail}` : ''}`,
+          );
           return;
         }
         // While the runtime is (re)initialising nothing is posted; the attempt timeout still applies.
@@ -570,12 +603,15 @@ function LivenessScannerInner({
     // Nothing was sent yet, so after an engine switch the attempt simply starts over with clean
     // timing (the frames around a rebuild are slow and would fail the frame-rate checks).
     const restartAfterEngineSwitch = () => {
+      // A switch replaces the worker, so a frame that was in flight in the old one never answers.
+      processing = false;
       releaseKeptFrame();
       restartPassive('ปรับการประมวลผลเสร็จแล้ว วางใบหน้าให้อยู่กลางกรอบ', performance.now());
       observedTimestamps.splice(0);
       startedAt = 0;
       phase = 'passive';
       promptAt = 0;
+      prepareUntil = 0;
       monitor = null;
       badSince = 0;
       actionRetryShown = false;
@@ -595,7 +631,7 @@ function LivenessScannerInner({
           // The rebuild (a GPU start can take up to 20 s) must not use up the attempt time.
           window.clearTimeout(timeout);
           timeout = window.setTimeout(() => stopSlow(FRAME_ERROR_MESSAGES.runtime), ENGINE_SWITCH_TIMEOUT_MS);
-          setInstruction('กำลังปรับการประมวลผลให้เร็วขึ้นสำหรับเครื่องนี้ กรุณารอสักครู่...');
+          showStep('กำลังปรับการประมวลผลให้เร็วขึ้นสำหรับเครื่องนี้ กรุณารอสักครู่...');
         } else if (action === 'restart') {
           restartAfterEngineSwitch();
         }
@@ -612,6 +648,8 @@ function LivenessScannerInner({
       const { observation, frame } = message;
       // Frames posted before or during an engine rebuild carry stale timing: never use them.
       if (!engineGuard.accepts(observation.timestampMs)) { frame.close(); return; }
+      // A paced text whose turn has come is shown on every processed frame.
+      flushInstruction();
       if (TEST_MODE) {
         windowResults += 1;
         const took = performance.now() - submittedAt;
@@ -634,14 +672,14 @@ function LivenessScannerInner({
             stableFrames = 0;
             presenceSince = null;
             if (!badSince) badSince = observation.timestampMs;
-            setInstruction(faceProblemInstruction(observation, observation.timestampMs - badSince));
+            showHint(faceProblemInstruction(observation, observation.timestampMs - badSince));
             return;
           }
           badSince = 0;
           stableFrames += 1;
           presenceSince ??= observation.timestampMs;
           setIsLoading(false);
-          if (observation.timestampMs >= noticeUntil) setInstruction('มองตรงนิ่ง ๆ ระบบกำลังตรวจใบหน้า');
+          if (observation.timestampMs >= noticeUntil) showHint('มองตรงนิ่ง ๆ ระบบกำลังตรวจใบหน้า');
           const measured = measureFace(frame, observation);
           // Every readable passive frame feeds the blur median, after it was judged itself.
           const observeSharpness = () => { if (measured) sharpnessGate.observe(measured.sharpness); };
@@ -658,7 +696,7 @@ function LivenessScannerInner({
               if (verdict.restart) {
                 restartPassive(PASSIVE_RESTART_MESSAGE, observation.timestampMs);
               } else if (verdict.problem) {
-                setInstruction(PASSIVE_POSE_MESSAGES[verdict.problem]);
+                showHint(PASSIVE_POSE_MESSAGES[verdict.problem]);
               }
               observeSharpness();
               return;
@@ -680,12 +718,14 @@ function LivenessScannerInner({
             markers.push({ kind: 'passive_sample', sampleIndex: samples.length, timestampMs: observation.timestampMs });
             setProgress(samples.length / 5);
             if (samples.length === SAMPLE_COUNT) {
-              promptAt = observation.timestampMs + challenge.promptDelayMs;
+              // The Backend needs prompt >= last still + promptDelayMs; the text also stays readable
+              // for PREPARE_NOTICE_MIN_MS. promptAt itself is set when the prompt is really shown.
+              prepareUntil = observation.timestampMs + Math.max(challenge.promptDelayMs, PREPARE_NOTICE_MIN_MS);
               phase = 'wait_prompt';
               // Only the blink challenge reads the eye-blink scores, so switch them on now,
               // while the person is still waiting for the prompt.
               if (challenge.action === 'blink') client?.setBlendshapes(true);
-              setInstruction('เตรียมทำคำสั่งง่าย ๆ อีกหนึ่งขั้นตอน');
+              showStep('เตรียมทำคำสั่งง่าย ๆ อีกหนึ่งขั้นตอน');
             }
             return;
           }
@@ -707,11 +747,13 @@ function LivenessScannerInner({
         };
 
         if (phase === 'wait_prompt') {
-          if (observation.timestampMs < promptAt) return;
+          if (observation.timestampMs < prepareUntil) return;
+          // prepareUntil >= lastSampleAt + promptDelayMs, so this frame satisfies the Backend order.
+          promptAt = observation.timestampMs;
           phase = 'action';
           monitor = new HybridActionMonitor(challenge.action, baseline);
           baselineEarText = `${baseline.leftEar.toFixed(2)}/${baseline.rightEar.toFixed(2)}`;
-          setInstruction(challenge.action === 'blink' ? BLINK_PROMPT : MOVE_CLOSER_PROMPT);
+          showStep(challenge.action === 'blink' ? BLINK_PROMPT : MOVE_CLOSER_PROMPT);
           return;
         }
 
@@ -727,7 +769,7 @@ function LivenessScannerInner({
           if (actionMarker >= 0) markers.splice(actionMarker, 1);
           noticeUntil = observation.timestampMs + NOTICE_MS;
           setProgress(SAMPLE_COUNT / 5);
-          setInstruction(challenge.action === 'blink' ? `${ACTION_TOO_SLOW_MESSAGE} ${BLINK_PROMPT}` : MOVE_CLOSER_RECOVERY_LATE_MESSAGE);
+          showStep(challenge.action === 'blink' ? `${ACTION_TOO_SLOW_MESSAGE} ${BLINK_PROMPT}` : MOVE_CLOSER_RECOVERY_LATE_MESSAGE);
           if (challenge.action === 'move_closer') setSizeGuide(moveCloserGuide('action', observation, baseline));
           return;
         }
@@ -760,23 +802,26 @@ function LivenessScannerInner({
             markers.push({ kind: 'challenge_action', action: challenge.action, timestampMs: actionAt });
             phase = 'recovery';
             setProgress(0.8);
-            setInstruction(challenge.action === 'blink' ? 'ลืมตาและมองตรง' : 'ถอยกลับที่เดิม');
+            showStep(challenge.action === 'blink' ? BLINK_OPEN_MESSAGE : 'ถอยกลับที่เดิม');
             if (challenge.action === 'move_closer') setSizeGuide(moveCloserGuide('recovery', observation, baseline));
+          } else if (challenge.action === 'blink' && monitor.shortClosureDropped) {
+            // The eyes reopened before the closure counted: say so (paced, so it stays readable).
+            showHint(BLINK_TOO_SHORT_MESSAGE);
           } else if (
             challenge.action === 'blink'
             && !actionRetryShown
             && observation.timestampMs - promptAt >= BLINK_RETRY_AFTER_MS
           ) {
             actionRetryShown = true;
-            setInstruction(BLINK_RETRY_PROMPT);
+            showHint(BLINK_RETRY_PROMPT);
           } else if (challenge.action === 'move_closer') {
             setSizeGuide(moveCloserGuide('action', observation, baseline));
             if (observation.timestampMs >= noticeUntil) {
               // Keep telling the person which way to go: the scanner needs 1.12-1.60x the first frame.
               const hint = moveCloserHint(observation, baseline);
-              if (hint === 'no_face') setInstruction(faceProblemInstruction(observation, 0));
-              else if (hint === 'ok') setInstruction(MOVE_CLOSER_HOLD_MESSAGE);
-              else setInstruction(MOVE_CLOSER_MESSAGES[hint]);
+              if (hint === 'no_face') showHint(faceProblemInstruction(observation, 0));
+              else if (hint === 'ok') showHint(MOVE_CLOSER_HOLD_MESSAGE);
+              else showHint(MOVE_CLOSER_MESSAGES[hint]);
             }
           }
           return;
@@ -789,9 +834,9 @@ function LivenessScannerInner({
             setSizeGuide(moveCloserGuide('recovery', observation, baseline));
             if (observation.timestampMs >= noticeUntil) {
               const hint = recoveryHint(observation, baseline, challenge.action);
-              if (hint === 'no_face') setInstruction(faceProblemInstruction(observation, 0));
-              else if (hint !== 'ok') setInstruction(RECOVERY_MESSAGES[hint]);
-              else setInstruction('พอดีแล้ว มองตรงค้างไว้');
+              if (hint === 'no_face') showHint(faceProblemInstruction(observation, 0));
+              else if (hint !== 'ok') showHint(RECOVERY_MESSAGES[hint]);
+              else showHint('พอดีแล้ว มองตรงค้างไว้');
             }
           }
           return;
@@ -878,7 +923,7 @@ function LivenessScannerInner({
       workerReady = true;
       // Every attempt starts with the eye-blink scores off (cheaper frames).
       client.setBlendshapes(blendshapesAlways);
-      setInstruction('วางใบหน้าให้อยู่กลางกรอบ');
+      showStep('วางใบหน้าให้อยู่กลางกรอบ');
       animationFrame = requestAnimationFrame(processFrame);
       armTimeout();
     }).catch((loadError) => fail(loadError instanceof Error ? loadError.message : 'โหลดระบบตรวจจับใบหน้าไม่สำเร็จ'));
@@ -886,6 +931,7 @@ function LivenessScannerInner({
       cancelled = true;
       window.clearTimeout(timeout);
       window.clearInterval(statsTimer);
+      window.clearInterval(instructionTimer);
       cancelAnimationFrame(animationFrame);
       (cameraWatchedVideo as VideoFrameWatcher | null)?.cancelVideoFrameCallback?.(cameraWatcher);
       client?.close();
@@ -894,6 +940,17 @@ function LivenessScannerInner({
       setSizeGuide(null);
     };
   }, [attemptKey, challenge, selectedCameraId]);
+
+  // Step indicator and icon, derived from the progress the frame loop already reports.
+  const stepNumber: keyof typeof STEP_LABELS = progress >= 0.8 ? 3 : progress >= SAMPLE_COUNT / 5 ? 2 : 1;
+  const blinkStep = challenge.action === 'blink';
+  const StepIcon = progress >= 1
+    ? ShieldCheck
+    : stepNumber === 2
+      ? (blinkStep ? EyeClosed : ZoomIn)
+      : stepNumber === 3
+        ? (blinkStep ? Eye : ZoomOut)
+        : progress > 0 ? ScanFace : Camera;
 
   return createPortal(
     <div
@@ -959,7 +1016,7 @@ function LivenessScannerInner({
       {TEST_MODE && stats && (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute left-2 top-24 z-40 rounded-lg bg-black/70 px-2 py-1 font-mono text-[10px] leading-4 text-white"
+          className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+3rem)] left-2 z-40 rounded-lg bg-black/70 px-2 py-1 font-mono text-[10px] leading-4 text-white"
         >
           <div>กล้องส่งภาพ: {stats.cameraFps === null ? 'ไม่ทราบ' : `${stats.cameraFps.toFixed(1)} fps`}</div>
           <div className={stats.pipelineFps < REQUIRED_FPS ? 'font-bold text-red-300' : 'text-emerald-300'}>
@@ -967,6 +1024,7 @@ function LivenessScannerInner({
           </div>
           <div>ต่อเฟรม: {stats.cycleMs.toFixed(0)} ms · ตัวประมวลผล: {stats.engine}</div>
           {stats.blendshapeSwitchMs !== null && <div>สลับโหมดตา: {stats.blendshapeSwitchMs.toFixed(0)} ms</div>}
+          {stats.recovery && <div className="max-w-[88vw] break-all text-amber-300">กู้ระบบ→CPU: {stats.recovery}</div>}
           <div>ภาพกล้อง {stats.source} → ตรวจที่ {stats.analysis}</div>
           <div>ตาเปิด(ฐาน) ซ้าย/ขวา: {stats.eyes}</div>
           <div>เกณฑ์ปิดตา ≤ {stats.limit} (สัดส่วนต่อฐาน)</div>
@@ -975,7 +1033,8 @@ function LivenessScannerInner({
         </div>
       )}
 
-      <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-[46%] z-10 h-[min(55dvh,34rem)] w-[min(72vw,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-[48%] border-[3px] border-white/85 shadow-[0_0_0_999px_rgba(2,6,23,0.24)]" />
+      {/* Face guide sits a little below the middle so the instruction card above it never covers it. */}
+      <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-[54%] z-10 h-[min(48dvh,31rem)] w-[min(68vw,23rem)] -translate-x-1/2 -translate-y-1/2 rounded-[48%] border-[3px] border-white/85 shadow-[0_0_0_999px_rgba(2,6,23,0.24)]" />
 
       {isLoading && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/88 px-5 pt-20 text-center text-white">
@@ -995,23 +1054,24 @@ function LivenessScannerInner({
         </div>
       )}
 
-      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-16 min-[375px]:px-4">
-        {/* Advisory hints only: they never stop or fail the scan. */}
-        <div className="mx-auto mb-2 flex w-full max-w-sm flex-col gap-2">
-          {inAppBrowser && !inAppDismissed && <InAppBrowserNotice onDismiss={() => setInAppDismissed(true)} />}
-          {lowLight && (
-            <p role="status" aria-live="polite" className="rounded-xl border border-amber-300/60 bg-amber-50/95 px-3 py-2 text-center text-sm font-semibold text-amber-950 shadow-xl">
-              {LOW_LIGHT_MESSAGE}
-            </p>
-          )}
-        </div>
-        <section className="mx-auto w-full max-w-sm rounded-2xl border border-white/20 bg-white/94 p-3 text-slate-900 shadow-2xl backdrop-blur min-[390px]:p-4">
-          <div className="mb-2 h-2 overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="ความคืบหน้าการตรวจสอบ">
-            <div className="h-full rounded-full bg-emerald-600 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.max(6, progress * 100)}%` }} />
+      {/* Instruction card at the top, right under the header, where the eyes already look at the camera.
+          Solid white with dark text so it reads over any camera scene (bright or dark); compact enough
+          at 360 px that it ends above the face guide. */}
+      <div className="pointer-events-none absolute inset-x-0 top-[calc(max(0.75rem,env(safe-area-inset-top))+3.5rem)] z-20 px-3 min-[375px]:px-4">
+        <section className="mx-auto w-full max-w-sm rounded-2xl border-2 border-slate-900/15 bg-white p-2.5 text-slate-950 shadow-[0_6px_28px_rgba(0,0,0,0.55)] min-[390px]:p-3.5">
+          <div className="mb-2 flex items-center gap-2">
+            <span data-testid="scan-step" className="shrink-0 rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-bold leading-4 text-white">
+              ขั้นที่ {stepNumber}/3 · {STEP_LABELS[stepNumber]}
+            </span>
+            <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="ความคืบหน้าการตรวจสอบ">
+              <div className="h-full rounded-full bg-emerald-600 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.max(6, progress * 100)}%` }} />
+            </div>
           </div>
-          <div className="flex items-center justify-center gap-2 text-center">
-            {progress >= 1 ? <ShieldCheck className="shrink-0 text-emerald-700" aria-hidden="true" /> : progress > 0 ? <ScanFace className="shrink-0 text-emerald-700" aria-hidden="true" /> : <Camera className="shrink-0 text-emerald-700" aria-hidden="true" />}
-            <span role="status" aria-live="polite" className="font-bold">{instruction}</span>
+          <div className="flex items-center gap-2.5">
+            <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 min-[390px]:size-10">
+              <StepIcon size={22} strokeWidth={2.4} />
+            </span>
+            <span role="status" aria-live="polite" className="min-w-0 flex-1 text-[1.0625rem] font-extrabold leading-[1.4] min-[375px]:text-lg">{instruction}</span>
           </div>
           {sizeGuide && !error && (
             <div className="mt-2" aria-hidden="true" data-testid="size-guide">
@@ -1032,8 +1092,20 @@ function LivenessScannerInner({
               </div>
             </div>
           )}
-          <p className="mt-1.5 text-center text-[11px] leading-4 text-slate-500">ระบบตรวจภาพต่อเนื่องและอาจให้ทำคำสั่งง่าย ๆ 1 ครั้งเพื่อป้องกันการเปิดวิดีโอแทนบุคคลจริง</p>
         </section>
+      </div>
+
+      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 min-[375px]:px-4">
+        {/* Advisory hints only: they never stop or fail the scan. */}
+        <div className="mx-auto mb-2 flex w-full max-w-sm flex-col gap-2">
+          {inAppBrowser && !inAppDismissed && <InAppBrowserNotice onDismiss={() => setInAppDismissed(true)} />}
+          {lowLight && (
+            <p role="status" aria-live="polite" className="rounded-xl border border-amber-300/60 bg-amber-50/95 px-3 py-2 text-center text-sm font-semibold text-amber-950 shadow-xl">
+              {LOW_LIGHT_MESSAGE}
+            </p>
+          )}
+        </div>
+        <p className="mx-auto max-w-sm text-center text-[11px] leading-4 text-white/80">ระบบตรวจภาพต่อเนื่องและอาจให้ทำคำสั่งง่าย ๆ 1 ครั้งเพื่อป้องกันการเปิดวิดีโอแทนบุคคลจริง</p>
       </div>
     </div>,
     document.body,

@@ -358,7 +358,7 @@ class IdentityAndRateTests(unittest.TestCase):
         self.assertEqual(tms.classify_failure(detail), "fps")
 
     def test_a_too_long_attempt_reports_its_duration(self):
-        detail = self.submit(completedAtMs=25_000)
+        detail = self.submit(completedAtMs=35_000)
         self.assertIn("[รหัส duration", detail)
         self.assertEqual(tms.classify_failure(detail), "duration")
 

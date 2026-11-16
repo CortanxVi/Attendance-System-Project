@@ -43,6 +43,12 @@ scripts/verify_face_models.sh
   npm run test:scan-guards
   npm run test:scan-robustness
   npm run test:retry-challenge
+  npm run test:runtime-recovery
+  npm run test:instruction-pacer
+  npm run test:scan-prep-gate
+  npm run test:face-reminder
+  npm run test:student-courses
+  npm run test:course-history-detail
   npm run build
   npm audit --audit-level=moderate
 )

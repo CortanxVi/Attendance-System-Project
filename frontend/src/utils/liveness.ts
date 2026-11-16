@@ -88,12 +88,60 @@ export const HYBRID_BLINK_LIMITS = Object.freeze({
   minClosedMs: 200,
   /** At least this many of those frames must be deep, so one noisy deep frame is not enough. */
   minDeepFrames: 2,
-  /** The action is committed when the eyes reopen or after this long shut, whichever comes first. */
-  maxHoldMs: 600,
+  /**
+   * The action is committed when the eyes reopen or after this long shut, whichever comes first.
+   * 600 -> 1000 (2026-11-16): the prompt asks for a 1 s closure, and 600 ms committed the action
+   * while the eyes were still shut, so the "open your eyes" step started too early. A normal closure
+   * still commits as soon as the eyes reopen. Timing: the action frame is the deepest frame of the
+   * episode, so at most ~1000 ms of the action-to-recovery budget (4700 ms) is spent before the
+   * commit even when the eyes are held shut. UX value, unmeasured on live phones.
+   */
+  maxHoldMs: 1000,
+  /**
+   * Smallest eye opening (share of the open baseline, per eye) a final frame may show. Used by
+   * hybridRecoveryDetected for every action; after a blink HybridActionMonitor normally asks for the
+   * stricter HYBRID_RECOVERY_LIMITS.fullOpenRatio and accepts this one only as a late fallback.
+   */
   recoveryRatio: 0.70,
   /** move_closer: consecutive frames in range. */
   actionFrames: 2,
 });
+
+/**
+ * When the final ("still") frame is taken after the random action (HybridActionMonitor). That frame is
+ * also the image used for face matching, so it must not be a half-open-eye frame taken right after a
+ * blink (real-user report, 2026-11-16: the final frame came too early, eyes not yet fully open).
+ *
+ * ALL VALUES ARE UX CHOICES, UNMEASURED ON LIVE PHONES. Timing budget: the Backend refuses
+ * recovery - action > 5000 ms and the scanner gives up at 4700 ms
+ * (HYBRID_TIMING_LIMITS.maxActionToRecoveryMs). A run that is settled from time T after the action
+ * frame is accepted at about max(T + recoveryHoldMs, minRecoveryAfterActionMs) plus one frame
+ * (125 ms at 8 fps); a squinter who never reaches fullOpenRatio is accepted at about
+ * recoveryFallbackAfterMs + one frame (~2125 ms at 8 fps). So a person has until ~4075 ms after the
+ * action frame (8 fps) to be back in place, versus ~4575 ms with the old two-frame rule.
+ */
+export const HYBRID_RECOVERY_LIMITS = Object.freeze({
+  /** Blink: both eyes back to at least this share of the open baseline ("fully open"). */
+  fullOpenRatio: 0.85,
+  /** Every action: the settled state must last this long (first to last frame of the run) ... */
+  recoveryHoldMs: 500,
+  /** ... and this many consecutive frames. */
+  recoveryHoldFrames: 3,
+  /** Blink: the final frame is never taken sooner than this after the action frame. */
+  minRecoveryAfterActionMs: 700,
+  /**
+   * Blink: after this long without reaching fullOpenRatio, recoveryRatio (0.70) is accepted instead,
+   * still with the hold time and frames, so narrow or squinting eyes are not locked out.
+   */
+  recoveryFallbackAfterMs: 2_000,
+  /**
+   * A frame with an eye below this share of the baseline (the "deep closure" line, deepRatio) is a
+   * new closure, not landmark jitter, and restarts the hold. Between this and the target, a frame
+   * only counts through the run's median (see HybridActionMonitor), never as the final frame.
+   */
+  settleFloorRatio: 0.55,
+});
+
 
 /** Largest eye-aperture ratio that still counts as "lid down" for an eye with this open aperture. */
 export function blinkClosedRatioLimit(baselineEar: number): number {
@@ -304,7 +352,8 @@ export function moveCloserHint(
   return 'ok';
 }
 
-export function hybridRecoveryDetected(
+/** The final frame's head pose and face size match the first still frame (eyes not checked). */
+function recoveryPlacementOk(
   observation: LivenessObservation,
   baseline: HybridLivenessBaseline,
   action?: HybridLivenessAction,
@@ -312,7 +361,15 @@ export function hybridRecoveryDetected(
   return hybridPoseStable(observation, baseline, { checkRoll: true })
     && observation.faceWidthRatio >= 0.20
     && observation.faceWidthRatio <= 0.76
-    && Math.abs(observation.faceWidthRatio / Math.max(baseline.faceWidthRatio, 0.001) - 1) <= recoveryScaleLimit(action)
+    && Math.abs(observation.faceWidthRatio / Math.max(baseline.faceWidthRatio, 0.001) - 1) <= recoveryScaleLimit(action);
+}
+
+export function hybridRecoveryDetected(
+  observation: LivenessObservation,
+  baseline: HybridLivenessBaseline,
+  action?: HybridLivenessAction,
+): boolean {
+  return recoveryPlacementOk(observation, baseline, action)
     && observation.leftEar / Math.max(baseline.leftEar, 0.001) >= HYBRID_BLINK_LIMITS.recoveryRatio
     && observation.rightEar / Math.max(baseline.rightEar, 0.001) >= HYBRID_BLINK_LIMITS.recoveryRatio;
 }
@@ -341,10 +398,15 @@ export function recoveryHint(
 
 /** Shown whenever the face or the eyes cannot be read, so the person knows what to clear. */
 export const CLEAR_FACE_ADVICE = 'เปิดหน้าผากและเก็บผมที่ปิดคิ้วหรือตา ถอดแว่นหรือหน้ากาก และอยู่ในที่สว่างพอ';
-// A short, firm closure: the scanner needs a few deeply closed frames (see HYBRID_BLINK_LIMITS), and
-// holding the eyes shut for long only pushes the action-to-recovery span towards the Backend's 3 s limit.
-export const BLINK_PROMPT = 'หลับตาทั้งสองข้างให้สนิทสักครู่ แล้วลืมตามองตรง';
-export const BLINK_RETRY_PROMPT = 'ยังไม่พบการหลับตา กรุณาหลับตาให้สนิทสักครู่ แล้วลืมตา และเก็บผมที่ปิดตาออก';
+// A firm closure held about 1 s (not a quick blink: "กะพริบ" reads as fast, so the texts avoid it),
+// then the eyes opened wide. The scanner needs a few deeply closed frames (see HYBRID_BLINK_LIMITS)
+// and then fully open eyes for the final frame (HYBRID_RECOVERY_LIMITS).
+export const BLINK_PROMPT = 'หลับตาทั้งสองข้างค้างไว้ 1 วินาที แล้วลืมตาให้สุด';
+export const BLINK_RETRY_PROMPT = 'ยังไม่พบการหลับตา หลับตาให้สนิทค้างไว้ 1 วินาที ไม่ต้องกะพริบเร็ว แล้วลืมตาให้สุด เก็บผมที่ปิดตาออก';
+/** Shown when the eyes reopened too soon (HybridActionMonitor.shortClosureDropped). */
+export const BLINK_TOO_SHORT_MESSAGE = 'หลับตาเร็วเกินไป หลับตาค้างไว้ 1 วินาที แล้วค่อยลืมตา';
+/** Shown after the closure was accepted, while the final frame waits for fully open eyes. */
+export const BLINK_OPEN_MESSAGE = 'ลืมตาให้สุด แล้วมองกล้องนิ่ง ๆ';
 /** After this long without a readable face the generic hint turns into the full advice. */
 export const FACE_ADVICE_AFTER_MS = 2_500;
 export const BLINK_RETRY_AFTER_MS = 4_000;
@@ -411,7 +473,7 @@ export const PASSIVE_POSE_MESSAGES: Record<PassivePoseProblem, string> = {
   scale: 'ถือโทรศัพท์ให้นิ่ง อย่าขยับเข้าใกล้หรือถอยห่างจากกล้อง',
   center: 'ให้ใบหน้าอยู่กลางกรอบ',
 };
-export const PASSIVE_RESTART_MESSAGE = 'ท่าทางเปลี่ยนไปมาก เริ่มเก็บภาพใหม่ ถือโทรศัพท์ให้นิ่งและมองตรง';
+export const PASSIVE_RESTART_MESSAGE = 'ขอเริ่มเก็บภาพใหม่ โปรดถือโทรศัพท์ให้นิ่งและมองตรง';
 
 /** The first condition that keeps `candidate` from matching the pose of `reference`, or null. */
 export function passivePoseProblem(
@@ -489,7 +551,7 @@ export function measuredFps(timestamps: readonly number[]): number {
 
 export function slowCameraMessage(fps: number): string {
   return `เครื่องประมวลผลภาพได้เพียง ${fps.toFixed(1)} เฟรมต่อวินาที (ต้องไม่ต่ำกว่า ${MIN_ATTEMPT_FPS}) `
-    + 'กรุณาปิดแอปอื่นที่เปิดอยู่ ชาร์จหรือพักเครื่อง อยู่ในที่สว่าง แล้วลองใหม่ หากยังไม่ได้ให้ใช้โทรศัพท์เครื่องอื่น';
+    + 'กรุณาปิดแอปอื่นที่เปิดอยู่ ชาร์จหรือพักเครื่อง อยู่ในที่สว่าง แล้วลองใหม่ หากยังไม่ได้ให้เปลี่ยนอุปกรณ์';
 }
 
 /** A message when the scan can no longer reach the Backend's frame-rate floor, otherwise null. */
@@ -519,12 +581,26 @@ export type HybridMonitorEvent = 'waiting' | 'action_captured' | 'recovered';
  * candidate (the caller keeps its image and releases the previous one) and `hasCandidate` whether a
  * candidate is still held. After 'action_captured', `actionTimestampMs` is the action frame's time.
  *
- * Then two consecutive frames must show the face back in its normal state.
+ * `shortClosureDropped` is true when the last `feed` dropped a closure that ended too soon.
+ *
+ * Then the face must be back in its normal state and SETTLED (HYBRID_RECOVERY_LIMITS): a run of
+ * at least `recoveryHoldFrames` consecutive frames spanning `recoveryHoldMs` with the face in place
+ * (hybridRecoveryDetected's pose and size rules) and no eye below `settleFloorRatio`; the current
+ * frame and the median of the run's last `recoveryHoldMs` must have both eyes at the target. The
+ * target is `recoveryRatio` for move_closer. After a blink it is `fullOpenRatio`, the final frame
+ * comes at least `minRecoveryAfterActionMs` after the action frame, and only after
+ * `recoveryFallbackAfterMs` is `recoveryRatio` accepted instead. The frame fed when 'recovered' is
+ * returned is the last frame of that run, passes hybridRecoveryDetected, and becomes the final frame.
  */
 export class HybridActionMonitor {
   private phase: 'action' | 'recovery' = 'action';
   private actionFrames = 0;
-  private recoveryFrames = 0;
+  /** Current run of consecutive frames with the face back in place and the eyes not closing. */
+  private runStartMs: number | null = null;
+  private runFrames = 0;
+  /** The run's frames of the last `recoveryHoldMs` (eye level = smaller of the two eye ratios). */
+  private runWindow: Array<{ timestampMs: number; eyeLevel: number }> = [];
+  private droppedShort = false;
   private episodeStartMs: number | null = null;
   private lastEpisodeMs = 0;
   private episodeFrames = 0;
@@ -550,6 +626,16 @@ export class HybridActionMonitor {
   /** True while a candidate action frame is held (during a closure or once committed). */
   get hasCandidate(): boolean {
     return this.deepest !== null || this.committed !== null;
+  }
+
+  /**
+   * True only when the last `feed` dropped a blink closure because the eyes reopened before it was
+   * long or deep enough (a one-frame spike, a quick blink). Set only for a closure attempt (at least
+   * one deep frame, or `minClosedFrames` lid-down frames) with the head still in place, so landmark
+   * noise and head turns do not trigger it. Reset at the start of every `feed`.
+   */
+  get shortClosureDropped(): boolean {
+    return this.droppedShort;
   }
 
   /** Timestamp of the committed action frame, or null before 'action_captured'. */
@@ -584,6 +670,13 @@ export class HybridActionMonitor {
     if (closure === 'open') {
       // The eyes reopened (or the head moved): commit the deepest frame if the closure was real.
       if (this.episodeStartMs !== null && this.episodeLongEnough(this.lastEpisodeMs)) return this.commit();
+      if (
+        this.episodeStartMs !== null
+        && (this.deepFrames >= 1 || this.episodeFrames >= HYBRID_BLINK_LIMITS.minClosedFrames)
+        && hybridPoseStable(observation, this.baseline, { checkRoll: false })
+      ) {
+        this.droppedShort = true;
+      }
       this.resetEpisode();
       return 'waiting';
     }
@@ -609,8 +702,57 @@ export class HybridActionMonitor {
     return 'waiting';
   }
 
+  private resetRun(): void {
+    this.runStartMs = null;
+    this.runFrames = 0;
+    this.runWindow = [];
+  }
+
+  /**
+   * True when the run is long enough and its eyes are settled at `target`: the current frame AND
+   * the median of the frames in the last `recoveryHoldMs` are open to at least `target`. The median
+   * keeps landmark jitter on narrow eyes (one frame dipping under the line) from restarting the
+   * hold forever; the current frame, which becomes the final frame, must pass on its own.
+   */
+  private runSettled(now: number, eyeLevel: number, target: number): boolean {
+    const limits = HYBRID_RECOVERY_LIMITS;
+    if (this.runStartMs === null || this.runFrames < limits.recoveryHoldFrames) return false;
+    if (now - this.runStartMs < limits.recoveryHoldMs || eyeLevel < target) return false;
+    const sorted = this.runWindow.map((item) => item.eyeLevel).sort((a, b) => a - b);
+    return sorted[Math.floor((sorted.length - 1) / 2)] >= target;
+  }
+
+  private feedRecovery(observation: LivenessObservation): HybridMonitorEvent {
+    const limits = HYBRID_RECOVERY_LIMITS;
+    const now = observation.timestampMs;
+    const { left, right } = blinkRatios(observation, this.baseline);
+    const eyeLevel = Math.min(left, right);
+    if (!recoveryPlacementOk(observation, this.baseline, this.action) || eyeLevel < limits.settleFloorRatio) {
+      this.resetRun();
+      return 'waiting';
+    }
+    this.runStartMs ??= now;
+    this.runFrames += 1;
+    this.runWindow.push({ timestampMs: now, eyeLevel });
+    this.runWindow = this.runWindow.filter((item) => now - item.timestampMs <= limits.recoveryHoldMs);
+    if (this.action !== 'blink') {
+      return this.runSettled(now, eyeLevel, HYBRID_BLINK_LIMITS.recoveryRatio) ? 'recovered' : 'waiting';
+    }
+    const sinceAction = now - (this.committed?.timestampMs ?? now);
+    if (sinceAction < limits.minRecoveryAfterActionMs) return 'waiting';
+    if (this.runSettled(now, eyeLevel, limits.fullOpenRatio)) return 'recovered';
+    if (
+      sinceAction >= limits.recoveryFallbackAfterMs
+      && this.runSettled(now, eyeLevel, HYBRID_BLINK_LIMITS.recoveryRatio)
+    ) {
+      return 'recovered';
+    }
+    return 'waiting';
+  }
+
   feed(observation: LivenessObservation): HybridMonitorEvent {
     this.keepCurrent = false;
+    this.droppedShort = false;
     if (this.phase === 'action') {
       if (this.action === 'blink') return this.feedBlink(observation);
       this.actionFrames = hybridActionDetected(this.action, observation, this.baseline)
@@ -624,10 +766,7 @@ export class HybridActionMonitor {
       }
       return 'waiting';
     }
-    this.recoveryFrames = hybridRecoveryDetected(observation, this.baseline, this.action)
-      ? this.recoveryFrames + 1
-      : 0;
-    return this.recoveryFrames >= 2 ? 'recovered' : 'waiting';
+    return this.feedRecovery(observation);
   }
 }
 
@@ -1028,7 +1167,7 @@ export class LivenessTracker {
         }
         if (this.nearStableFrames >= LIVENESS_TRACKER_LIMITS.stableFrames) {
           this.phase = 'return';
-          return this.step('ดีมาก ถอยกลับมาวางใบหน้าในกรอบเดิม', 0.40, [this.marker('near', observation)]);
+          return this.step('เยี่ยมมาก ถอยกลับมาวางใบหน้าในกรอบเดิม', 0.40, [this.marker('near', observation)]);
         }
       } else {
         this.nearStartedAtMs = null;

@@ -144,7 +144,7 @@ assert.ok(EARLY_FPS_FLOOR < MIN_ATTEMPT_FPS);
 const message = slowCameraMessage(5.37);
 assert.match(message, /5\.4/);
 assert.match(message, /ปิดแอปอื่น/);
-assert.match(message, /เครื่องอื่น/);
+assert.match(message, /เครื่องอื่น|เปลี่ยนอุปกรณ์/, 'the message says what to do if retrying does not help');
 
 // ---- 1.1b: pose while the action is done and after it (compared with the FIRST still frame) ----
 // Backend limits: action yaw .15 / pitch .20 / centre .30; final frame yaw .14, pitch .18, roll .18, size .20, centre .30.

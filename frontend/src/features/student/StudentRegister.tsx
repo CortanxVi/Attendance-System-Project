@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Camera, CheckCircle, ImageUp, Loader2, RotateCw, ShieldCheck } from 'lucide-react';
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
+import FaceScanPrepGate from './FaceScanPrepGate';
 import { base64ToFile, prepareStudentCardImage } from '../../utils/imageUtils';
 import { faceService, type EnrollmentLivenessChallenge } from '../../services/api';
 import {
@@ -233,13 +234,15 @@ export default function StudentRegister() {
             <span className="text-xs">สิทธิ์ถึง {new Date(challenge.challenge_expires_at).toLocaleTimeString('th-TH')}</span>
           </div>
           <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าและทำคำสั่งยืนยัน 1 ครั้ง</h2>
-          <p className="text-center text-sm leading-6 text-gray-500">ระบบเก็บภาพต่อเนื่อง 3 เฟรม จากนั้นสุ่มให้กะพริบตาหรือขยับเข้าใกล้กล้องเล็กน้อย</p>
-          <LivenessScanner
-            title="ลงทะเบียนใบหน้า"
-            challenge={livenessChallenge}
-            onClose={cancelLiveness}
-            onCaptureSuccess={(capture) => void handleLivenessCapture(capture)}
-          />
+          <p className="text-center text-sm leading-6 text-gray-500">ระบบเก็บภาพต่อเนื่อง 3 เฟรม จากนั้นสุ่มให้หลับตา 1 วินาทีแล้วลืมตา หรือขยับเข้าใกล้กล้องเล็กน้อย</p>
+          <FaceScanPrepGate onCancel={cancelLiveness}>
+            <LivenessScanner
+              title="ลงทะเบียนใบหน้า"
+              challenge={livenessChallenge}
+              onClose={cancelLiveness}
+              onCaptureSuccess={(capture) => void handleLivenessCapture(capture)}
+            />
+          </FaceScanPrepGate>
         </section>
       )}
 

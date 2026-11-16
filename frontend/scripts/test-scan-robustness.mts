@@ -92,6 +92,11 @@ import {
   evidenceTimingMessage,
 } from '../src/utils/livenessTiming.ts';
 
+// The scanner's real still-frame interval, read from its source so the models below never go stale.
+const scannerSourceForInterval = readFileSync(new URL('../src/features/student/LivenessScanner.tsx', import.meta.url), 'utf8');
+const SCANNER_SAMPLE_INTERVAL_MS = Number(/const SAMPLE_INTERVAL_MS = ([\d_]+);/.exec(scannerSourceForInterval)?.[1].replace(/_/g, ''));
+assert.ok(SCANNER_SAMPLE_INTERVAL_MS >= 450 && SCANNER_SAMPLE_INTERVAL_MS <= 600, `still-frame interval ${SCANNER_SAMPLE_INTERVAL_MS}`);
+
 function observation(over: Partial<LivenessObservation> = {}): LivenessObservation {
   return {
     timestampMs: 0, faceCount: 1, leftEar: 0.3, rightEar: 0.3, leftBlinkScore: 0, rightBlinkScore: 0,
@@ -233,6 +238,10 @@ assert.equal(pitchGate.evaluate(observation({ timestampMs: 450, pitch: 0.15 })).
 assert.equal(pitchGate.evaluate(observation({ timestampMs: 900, pitch: 0.151 })).problem, 'pitch');
 assert.equal(pitchGate.evaluate(observation({ timestampMs: 1_350, pitch: 0.05 })).accept, true, 'compared with the FIRST frame');
 assert.ok(450 + PASSIVE_POSE_LIMITS.restartAfterMs < HYBRID_TIMING_LIMITS.maxSampleGapMs, 'pose restart is reachable');
+// With the scanner's real interval the pose restart still comes before the 1.8 s gap guard, and the
+// interval stays well above the Backend minimum gap (250 ms; scanner check 300 ms).
+assert.ok(SCANNER_SAMPLE_INTERVAL_MS + PASSIVE_POSE_LIMITS.restartAfterMs < HYBRID_TIMING_LIMITS.maxSampleGapMs, 'pose restart is reachable at the real interval');
+assert.ok(SCANNER_SAMPLE_INTERVAL_MS >= HYBRID_TIMING_LIMITS.minSampleGapMs);
 
 /**
  * Simulated passive collection (gap guard + pose gate) at `fps`. Pitch per frame is independent
@@ -257,7 +266,7 @@ function sampling(limit: number, jitter: number, walk: number, fps: number, seed
       if (samples > 0 && t - last > HYBRID_TIMING_LIMITS.maxSampleGapMs) {
         gate.reset(); samples = 0; last = 0; reference = null; mismatchSince = null;
       }
-      if (samples > 0 && t - last < 450) continue;
+      if (samples > 0 && t - last < SCANNER_SAMPLE_INTERVAL_MS) continue;
       let accept: boolean;
       if (limit === PASSIVE_POSE_LIMITS.pitch) {
         const frame = observation({ timestampMs: t, pitch });
@@ -297,7 +306,7 @@ assert.ok(sampling(0.05, 0.01, 0.01, 9, 11).rate >= 0.95, 'a slowly drifting han
 
 /**
  * Fuller model of the scanner's passive phase at `fps`, in the scanner's own order: gap guard ->
- * face quality (a bad frame resets the stable counter) -> warm-up + 4 stable frames + 450 ms interval
+ * face quality (a bad frame resets the stable counter) -> warm-up + 4 stable frames + still-frame interval
  * -> real PassivePoseGate (its restart also resets the stable counter, like restartPassive) -> real
  * SharpnessGate (every readable frame feeds the median) -> commit. Pitch = slow drift + per-frame
  * jitter; a share of frames is motion-blurred (sharpness halved). All rates are model assumptions.
@@ -328,7 +337,7 @@ function passivePhase(opts: { fps: number; jitter: number; walk: number; blurSha
       const blurred = random() + 0.5 < opts.blurShare;
       const sharpness = (blurred ? 50 : 100) * (1 + random() * 0.2);
       const candidate = passiveWarmupDone(0, t, stable, 4)
-        && (samples === 0 ? firstSampleReady(presence, t, sharpGate.median !== null) : t - last >= 450);
+        && (samples === 0 ? firstSampleReady(presence, t, sharpGate.median !== null) : t - last >= SCANNER_SAMPLE_INTERVAL_MS);
       if (candidate) {
         const frame = observation({ timestampMs: t, pitch: drift + random() * 2 * opts.jitter, yaw: random() * 0.04 });
         const verdict = pose.evaluate(frame);
@@ -496,9 +505,9 @@ const timedEvidence = (startedAtMs: number, completedAtMs: number) => ({
   version: 4 as const, mode: 'hybrid' as const, sampleCount: 3 as const, action: 'blink' as const, promptDelayMs: 800,
   frames: [], startedAtMs, promptAtMs: 0, completedAtMs, effectiveFps: 10,
 });
-assert.equal(evidenceTimingMessage('duration', timedEvidence(0, 19_800)), ATTEMPT_TIME_LIMIT_MESSAGE);
+assert.equal(evidenceTimingMessage('duration', timedEvidence(0, 29_800)), ATTEMPT_TIME_LIMIT_MESSAGE);
 assert.equal(evidenceTimingMessage('duration', timedEvidence(0, 500)), EVIDENCE_TIMING_MESSAGE, 'too short is not "out of time"');
-assert.equal(evidenceTimingMessage('sample_gap', timedEvidence(0, 19_800)), EVIDENCE_TIMING_MESSAGE);
+assert.equal(evidenceTimingMessage('sample_gap', timedEvidence(0, 29_800)), EVIDENCE_TIMING_MESSAGE);
 assert.match(ATTEMPT_TIME_LIMIT_MESSAGE, /ภายในเวลาที่กำหนด/);
 assert.match(scanner, /stopSlow\(evidenceTimingMessage\(timingProblem, evidence\), frame\)/);
 assert.match(scanner, /stopSlow\(ATTEMPT_TIME_LIMIT_MESSAGE\), ATTEMPT_TIMEOUT_MS\)/);
@@ -519,6 +528,11 @@ assert.doesNotMatch(worker, /clientId: message\.clientId,\s*message: 'ระบ�
 assert.equal(classifyRuntimeLoadError('Face Landmarker worker stopped unexpectedly (CPU fallback failed): Out of memory'), 'memory');
 assert.equal(classifyRuntimeLoadError('Face Landmarker worker stopped unexpectedly: no face landmarker graph'), 'crashed');
 assert.match(runtime, /if \(message\.clientId !== undefined\)[\s\S]*failWorker\(new Error\(message\.message\)\)/, 'worker-level errors reach failWorker');
+// 2026-11-16 (vivo V23e): engine switches replace the worker; a GPU-side crash restarts once on the CPU.
+assert.match(runtime, /function requestDelegateSwitch[\s\S]*?restartWorker\(target\)/);
+assert.match(runtime, /else if \(shouldRecoverOnCpu\(\)\) \{\s*recoverOnCpu\(error\);/);
+assert.match(scanner, /runtime status error\$\{runtime\.detail \? `: \$\{runtime\.detail\}` : ''\}/, 'raw detail in the test panel');
+assert.match(scanner, /const restartAfterEngineSwitch = \(\) => \{\s*\/\/[^\n]*\n\s*processing = false;/, 'a lost in-flight frame does not block the loop');
 // 7: the test-mode enrollment start screen shows the load error and a retry.
 const register = readFileSync(new URL('../src/features/student/StudentRegister.tsx', import.meta.url), 'utf8');
 const startSection = register.slice(register.indexOf("phase === 'start' && TEST_MODE"), register.indexOf("phase === 'card' && !TEST_MODE"));

@@ -71,10 +71,10 @@ assert.equal(moveCloserHint(observation({ faceCount: 0 }), baseline), 'no_face')
 assert.match(MOVE_CLOSER_MESSAGES.closer, /เข้าใกล้/);
 assert.match(MOVE_CLOSER_MESSAGES.back, /ถอย/);
 
-// ---- Timing guards: stricter than the Backend (250-2000 ms gaps, recovery - action <= 3000 ms) ----
+// ---- Timing guards: stricter than the Backend (250-2000 ms gaps, recovery - action <= 5000 ms) ----
 assert.ok(HYBRID_TIMING_LIMITS.maxSampleGapMs < 2_000 && HYBRID_TIMING_LIMITS.minSampleGapMs >= 250);
-assert.ok(HYBRID_TIMING_LIMITS.maxActionToRecoveryMs < 3_000);
-assert.ok(HYBRID_TIMING_LIMITS.minAttemptMs >= 900 && HYBRID_TIMING_LIMITS.maxAttemptMs < 20_000);
+assert.ok(HYBRID_TIMING_LIMITS.maxActionToRecoveryMs < 5_000);
+assert.ok(HYBRID_TIMING_LIMITS.minAttemptMs >= 900 && HYBRID_TIMING_LIMITS.maxAttemptMs < 30_000);
 assert.ok(HYBRID_TIMING_LIMITS.minFps >= 8 && HYBRID_TIMING_LIMITS.maxFps < 35);
 // Passive gap: only a started, unfinished set can expire, and only past 1.8 s.
 assert.equal(passiveSampleGapExpired(1_000, 2_800, 1, 3), false, 'exactly 1800 ms is still fine');
@@ -87,8 +87,8 @@ assert.equal(passiveSampleGapExpired(1_000, 9_999, 3, 3), false, 'set already co
 assert.ok(450 + PASSIVE_POSE_LIMITS.restartAfterMs < HYBRID_TIMING_LIMITS.maxSampleGapMs);
 assert.ok(HYBRID_TIMING_LIMITS.maxSampleGapMs < 2_000);
 // Action -> recovery.
-assert.equal(actionRecoveryExpired(5_000, 7_700), false);
-assert.equal(actionRecoveryExpired(5_000, 7_701), true);
+assert.equal(actionRecoveryExpired(5_000, 9_700), false);
+assert.equal(actionRecoveryExpired(5_000, 9_701), true);
 
 function evidence(over: Partial<HybridLivenessEvidence> = {}, times = [1_000, 1_500, 2_000], action = 3_400, recovery = 4_400): HybridLivenessEvidence {
   return {
@@ -113,14 +113,14 @@ assert.equal(hybridEvidenceTimingProblem(evidence()), null, 'a normal scan passe
 assert.equal(hybridEvidenceTimingProblem(evidence({}, [1_000, 2_900, 3_400])), 'sample_gap', '1900 ms gap: Backend allows, web refuses');
 assert.equal(hybridEvidenceTimingProblem(evidence({ promptAtMs: 4_300 }, [1_000, 2_800, 3_500], 4_400, 5_000)), null, '1800 ms gap is fine');
 assert.equal(hybridEvidenceTimingProblem(evidence({}, [1_000, 1_200, 2_000])), 'sample_gap', 'too close');
-assert.equal(hybridEvidenceTimingProblem(evidence({}, undefined, 3_400, 6_200)), 'recovery_late', '2800 ms');
-assert.equal(hybridEvidenceTimingProblem(evidence({}, undefined, 3_400, 6_100)), null, '2700 ms');
+assert.equal(hybridEvidenceTimingProblem(evidence({}, undefined, 3_400, 8_200)), 'recovery_late', '4800 ms');
+assert.equal(hybridEvidenceTimingProblem(evidence({}, undefined, 3_400, 8_100)), null, '4700 ms');
 assert.equal(hybridEvidenceTimingProblem(evidence({ startedAtMs: 1_200 })), 'sample_order');
 assert.equal(hybridEvidenceTimingProblem(evidence({ promptAtMs: 2_700 })), 'prompt_order');
 assert.equal(hybridEvidenceTimingProblem(evidence({}, undefined, 2_700, 3_500)), 'action_order');
 assert.equal(hybridEvidenceTimingProblem(evidence({}, undefined, 3_400, 3_400)), 'recovery_order');
 assert.equal(hybridEvidenceTimingProblem(evidence({ completedAtMs: 4_300 })), 'recovery_order');
-assert.equal(hybridEvidenceTimingProblem(evidence({ startedAtMs: 0, completedAtMs: 20_000 }, [1_000, 1_500, 2_000], 3_400, 4_400)), 'duration');
+assert.equal(hybridEvidenceTimingProblem(evidence({ startedAtMs: 0, completedAtMs: 30_000 }, [1_000, 1_500, 2_000], 3_400, 4_400)), 'duration');
 assert.equal(hybridEvidenceTimingProblem(evidence({ effectiveFps: 7.9 })), 'fps');
 assert.equal(hybridEvidenceTimingProblem(evidence({ effectiveFps: 34.5 })), 'fps');
 assert.equal(hybridEvidenceTimingProblem(evidence({ effectiveFps: Number.NaN })), 'frames');

@@ -153,7 +153,7 @@ app.add_middleware(OperationalHeadersMiddleware, production=APP_ENV == "producti
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 
 
-FACE_THRESHOLD = 0.45
+FACE_THRESHOLD = 0.50
 SUPABASE_ERROR_MESSAGES = {
     '23505': 'นักศึกษาเช็คชื่อในคาบนี้ไปแล้ว',
     '23503': 'ไม่พบ session หรือนักศึกษาในระบบ',
@@ -849,8 +849,8 @@ async def _retry_challenge_response(_request, exc: RetryChallengeError):
 
 
 # A replacement challenge is only worth issuing when a scan can still finish before the QR claim
-# expires (a scan takes about 5-20 s).
-RETRY_CHALLENGE_MIN_SECONDS = 15
+# expires (a scan takes about 5-30 s; MAX_ATTEMPT_DURATION_MS is 30 s plus a few seconds of upload).
+RETRY_CHALLENGE_MIN_SECONDS = 35
 BLINK_FALLBACK_STALE_MESSAGE = (
     "เปลี่ยนเป็นคำสั่งขยับเข้าใกล้กล้องแทนการกะพริบตา กรุณากดสแกนใบหน้าอีกครั้ง"
 )

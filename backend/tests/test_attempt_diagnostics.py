@@ -150,12 +150,12 @@ class EvidenceContractCodeTests(unittest.TestCase):
     def test_a_slow_return_after_the_action_reports_the_span(self):
         evidence = self.evidence()
         action_at = evidence["frames"][3]["timestampMs"]
-        evidence["frames"][4]["timestampMs"] = action_at + 3_400
-        evidence["completedAtMs"] = action_at + 3_500
+        evidence["frames"][4]["timestampMs"] = action_at + 5_400
+        evidence["completedAtMs"] = action_at + 5_500
         detail = self.submit(evidence)
         self.assertIn("[รหัส timing_action_span", detail)
-        self.assertIn("3400 มิลลิวินาที (เกณฑ์ ≤3000)", detail)
-        self.assertIn("ภายใน 3 วินาที", detail)
+        self.assertIn("5400 มิลลิวินาที (เกณฑ์ ≤5000)", detail)
+        self.assertIn("ภายใน 5 วินาที", detail)
         self.assertEqual(tms.classify_failure(detail), "timing_action_span")
         plain = self.submit(evidence, enabled=False)
         self.assertTrue(plain.startswith("เวลาคำสั่งสุ่มไม่ต่อเนื่อง"))
