@@ -14,7 +14,6 @@ import secrets
 from fastapi import HTTPException
 
 from core.config import APP_ENV, LIVENESS_SIGNING_KEY, OCR_SERVICE_TOKEN
-from services import attempt_diagnostics
 from services.action_fallback import action_fallback
 from services.failure_diagnostics import diagnostic
 
@@ -315,7 +314,6 @@ def _verify_hybrid_liveness_submission(
         raise HTTPException(
             status_code=403, detail="นโยบายตรวจบุคคลจริงไม่ถูกต้อง" + diagnostic("token_policy")
         )
-    attempt_diagnostics.record("timing", {"prompt_delay_ms": prompt_delay_ms})
 
     evidence_bytes = len((evidence_json or "").encode())
     if not evidence_json or evidence_bytes > MAX_EVIDENCE_BYTES:
@@ -368,7 +366,6 @@ def _verify_hybrid_liveness_submission(
     completed = _finite_number(evidence.get("completedAtMs"), "completedAtMs")
     fps = _finite_number(evidence.get("effectiveFps"), "effectiveFps")
     duration = int(completed - started)
-    attempt_diagnostics.record("timing", {"duration_ms": duration, "fps": round(fps, 2)})
     if not MIN_ATTEMPT_DURATION_MS <= duration <= MAX_ATTEMPT_DURATION_MS:
         raise HTTPException(
             status_code=422,
@@ -422,14 +419,6 @@ def _verify_hybrid_liveness_submission(
         recovery_frame.get("timestampMs"), "frames.recovery.timestampMs"
     )
     intervals = [current - previous for previous, current in zip(timestamps, timestamps[1:])]
-    attempt_diagnostics.record("timing", {
-        "intervals_ms": [round(interval) for interval in intervals],
-        "first_sample_after_start_ms": round(timestamps[0] - started),
-        "prompt_after_last_sample_ms": round(prompt_at - timestamps[-1]),
-        "action_after_prompt_ms": round(action_at - prompt_at),
-        "recovery_after_action_ms": round(recovery_at - action_at),
-        "complete_after_recovery_ms": round(completed - recovery_at),
-    })
     for position, interval in enumerate(intervals, start=1):
         if not MIN_SAMPLE_INTERVAL_MS <= interval <= MAX_SAMPLE_INTERVAL_MS:
             raise HTTPException(

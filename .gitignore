@@ -30,7 +30,7 @@ env/
 docs/
 
 *.md
-
+*.pdf
 
 # Environment variables
 .env

@@ -144,9 +144,9 @@ class BlinkMessageTests(unittest.TestCase):
     def test_measured_ratios_are_only_added_in_test_mode(self):
         from services import failure_diagnostics as fd
 
-        with patch.object(fd, "ATTENDANCE_TEST_MODE", False):
+        with patch.object(fd, "SHOW_MEASUREMENTS", False):
             self.assertNotIn("รหัส", blink_aperture_problem(0.3, 0.3, obs(0.3), obs(0.3)))
-        with patch.object(fd, "ATTENDANCE_TEST_MODE", True):
+        with patch.object(fd, "SHOW_MEASUREMENTS", True):
             text = blink_aperture_problem(0.3, 0.3, obs(0.3), obs(0.3))
             self.assertIn("[รหัส blink", text)
             self.assertIn("1.00/1.00", text)

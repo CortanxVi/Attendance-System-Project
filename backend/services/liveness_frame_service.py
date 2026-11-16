@@ -11,7 +11,6 @@ import numpy as np
 from fastapi import HTTPException
 
 from core.config import LIVENESS_BLINK_106_ENABLED
-from services import attempt_diagnostics
 from services.failure_diagnostics import diagnostic, limit
 from services.insightface_service import FaceObservation, StrictFaceFailure, face_service
 from services.passive_pad_service import passive_pad_service
@@ -153,9 +152,8 @@ def blink_aperture_problem(
     """Return None when the eyes closed during the action and reopened afterwards, else a hint.
 
     A blink passes on the 68-point rule, or (when LIVENESS_BLINK_106_ENABLED) on the 2d106det rule
-    (see BLINK_106_* above) when ``blink_106`` holds its ratios. Test mode records which rule
-    passed as ``blink.blink_rule`` ("68", "106" or "none"); outside test mode nothing is recorded
-    and a failure is the plain Thai sentence without numbers.
+    (see BLINK_106_* above) when ``blink_106`` holds its ratios. A failure is the plain Thai
+    sentence without numbers.
     """
 
     open_left = _open_reference(open_left)
@@ -173,13 +171,10 @@ def blink_aperture_problem(
     ))
     recovered_68 = finite and left_back >= BLINK_RECOVERY_RATIO and right_back >= BLINK_RECOVERY_RATIO
     if finite and left_ratio <= left_limit and right_ratio <= right_limit and recovered_68:
-        attempt_diagnostics.record("blink", {"blink_rule": "68"})
         return None
     rule_106 = blink_106_rule_problem(left_ratio, right_ratio, recovered_68, blink_106)
     if rule_106 is None:
-        attempt_diagnostics.record("blink", {"blink_rule": "106"})
         return None
-    attempt_diagnostics.record("blink", {"blink_rule": "none", "rule_106": rule_106})
     detail = (
         "คำสั่งกะพริบตาไม่ผ่าน กรุณาหลับตาทั้งสองข้างให้สนิทสักครู่ "
         "แล้วลืมตามองตรง และเก็บผมที่ปิดตาออก"
@@ -236,16 +231,10 @@ def verify_hybrid_liveness_frames(
         for index, image in enumerate(passive_images, start=1)
     ]
     reference = passive_observations[0]
-    attempt_diagnostics.record("reference", {
-        "width": attempt_diagnostics.number(reference.face_width_ratio),
-        "center": attempt_diagnostics.number(reference.center_offset),
-        "det": attempt_diagnostics.number(reference.detection_score, 3),
-    })
     first_problem = _first_frame_problem(reference)
     if first_problem is not None:
         raise HTTPException(status_code=422, detail=first_problem)
     for index, observation in enumerate(passive_observations[1:], start=2):
-        attempt_diagnostics.append("pose", attempt_diagnostics.pose_delta(f"f{index}", reference, observation))
         _same_person(reference, observation)
         problem = _frontal_problem(reference, observation, scale_tolerance=0.22)
         if problem is not None:
@@ -256,8 +245,6 @@ def verify_hybrid_liveness_frames(
 
     action_observation = _extract(action_image, "ภาพขณะทำคำสั่งสุ่ม", with_106=action == "blink")
     recovery_observation = _extract(recovery_image, "ภาพหลังกลับสู่ท่าปกติ", with_106=action == "blink")
-    attempt_diagnostics.append("pose", attempt_diagnostics.pose_delta("action", reference, action_observation))
-    attempt_diagnostics.append("pose", attempt_diagnostics.pose_delta("recovery", reference, recovery_observation))
     _same_person(reference, action_observation, blink=action == "blink")
     _same_person(reference, recovery_observation)
 
@@ -269,9 +256,6 @@ def verify_hybrid_liveness_frames(
         _frame_difference(first, second)
         for first, second in zip(passive_images, passive_images[1:])
     ]
-    attempt_diagnostics.record("frame_diff", {
-        "passive": [attempt_diagnostics.number(value, 3) for value in passive_differences],
-    })
     if not all(difference >= 0.35 for difference in passive_differences):
         raise HTTPException(
             status_code=422,
@@ -285,10 +269,6 @@ def verify_hybrid_liveness_frames(
         _frame_difference(passive_images[-1], action_image),
         _frame_difference(action_image, recovery_image),
     )
-    attempt_diagnostics.record("frame_diff", {
-        "passive": [attempt_diagnostics.number(value, 3) for value in passive_differences],
-        "action": [attempt_diagnostics.number(value, 3) for value in action_differences],
-    })
     if not all(difference >= 0.8 for difference in action_differences):
         raise HTTPException(
             status_code=422,
@@ -308,7 +288,6 @@ def verify_hybrid_liveness_frames(
             observation.right_eye_aperture_proxy
             for observation in passive_observations
         ]))
-        _record_blink(open_left, open_right, action_observation, recovery_observation)
         blink_106 = _blink_106(passive_observations, action_observation, recovery_observation)
         problem = blink_aperture_problem(
             open_left, open_right, action_observation, recovery_observation, blink_106
@@ -341,7 +320,6 @@ def verify_hybrid_liveness_frames(
         scale_ratio = action_observation.face_width_ratio / max(
             reference.face_width_ratio, 0.001
         )
-        attempt_diagnostics.record("move_closer", {"scale_ratio": attempt_diagnostics.number(scale_ratio)})
         problem = _move_closer_problem(reference, action_observation, scale_ratio)
         if problem is not None:
             raise HTTPException(status_code=422, detail=problem)
@@ -355,36 +333,14 @@ def verify_hybrid_liveness_frames(
     return VerifiedLivenessFrames(final_embedding=recovery_observation.embedding)
 
 
-def _record_blink(
-    open_left: float, open_right: float, action: FaceObservation, recovery: FaceObservation
-) -> None:
-    """Test mode only: store the blink ratios the check uses (same formulas, numbers only)."""
-
-    if attempt_diagnostics.current() is None:
-        return
-    left = max(open_left, 0.001)
-    right = max(open_right, 0.001)
-    number = attempt_diagnostics.number
-    attempt_diagnostics.record("blink", {
-        "open_left": number(open_left),
-        "open_right": number(open_right),
-        "closed_left": number(action.left_eye_aperture_proxy / left),
-        "closed_right": number(action.right_eye_aperture_proxy / right),
-        "limit_left": number(blink_closed_ratio_limit(left)),
-        "limit_right": number(blink_closed_ratio_limit(right)),
-        "back_left": number(recovery.left_eye_aperture_proxy / left),
-        "back_right": number(recovery.right_eye_aperture_proxy / right),
-    })
-
-
 def _blink_106(
     passive: Sequence[FaceObservation], action: FaceObservation, recovery: FaceObservation
 ) -> dict[str, float] | None:
-    """The same blink ratios measured with the 2d106det landmarks (recorded in test mode only).
+    """The same blink ratios measured with the 2d106det landmarks.
 
     Same formulas and the same reference frames as the 68-point check (open = median of the
     passive frames). These values feed the second blink rule (``blink_106_rule_problem``) and are
-    recorded in test mode only. None when the model did not run for any of the frames (rule off,
+    never stored. None when the model did not run for any of the frames (rule off,
     file missing or wrong); then only the 68-point rule decides.
     """
 
@@ -398,7 +354,7 @@ def _blink_106(
         return None  # unreadable 106-point values: only the 68-point rule decides
     open_left = max(float(np.median([o.left_eye_aperture_106 for o in passive])), 0.001)
     open_right = max(float(np.median([o.right_eye_aperture_106 for o in passive])), 0.001)
-    # The rule decides on these UNROUNDED values; only the test-mode record is rounded.
+    # The rule decides on these UNROUNDED values.
     values = {
         "open_left_106": open_left,
         "open_right_106": open_right,
@@ -407,14 +363,11 @@ def _blink_106(
         "back_left_106": float(recovery.left_eye_aperture_106) / open_left,
         "back_right_106": float(recovery.right_eye_aperture_106) / open_right,
     }
-    attempt_diagnostics.record(
-        "blink", {key: attempt_diagnostics.number(value) for key, value in values.items()}
-    )
     return values
 
 
 def _with_blink_106(problem: str, values: dict[str, float]) -> str:
-    """Append the 2d106det numbers inside an existing test-mode "[รหัส blink ...]" tag."""
+    """Append the 2d106det numbers inside an existing "[รหัส blink ...]" measurement tag."""
 
     if not problem.endswith("]") or "[รหัส " not in problem:
         return problem
@@ -445,7 +398,7 @@ def _extract(image: np.ndarray, label: str, *, with_106: bool = False) -> FaceOb
 
 
 def _detect_message(label: str, failure: StrictFaceFailure | None) -> str:
-    """Say which of the face-detection conditions failed (plain Thai; numbers in test mode)."""
+    """Say which of the face-detection conditions failed (plain Thai; numbers only when failure_diagnostics.SHOW_MEASUREMENTS)."""
 
     code = failure.code if failure else "detect_unknown"
     scores = "/".join(f"{score:.2f}" for score in (failure.scores if failure else ())) or "-"
@@ -471,7 +424,6 @@ def _detect_message(label: str, failure: StrictFaceFailure | None) -> str:
 def _same_person(reference: FaceObservation, candidate: FaceObservation, *, blink: bool = False) -> None:
     threshold = BLINK_FRAME_IDENTITY_THRESHOLD if blink else LIVENESS_FRAME_IDENTITY_THRESHOLD
     similarity = face_service.calculate_similarity(reference.embedding, candidate.embedding)
-    attempt_diagnostics.append("frame_similarity", attempt_diagnostics.number(similarity, 3))
     if similarity < threshold:
         raise HTTPException(
             status_code=422,
@@ -498,9 +450,9 @@ MOVE_CLOSER_PITCH_MAX = 0.20
 
 @dataclass(frozen=True)
 class FramingProblem:
-    code: str          # framing_* code, also used as the failure stage in test mode
+    code: str          # framing_* code of the measurement tag
     text: str          # plain Thai explanation of the one condition that failed
-    measured: str      # numbers for test mode
+    measured: str      # numbers for the measurement tag
 
 
 def _first_frame_problem(reference: FaceObservation) -> str | None:

@@ -21,7 +21,6 @@ os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-two-characters")
 
 from services import action_fallback as af
-from services import attempt_diagnostics as ad
 from services import failure_diagnostics as fd
 from services import liveness_frame_service as lfs
 from services import liveness_service as ls
@@ -48,18 +47,16 @@ def v106(closed_l, closed_r, back_l=1.0, back_r=1.0, base_l=0.26, base_r=0.26):
 class rule_on:
     def __init__(self, test_mode=False):
         self.patches = [patch.object(lfs, "LIVENESS_BLINK_106_ENABLED", True),
-                        patch.object(fd, "ATTENDANCE_TEST_MODE", test_mode),
-                        patch.object(ad, "ATTENDANCE_TEST_MODE", test_mode)]
+                        patch.object(fd, "SHOW_MEASUREMENTS", test_mode)]
 
     def __enter__(self):
         for item in self.patches:
             item.start()
-        return ad.begin()
+        return None
 
     def __exit__(self, *exc):
         for item in self.patches:
             item.stop()
-        ad.end()
 
 
 class CeilingAndBaseTests(unittest.TestCase):
@@ -71,7 +68,6 @@ class CeilingAndBaseTests(unittest.TestCase):
         values = v106(0.209, 0.223, base_l=0.167, base_r=0.159)
         with rule_on(True) as collector:
             self.assertIsNone(lfs.blink_aperture_problem(open_l, open_r, action, recovery, values))
-            self.assertEqual(collector.snapshot()["blink"]["blink_rule"], "106")
         with rule_on(False):
             self.assertIsNone(lfs.blink_aperture_problem(open_l, open_r, action, recovery, values))
 
@@ -97,7 +93,6 @@ class CeilingAndBaseTests(unittest.TestCase):
             )
             self.assertIsNotNone(problem)
             self.assertIn("กฎ106 ไม่ผ่าน:base_106", problem)
-            self.assertEqual(collector.snapshot()["blink"]["rule_106"], "base_106")
         with rule_on(False):
             for base_l, base_r in ((0.05, 0.26), (0.26, 0.0999), (float("nan"), 0.26), (None, 0.26)):
                 with self.subTest(base=(base_l, base_r)):
@@ -313,7 +308,6 @@ class ReviewRoundThreeTests(unittest.TestCase):
             self.assertEqual(lfs.blink_106_rule_problem(0.85, 0.85, True, values), "closed_106")
         with rule_on(True) as collector:
             lfs._blink_106(passive, action, obs(0.30, 0.30, 0.26, 0.26))
-            self.assertEqual(collector.snapshot()["blink"]["closed_left_106"], 0.5)  # rounded only when recorded
 
     def test_framing_and_move_closer_checks_fail_closed_on_nan(self):
         nan = float("nan")
@@ -336,18 +330,3 @@ class ReviewRoundThreeTests(unittest.TestCase):
             self.assertEqual(config._float_setting("LIVENESS_PAD_THRESHOLD", "0.65"), 0.65)
         source = inspect.getsource(config)
         self.assertIn('LIVENESS_PAD_THRESHOLD = _float_setting("LIVENESS_PAD_THRESHOLD", "0.65")', source)
-
-
-class ClientBuildNumbersTests(unittest.TestCase):
-    def test_web_build_and_commit_are_whitelisted_and_clamped(self):
-        clean = ad.sanitise_client(json.dumps({"web_build": 1763190000, "web_commit": 0x59C9306}))
-        self.assertEqual(clean, {"web_build": 1763190000, "web_commit": 0x59C9306})
-        clean = ad.sanitise_client({"web_build": 9e12, "web_commit": -4, "web_hash": "59c9306"})
-        self.assertEqual(clean, {"web_build": 4102444800, "web_commit": 0})
-        self.assertIsNone(ad.sanitise_client({"web_build": True, "web_commit": "59c9306"}))
-        self.assertEqual(ad.CLIENT_NUMBERS["web_build"], (0, 4102444800, True))
-        self.assertEqual(ad.CLIENT_NUMBERS["web_commit"], (0, 268435455, True))
-
-
-if __name__ == "__main__":
-    unittest.main()

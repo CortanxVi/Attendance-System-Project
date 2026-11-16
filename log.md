@@ -2698,3 +2698,79 @@ This is the append-only engineering record for the project's two-agent hybrid wo
   - Not tried against the real API or on a phone.
   - "Sessions left" relies on the teacher's planned `total_sessions`.
   - Nothing is committed.
+
+## [2026-11-17 00:59] Claude: Release branch `release/tuning-merge` — all test-only code stripped before merging into main
+- **Objective:** The owner chose to merge the tuningModel work into `main` without the test scaffolding, and to restore every security control that test mode relaxed.
+- **Branch:** `release/tuning-merge`, created from `tuningModel` (06bfeb2). `main` has no commits since the branch point. Nothing is committed yet.
+- **Removed (security relaxations and test scaffolding):**
+  - Backend:
+    - `core/test_mode.py`, `routers/test_mode.py`, `services/test_mode_service.py` and `services/attempt_diagnostics.py` are deleted.
+    - Removed from `config.py`: the `ATTENDANCE_TEST_*` settings.
+    - Removed from `security.py`: external e-mail sign-in. `is_allowed_login_email` is again KMUTNB-only.
+    - Removed from `main.py`:
+      - the test router and course keeper;
+      - auto-join of the Test course at login and after enrollment;
+      - the optional card image: `student_card_image` is required again, exactly as on `main`;
+      - unlimited test check-ins and the attempt-table writes;
+      - the `client_diagnostics` form field;
+      - the `test_mode` and `test_external_email` keys in `/system/config`.
+    - The diagnostics collector calls were removed from `liveness_service`, `liveness_frame_service` and `passive_pad_service`. They were observational only; no decision logic changed.
+    - `failure_diagnostics.diagnostic()` is now gated by a code constant, `SHOW_MEASUREMENTS = False`, instead of an env switch, so no deployment can show measured values.
+  - Frontend:
+    - Deleted: `config/testMode.ts`, `TestModeBanner`, `TestModePanel`, `services/testMode.ts`, `utils/clientDiagnostics.ts`, `config/buildInfo.ts`, `vite.hosting.config.mts`, and the `__APP_BUILD__` define in `vite.config.ts`.
+    - Back to the `main` behaviour: the OCR/card step in `StudentRegister`, the QR flow in `StudentHome`, `LiveAttendance` and `TeacherAttendanceProvider` (auto-close again), and the KMUTNB-only hint in `Login`. These three teacher/auth files are now identical to `main`.
+    - Removed: the test overlay and raw error detail from `LivenessScanner`, the `?delegate=` and `?blendshapes=` URL overrides, and the test-only 60 s PWA update interval.
+    - `MAX_RETRY_TTL_SECONDS` lowered from 4 h to 10 min, matching `QR_CHALLENGE_SECONDS` ≤ 600.
+  - Repository:
+    - Deleted: `supabase/test-only/*` (4 SQL files), `scripts/start_backend_ngrok.sh`, `scripts/analyze_attempts.py`, `scripts/evaluate_pad_roc.py`, `frontend/scripts/test-test-mode.mts`.
+    - Deleted tests: `backend/tests/test_attendance_test_mode.py`, `test_external_email_and_attempts.py`, `test_local_hosting.py`.
+    - `test:test-mode` was removed from `package.json` and `verify_release.sh`.
+- **Kept on purpose:**
+  - All AI/liveness tuning: face threshold 0.50, PAD median rule with its kill switch, 106-point blink rule with its kill switch, move_closer fallback with retry challenge, 5 s / 30 s timing.
+  - The scanner, runtime-recovery and UX work, and the PWA update gate.
+  - The teacher-domain migration and the release guards: `production_preflight.py` and `build_release_bundle.sh` still refuse `ATTENDANCE_TEST_*` and `VITE_TEST_MODE`.
+  - The `ngrok-skip-browser-warning` CORS header. It already existed on `main` (documented ngrok staging flow, README_TH section 5); it was briefly removed during this work and then restored.
+- **Docs:**
+  - `deployment/docker/README_TH.md` section 8 (the test-script runbook) is replaced by a production summary: thresholds and switches, pre-deploy steps, and web behaviour.
+  - `frontend/.env.staging.example` no longer mentions the test script or `VITE_TEST_MODE`.
+- **Tests adapted:**
+  - Removed: collector, attempt-writer, client-diagnostics, analysis-script and test-mode-path tests.
+  - Test-mode patches now patch `failure_diagnostics.SHOW_MEASUREMENTS`.
+  - Plain-text messages are asserted to carry no measurement code.
+- **Security/privacy:**
+  - Restored: KMUTNB-only login, mandatory card/OCR at enrollment, dynamic QR with timers, one check-in per session, and no test-table writes.
+  - No device diagnostics are sent.
+- **DB/deploy:** none applied. The test-only SQL was never in `supabase/migrations`.
+  - Before production, confirm read-only that the teacher-domain migration `20261106120000` is applied.
+  - Deploy with env files that contain no test variables, and build without `VITE_TEST_MODE`.
+- **Verification (Node 22):**
+  - `scripts/verify_release.sh` exits 0: git diff check, face model hashes, backend 344 tests OK (1 skipped), pip check, lint, every frontend test script, type check, build and the audit.
+  - In the built bundle: no "โหมดทดสอบ", `client_diagnostics` or `face_checkin_attempts` strings, and the card upload field and QR code are present.
+- **Remaining risks/handoff:**
+  - Not exercised in a real browser against the real API.
+  - Backend test count fell from 492 to 344 because test-mode-only tests were removed.
+  - Some test helpers are still named `test_mode` (they now toggle `SHOW_MEASUREMENTS`).
+  - The owner must review, commit, open a PR into `main` and push.
+
+## [2026-11-17 01:05] Claude (subagent, logged by lead): Consolidated report ReportSummary.md / ReportSummary.pdf
+- **Objective:** The owner asked for the earlier reports to be brought up to date, or merged into one current report.
+- **Files created:**
+  - `ReportSummary.md` (git-ignored by the `*.md` rule).
+  - `ReportSummary.pdf`: 13 pages A4, rendered with WeasyPrint and the "Noto Sans", "Noto Sans Thai" font stack. **NOT git-ignored: keep it out of commits.**
+  - The old reports are unchanged. `docs/CompareFaceExplain.pdf` and `docs/reportResultFaceCheckin.pdf` are under the ignored `docs/` folder.
+- **Contents:**
+  - purpose and scope; how face matching works (1:1 embedding);
+  - aggregate usage and test results only;
+  - 19 real-phone problems, each with cause, fix and status;
+  - current thresholds with file locations; UX improvements;
+  - 17 unverified items and risks; a 12-item next-step plan; the status of the merge into main.
+  - Each fact is tagged "ยืนยันในโค้ด" (read from the release branch working tree) or "จากรายงาน" (the older report it came from).
+- **Security/privacy:** totals only. A search of the PDF text found no names, e-mails, student ids, URLs or keys. Usage numbers come from the earlier report; no database query was made.
+- **DB/deploy:** none.
+- **Verification:**
+  - Subagent: checked the page images for Thai text, digits and table breaks.
+  - Lead: checked the page count, the git-ignore status and the PII pattern search.
+- **Remaining risks:**
+  - Code values are a snapshot of `release/tuning-merge` before commit.
+  - Two minor layout breaks: the end of page 5, and section 6 starting at the bottom of page 9.
+  - `ReportSummary.pdf` must not be committed.

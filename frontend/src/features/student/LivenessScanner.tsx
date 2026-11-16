@@ -3,15 +3,10 @@ import { createPortal } from 'react-dom';
 import Webcam from 'react-webcam';
 import { ArrowLeft, Camera, Eye, EyeClosed, Loader2, ScanFace, ShieldCheck, ZoomIn, ZoomOut } from 'lucide-react';
 import CameraQualityControls from '../../components/camera/CameraQualityControls';
-import { TEST_MODE } from '../../config/testMode';
 import { useModalIsolation } from '../../components/overlays/useModalIsolation';
 import { useCameraQuality } from '../../hooks/useCameraQuality';
 import {
-  getFaceLandmarkerDelegate,
-  getFaceLandmarkerRuntimeMode,
   getFaceLandmarkerRuntimeSnapshot,
-  getLastBlendshapeSwitchMs,
-  getLastRuntimeRecovery,
   openFaceLandmarkerClient,
   type FaceLandmarkerClient,
   type FaceLandmarkerClientEvent,
@@ -25,7 +20,6 @@ import {
   FRAME_ERROR_MESSAGES,
   FrameErrorTolerance,
   classifyFrameError,
-  describeError,
   type FrameErrorKind,
 } from '../../utils/faceScanErrors';
 import {
@@ -40,12 +34,6 @@ import {
   meanGray,
   passiveWarmupDone,
 } from '../../utils/captureQuality';
-import {
-  buildClientDiagnostics,
-  fallbackClientDiagnostics,
-  type ClientDiagnostics,
-} from '../../utils/clientDiagnostics';
-import { BUILD_INFO, buildDiagnostics, buildLabel } from '../../config/buildInfo';
 import { holdAppUpdates } from '../../pwa/registerServiceWorker';
 import { ENGINE_SWITCH_TIMEOUT_MS, EngineSwitchGuard } from '../../utils/engineSwitchGuard';
 import { INSTRUCTION_MIN_DWELL_MS, InstructionPacer } from '../../utils/instructionPacer';
@@ -88,10 +76,8 @@ import {
   PASSIVE_RESTART_MESSAGE,
   PassivePoseGate,
   RECOVERY_MESSAGES,
-  blinkClosedRatioLimit,
   faceProblemInstruction,
   fpsProblem,
-  measuredFps,
   moveCloserGuide,
   moveCloserHint,
   recoveryHint,
@@ -119,29 +105,10 @@ const ATTEMPT_TIMEOUT_MS = 30_000;
 // face landmarker does not need the camera's full 1280x720 frame either. Handing it the smaller
 // bitmap cuts the per-frame copy/upload/preprocessing cost on phones with slow CPUs or GPUs.
 const ANALYSIS_MAX_SIDE = 640;
-// The Backend rejects an attempt whose measured frame rate is below this (MIN_EFFECTIVE_FPS).
-const REQUIRED_FPS = 8;
 // Step indicator in the instruction card, derived from the progress bar (3 still frames = 0.6, action
 // captured = 0.8).
 const STEP_LABELS = { 1: 'มองตรงนิ่ง ๆ', 2: 'ทำตามคำสั่ง', 3: 'กลับท่าเดิม' } as const;
 
-interface ScannerStats {
-  cameraFps: number | null;
-  pipelineFps: number;
-  /** Same formula as the Backend's effective fps, over the whole attempt so far. */
-  overallFps: number;
-  cycleMs: number;
-  source: string;
-  analysis: string;
-  engine: string;
-  blendshapeSwitchMs: number | null;
-  /** Raw text of a worker crash that was recovered on the CPU during this page visit. */
-  recovery: string | null;
-  eyes: string;
-  limit: string;
-  frameErrors: string;
-  sharpness: string;
-}
 
 /** Grab one analysis frame, scaled down when the camera frame is larger than ANALYSIS_MAX_SIDE. */
 async function grabAnalysisFrame(video: HTMLVideoElement): Promise<{ bitmap: ImageBitmap; size: string }> {
@@ -168,8 +135,6 @@ export interface LivenessCapture {
   actionImageSrc: string;
   recoveryImageSrc: string;
   evidence: HybridLivenessEvidence;
-  /** Test builds only: device summary for the failure table (enums and numbers, no identifiers). */
-  clientDiagnostics?: ClientDiagnostics;
 }
 
 interface LivenessScannerProps {
@@ -249,10 +214,7 @@ function LivenessScannerInner({
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [mirrorPreview, setMirrorPreview] = useState(true);
   const [error, setError] = useState('');
-  // Test builds only: the underlying error name/message behind `error` (browser text, no personal data).
-  const [errorDetail, setErrorDetail] = useState('');
   const [attemptKey, setAttemptKey] = useState(0);
-  const [stats, setStats] = useState<ScannerStats | null>(null);
   const [lowLight, setLowLight] = useState(false);
   // move_closer only: live bar of the current face size against the zone the step needs.
   const [sizeGuide, setSizeGuide] = useState<SizeGuide | null>(null);
@@ -348,21 +310,12 @@ function LivenessScannerInner({
     let monitor: HybridActionMonitor | null = null;
     // Engine switch (Android GPU measured slower than CPU): pauses the timeout, drops stale results.
     const engineGuard = new EngineSwitchGuard();
-    // The test-only ?blendshapes=always switch keeps the eye-blink scores on for comparison.
-    const blendshapesAlways = TEST_MODE
-      && new URLSearchParams(window.location.search).get('blendshapes') === 'always';
     // stopSlow also halts frame handling, so a late action can no longer send an over-long scan.
     const armTimeout = () => {
       timeout = window.setTimeout(() => stopSlow(ATTEMPT_TIME_LIMIT_MESSAGE), ATTEMPT_TIMEOUT_MS);
     };
     let badSince = 0;
     let actionRetryShown = false;
-    // Test builds only: the deepest eye closure seen in the last second, to judge narrow and wide eyes.
-    let minRatioLeft = 1;
-    let minRatioRight = 1;
-    let maxScoreLeft = 0;
-    let maxScoreRight = 0;
-    let baselineEarText = '-';
     let actionImage = '';
     let actionAt = 0;
     // The candidate action frame (for a blink: the deepest closed frame so far). It is kept open past
@@ -396,7 +349,6 @@ function LivenessScannerInner({
     const observedTimestamps: number[] = [];
     // Frame copy / runtime problems: one bad frame is skipped, only a sustained problem stops the scan.
     const frameErrors = new FrameErrorTolerance();
-    let lastFrameError = '';
     // Camera warm-up: no still frame before the camera has run CAMERA_WARMUP_MS (exposure/focus).
     let firstCameraFrameAt: number | null = null;
     // Start of the current run of good face frames (frame #1 needs FACE_PRESENCE_MS of it).
@@ -406,75 +358,15 @@ function LivenessScannerInner({
     let sharpContext: CanvasRenderingContext2D | null | undefined;
     const passiveSharpness: number[] = [];
     const passiveLuma: number[] = [];
-    // Test builds only: live numbers that show whether the camera or the phone's processing is slow.
-    let cameraFrames = 0;
-    let cameraWatcher = 0;
-    let cameraWatchedVideo: HTMLVideoElement | null = null;
-    let cameraSupported = true;
-    let submittedAt = 0;
-    let cycleMs = 0;
-    let analysisSize = '';
-    let windowStartedAt = performance.now();
-    let windowResults = 0;
-    let windowCameraFrames = 0;
-    let statsTimer = 0;
-    type VideoFrameWatcher = HTMLVideoElement & {
-      requestVideoFrameCallback?: (callback: () => void) => number;
-      cancelVideoFrameCallback?: (handle: number) => void;
-    };
-    const watchCameraFrames = (video: HTMLVideoElement) => {
-      const watched = video as VideoFrameWatcher;
-      if (typeof watched.requestVideoFrameCallback !== 'function') { cameraSupported = false; return; }
-      cameraWatchedVideo = video;
-      const tick = () => {
-        cameraFrames += 1;
-        cameraWatcher = watched.requestVideoFrameCallback?.(tick) ?? 0;
-      };
-      cameraWatcher = watched.requestVideoFrameCallback(tick);
-    };
-    if (TEST_MODE) {
-      statsTimer = window.setInterval(() => {
-        // Once the scan stopped no results arrive any more: keep the last numbers on screen instead
-        // of showing "0.0 fps" next to the per-frame time of the frames that did run.
-        if (halted || cancelled) return;
-        const now = performance.now();
-        const seconds = Math.max(0.001, (now - windowStartedAt) / 1000);
-        const video = webcamRef.current?.video;
-        setStats({
-          engine: getFaceLandmarkerDelegate() ?? '-',
-          blendshapeSwitchMs: getLastBlendshapeSwitchMs(),
-          recovery: getLastRuntimeRecovery(),
-          cameraFps: cameraSupported ? (cameraFrames - windowCameraFrames) / seconds : null,
-          pipelineFps: windowResults / seconds,
-          overallFps: measuredFps(observedTimestamps),
-          cycleMs,
-          source: video?.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : '-',
-          analysis: analysisSize || '-',
-          eyes: `${baselineEarText} · สัดส่วนตาต่ำสุด ${minRatioLeft.toFixed(2)}/${minRatioRight.toFixed(2)} · บลิงก์สูงสุด ${maxScoreLeft.toFixed(2)}/${maxScoreRight.toFixed(2)}`,
-          limit: baselineEarText === '-' ? '-' : baselineEarText.split('/').map((value) => blinkClosedRatioLimit(Number(value)).toFixed(2)).join('/'),
-          frameErrors: `${frameErrors.total}${lastFrameError ? ` · ${lastFrameError}` : ''}`,
-          sharpness: sharpnessGate.median === null ? '-' : sharpnessGate.median.toFixed(1),
-        });
-        minRatioLeft = 1;
-        minRatioRight = 1;
-        maxScoreLeft = 0;
-        maxScoreRight = 0;
-        windowStartedAt = now;
-        windowResults = 0;
-        windowCameraFrames = cameraFrames;
-      }, 1000);
-    }
-
     // Every stop is final for this attempt: the frame loop and the attempt timeout end here, so a
     // later frame can never overwrite the first, real error message with a different one.
-    const fail = (message: string, detail = '') => {
+    const fail = (message: string) => {
       if (cancelled || halted) return;
       halted = true;
       window.clearTimeout(timeout);
       cancelAnimationFrame(animationFrame);
       setIsLoading(false);
       setError(message);
-      if (TEST_MODE) setErrorDetail(detail);
     };
     // The scan cannot succeed (camera too slow): show why and ignore further frames. Nothing was
     // sent to the Backend, so the signed challenge is still unused and "try again" can reuse it.
@@ -483,10 +375,9 @@ function LivenessScannerInner({
       fail(message);
     };
     // One frame could not be copied or analysed: skip it; stop only when the problem lasts.
-    const frameProblem = (kind: FrameErrorKind, detail: string) => {
-      if (TEST_MODE) lastFrameError = `${kind} ${detail}`;
+    const frameProblem = (kind: FrameErrorKind) => {
       const decision = frameErrors.record(kind, performance.now());
-      if (decision.fatal) fail(FRAME_ERROR_MESSAGES[decision.kind], `${decision.kind} ×${frameErrors.currentStreak}: ${detail}`);
+      if (decision.fatal) fail(FRAME_ERROR_MESSAGES[decision.kind]);
     };
     // Sharpness and brightness of the face area (small grayscale crop); null when unreadable.
     const measureFace = (frame: ImageBitmap, observation: LivenessObservation) => {
@@ -558,22 +449,17 @@ function LivenessScannerInner({
         const runtime = getFaceLandmarkerRuntimeSnapshot();
         if (runtime.status === 'error') {
           // The model itself stopped (for example the worker crashed): its own message names the cause.
-          fail(
-            runtime.error || FRAME_ERROR_MESSAGES.runtime,
-            `runtime status error${runtime.detail ? `: ${runtime.detail}` : ''}`,
-          );
+          fail(runtime.error || FRAME_ERROR_MESSAGES.runtime);
           return;
         }
         // While the runtime is (re)initialising nothing is posted; the attempt timeout still applies.
         if (runtime.status === 'ready') {
           processing = true;
-          if (TEST_MODE && !cameraWatchedVideo && cameraSupported) watchCameraFrames(video);
           let bitmap: ImageBitmap | null = null;
           try {
             // A camera that is renegotiating its size (focus constraint, lens switch) briefly
             // reports 0x0; copying it would throw, so the frame is skipped instead.
             if (!video.videoWidth || !video.videoHeight) throw new CameraFrameUnavailableError();
-            submittedAt = performance.now();
             const grabbed = await grabAnalysisFrame(video);
             bitmap = grabbed.bitmap;
             if (cancelled || halted) {
@@ -581,7 +467,6 @@ function LivenessScannerInner({
               processing = false;
               return;
             }
-            analysisSize = grabbed.size;
             firstCameraFrameAt ??= performance.now();
             const posted = bitmap;
             bitmap = null;
@@ -590,10 +475,7 @@ function LivenessScannerInner({
             // Never leak the copied frame (closing an already closed bitmap is a no-op).
             bitmap?.close();
             processing = false;
-            frameProblem(
-              classifyFrameError(frameError, typeof createImageBitmap === 'function'),
-              describeError(frameError),
-            );
+            frameProblem(classifyFrameError(frameError, typeof createImageBitmap === 'function'));
           }
         }
       }
@@ -619,7 +501,7 @@ function LivenessScannerInner({
       actionAt = 0;
       frameErrors.success();
       setSizeGuide(null);
-      client?.setBlendshapes(blendshapesAlways);
+      client?.setBlendshapes(false);
       window.clearTimeout(timeout);
       armTimeout();
     };
@@ -640,7 +522,7 @@ function LivenessScannerInner({
       if (message.type === 'error') {
         // One failed inference (or the GPU->CPU switch) is skipped like a bad camera frame.
         processing = false;
-        frameProblem('runtime', message.message || 'ประมวลผลภาพจากกล้องไม่สำเร็จ');
+        frameProblem('runtime');
         return;
       }
       processing = false;
@@ -650,11 +532,6 @@ function LivenessScannerInner({
       if (!engineGuard.accepts(observation.timestampMs)) { frame.close(); return; }
       // A paced text whose turn has come is shown on every processed frame.
       flushInstruction();
-      if (TEST_MODE) {
-        windowResults += 1;
-        const took = performance.now() - submittedAt;
-        cycleMs = cycleMs === 0 ? took : cycleMs * 0.8 + took * 0.2;
-      }
       try {
         if (!startedAt) startedAt = observation.timestampMs;
         observedTimestamps.push(observation.timestampMs);
@@ -752,7 +629,6 @@ function LivenessScannerInner({
           promptAt = observation.timestampMs;
           phase = 'action';
           monitor = new HybridActionMonitor(challenge.action, baseline);
-          baselineEarText = `${baseline.leftEar.toFixed(2)}/${baseline.rightEar.toFixed(2)}`;
           showStep(challenge.action === 'blink' ? BLINK_PROMPT : MOVE_CLOSER_PROMPT);
           return;
         }
@@ -775,12 +651,6 @@ function LivenessScannerInner({
         }
 
         if (!monitor) monitor = new HybridActionMonitor(challenge.action, baseline);
-        if (TEST_MODE) {
-          minRatioLeft = Math.min(minRatioLeft, observation.leftEar / Math.max(baseline.leftEar, 0.001));
-          minRatioRight = Math.min(minRatioRight, observation.rightEar / Math.max(baseline.rightEar, 0.001));
-          maxScoreLeft = Math.max(maxScoreLeft, observation.leftBlinkScore);
-          maxScoreRight = Math.max(maxScoreRight, observation.rightBlinkScore);
-        }
         const event = monitor.feed(observation);
 
         if (phase === 'action') {
@@ -872,31 +742,6 @@ function LivenessScannerInner({
           window.clearTimeout(timeout);
           cancelAnimationFrame(animationFrame);
           setProgress(1);
-          const average = (values: number[]) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null);
-          const firstPassive = markers.find((item) => item.kind === 'passive_sample');
-          const buildNumbers = buildDiagnostics(BUILD_INFO);
-          const diagnosticsOrFallback = (make: () => ClientDiagnostics): ClientDiagnostics => {
-            // The field must always reach the test table; a failure here falls back to enums only.
-            try { return make(); } catch { return fallbackClientDiagnostics(navigator.userAgent, navigator.maxTouchPoints, navigator.platform, buildNumbers); }
-          };
-          const clientDiagnostics = TEST_MODE
-            ? diagnosticsOrFallback(() => buildClientDiagnostics({
-              userAgent: navigator.userAgent,
-              maxTouchPoints: navigator.maxTouchPoints,
-              navigatorPlatform: navigator.platform,
-              runtimeMode: getFaceLandmarkerRuntimeMode(),
-              delegate: getFaceLandmarkerDelegate(),
-              cameraWidth: webcamRef.current?.video?.videoWidth ?? 0,
-              cameraHeight: webcamRef.current?.video?.videoHeight ?? 0,
-              analysisFps: effectiveFps,
-              luma: average(passiveLuma),
-              sharpness: average(passiveSharpness),
-              frameErrors: frameErrors.total,
-              warmupMs: firstPassive && firstCameraFrameAt !== null ? firstPassive.timestampMs - firstCameraFrameAt : 0,
-              webBuild: buildNumbers.web_build,
-              webCommit: buildNumbers.web_commit,
-            }))
-            : undefined;
           if (delivered) return;
           delivered = true;
           callbackRef.current({
@@ -906,7 +751,6 @@ function LivenessScannerInner({
             actionImageSrc: actionImage,
             recoveryImageSrc: recoveryImage,
             evidence,
-            ...(clientDiagnostics ? { clientDiagnostics } : {}),
           });
         }
       } catch (captureError) {
@@ -922,7 +766,7 @@ function LivenessScannerInner({
       client = nextClient;
       workerReady = true;
       // Every attempt starts with the eye-blink scores off (cheaper frames).
-      client.setBlendshapes(blendshapesAlways);
+      client.setBlendshapes(false);
       showStep('วางใบหน้าให้อยู่กลางกรอบ');
       animationFrame = requestAnimationFrame(processFrame);
       armTimeout();
@@ -930,10 +774,8 @@ function LivenessScannerInner({
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
-      window.clearInterval(statsTimer);
       window.clearInterval(instructionTimer);
       cancelAnimationFrame(animationFrame);
-      (cameraWatchedVideo as VideoFrameWatcher | null)?.cancelVideoFrameCallback?.(cameraWatcher);
       client?.close();
       releaseKeptFrame();
       setLowLight(false);
@@ -1013,26 +855,6 @@ function LivenessScannerInner({
         />
       </header>
 
-      {TEST_MODE && stats && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+3rem)] left-2 z-40 rounded-lg bg-black/70 px-2 py-1 font-mono text-[10px] leading-4 text-white"
-        >
-          <div>กล้องส่งภาพ: {stats.cameraFps === null ? 'ไม่ทราบ' : `${stats.cameraFps.toFixed(1)} fps`}</div>
-          <div className={stats.pipelineFps < REQUIRED_FPS ? 'font-bold text-red-300' : 'text-emerald-300'}>
-            ประมวลผลได้: {stats.pipelineFps.toFixed(1)} fps · ทั้งรอบ {stats.overallFps.toFixed(1)} (ต้อง ≥ {REQUIRED_FPS})
-          </div>
-          <div>ต่อเฟรม: {stats.cycleMs.toFixed(0)} ms · ตัวประมวลผล: {stats.engine}</div>
-          {stats.blendshapeSwitchMs !== null && <div>สลับโหมดตา: {stats.blendshapeSwitchMs.toFixed(0)} ms</div>}
-          {stats.recovery && <div className="max-w-[88vw] break-all text-amber-300">กู้ระบบ→CPU: {stats.recovery}</div>}
-          <div>ภาพกล้อง {stats.source} → ตรวจที่ {stats.analysis}</div>
-          <div>ตาเปิด(ฐาน) ซ้าย/ขวา: {stats.eyes}</div>
-          <div>เกณฑ์ปิดตา ≤ {stats.limit} (สัดส่วนต่อฐาน)</div>
-          <div>ความคม(มัธยฐาน): {stats.sharpness} · เฟรมผิดพลาด: {stats.frameErrors}</div>
-          <div>เว็บรุ่น: {buildLabel(BUILD_INFO)}</div>
-        </div>
-      )}
-
       {/* Face guide sits a little below the middle so the instruction card above it never covers it. */}
       <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-[54%] z-10 h-[min(48dvh,31rem)] w-[min(68vw,23rem)] -translate-x-1/2 -translate-y-1/2 rounded-[48%] border-[3px] border-white/85 shadow-[0_0_0_999px_rgba(2,6,23,0.24)]" />
 
@@ -1048,8 +870,7 @@ function LivenessScannerInner({
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/72 px-4 pt-16 backdrop-blur-sm">
           <section role="alert" className="w-full max-w-sm rounded-3xl border border-red-300/20 bg-red-950/95 p-5 text-center text-sm text-white shadow-2xl">
             <p className="font-semibold leading-6">{error}</p>
-            {TEST_MODE && errorDetail && <p className="mt-2 break-words font-mono text-[10px] leading-4 text-red-100/80">{errorDetail}</p>}
-            <button type="button" onClick={() => { setError(''); setErrorDetail(''); setProgress(0); setIsLoading(true); setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...'); setAttemptKey((value) => value + 1); }} className="mt-4 min-h-11 cursor-pointer rounded-xl bg-white px-5 font-bold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">ลองตรวจอีกครั้ง</button>
+            <button type="button" onClick={() => { setError(''); setProgress(0); setIsLoading(true); setInstruction('กำลังเริ่มตรวจสอบรอบใหม่...'); setAttemptKey((value) => value + 1); }} className="mt-4 min-h-11 cursor-pointer rounded-xl bg-white px-5 font-bold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">ลองตรวจอีกครั้ง</button>
           </section>
         </div>
       )}

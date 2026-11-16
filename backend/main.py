@@ -27,10 +27,6 @@ from core.authorization import (
 from core.config import (
     APP_ENV,
     APP_VERSION,
-    ATTENDANCE_TEST_ALL_COURSES,
-    ATTENDANCE_TEST_EXTERNAL_EMAIL,
-    ATTENDANCE_TEST_COURSE_IDS,
-    ATTENDANCE_TEST_MODE,
     CORS_ORIGINS,
     OCR_SERVICE_TOKEN,
     OCR_SERVICE_URL,
@@ -52,19 +48,9 @@ from services.liveness_service import (
     verify_attendance_liveness_submission,
     verify_liveness_submission,
 )
-from services import attempt_diagnostics
 from services.failure_diagnostics import diagnostic
 from services.action_fallback import action_fallback
 from services.liveness_frame_service import BlinkActionFailure, verify_hybrid_liveness_frames
-from services.test_mode_service import (
-    auto_join_test_courses,
-    auto_join_test_courses_on_login,
-    backfill_test_course_members,
-    classify_failure,
-    ensure_test_course_sessions,
-    is_test_course,
-    record_face_attempt,
-)
 from services.face_enrollment_service import (
     claim_face_enrollment_challenge,
     finalize_face_enrollment,
@@ -185,43 +171,6 @@ app.include_router(temporary_admin_router)
 app.include_router(support_router)
 app.include_router(course_membership_router)
 
-# Test-only shortcut. The router is not even imported unless the mode was
-# switched on with its acknowledgement phrase and a list of test courses.
-if ATTENDANCE_TEST_MODE:
-    from routers.test_mode import router as test_mode_router
-
-    app.include_router(test_mode_router)
-
-    async def _keep_test_courses_ready() -> None:
-        """Test-only: keep a session open on each test course and enroll registered students."""
-        tick = 0
-        while True:
-            try:
-                await run_in_threadpool(ensure_test_course_sessions)
-                if tick % 10 == 0:
-                    await run_in_threadpool(backfill_test_course_members)
-            except Exception:  # noqa: BLE001 - never stop the loop
-                logger.warning("Test-course keeper iteration failed", exc_info=True)
-            tick += 1
-            await asyncio.sleep(30)
-
-    async def _start_test_course_keeper() -> None:
-        app.state.test_course_keeper = asyncio.create_task(_keep_test_courses_ready())
-
-    app.on_event("startup")(_start_test_course_keeper)
-    if ATTENDANCE_TEST_ALL_COURSES:
-        logger.warning(
-            "ATTENDANCE_TEST_MODE IS ON FOR ALL COURSES: QR and its timers are skipped for every "
-            "course a student belongs to, real classes included. Never use this in production."
-        )
-    else:
-        logger.warning(
-            "ATTENDANCE_TEST_MODE IS ON: QR and its timers are skipped for %d listed test course(s). "
-            "Never use this in production.",
-            len(ATTENDANCE_TEST_COURSE_IDS),
-        )
-
-
 async def _preload_blink_106_model() -> None:
     """Load 2d106det at startup when the second blink rule is on, so a bad copy shows up at once.
 
@@ -287,9 +236,6 @@ async def health_ready():
 def get_authenticated_profile(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
-    # Test mode only: a student who has just signed in joins the test courses with no code and no approval.
-    if ATTENDANCE_TEST_MODE:
-        auto_join_test_courses_on_login(current_user.id, current_user.role)
     return {"status": "success", "user": current_user.model_dump()}
 
 
@@ -306,8 +252,6 @@ def get_runtime_config(
         "ocr_provider": "Light OCR Node.js",
         "attendance_methods": ["face_ocr", "nfc", "manual"],
         "email_policy": "KMUTNB Google accounts only",
-        "test_mode": ATTENDANCE_TEST_MODE,
-        "test_external_email": ATTENDANCE_TEST_EXTERNAL_EMAIL,
     }
 
 
@@ -584,22 +528,15 @@ async def keep_face_enrollment_claim_alive(
 
 @app.post("/api/v1/enrollment/liveness-challenge")
 async def create_face_enrollment_liveness_challenge(
-    # Optional only in the test-only mode, which skips the card/OCR step. Normal
-    # deployments still reject a request without the card image (422).
-    student_card_image: UploadFile | None = File(None),
+    student_card_image: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(require_roles("student")),
 ):
     if not current_user.student_id:
         raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
-    if student_card_image is None and not ATTENDANCE_TEST_MODE:
-        raise HTTPException(status_code=422, detail="ต้องแนบภาพบัตรนักศึกษา")
     try:
-        if student_card_image is not None:
-            student_card_ocr_limiter.check(current_user.id)
-            card_upload = await read_validated_image(student_card_image, "ภาพบัตรนักศึกษา")
-            extracted_student_id = await extract_student_id(card_upload)
-        else:
-            extracted_student_id = current_user.student_id
+        student_card_ocr_limiter.check(current_user.id)
+        card_upload = await read_validated_image(student_card_image, "ภาพบัตรนักศึกษา")
+        extracted_student_id = await extract_student_id(card_upload)
         if extracted_student_id != current_user.student_id:
             raise HTTPException(status_code=403, detail="รหัสบนบัตรไม่ตรงกับบัญชีที่เข้าสู่ระบบ")
         challenge_id, expires_at, liveness = await run_in_threadpool(
@@ -736,9 +673,6 @@ async def register_face(
             )
             processing_claim_token = None
             action_fallback.record_success(current_user.id)
-            # Test mode: everyone who finished the face registration joins the test courses.
-            if ATTENDANCE_TEST_MODE:
-                await run_in_threadpool(auto_join_test_courses, current_user.id)
         else:
             if current_user.temporary_admin:
                 raise HTTPException(status_code=403, detail="การเปลี่ยนข้อมูลใบหน้าต้องใช้ผู้ดูแลระบบถาวร")
@@ -798,35 +732,6 @@ async def register_face(
                 )
             except Exception:
                 logger.exception("Face enrollment challenge release failed")
-
-def _resolve_test_attempt(attempt: dict) -> None:
-    """Fill course_id/test for the attempt log from the challenge's session (test mode only)."""
-    if not ATTENDANCE_TEST_MODE or not attempt.get("session_id"):
-        return
-    try:
-        rows = (
-            supabase.table("attendance_sessions")
-            .select("course_id")
-            .eq("id", attempt["session_id"])
-            .limit(1)
-            .execute()
-        )
-        if rows.data:
-            attempt["course_id"] = rows.data[0]["course_id"]
-            attempt["test"] = is_test_course(attempt["course_id"])
-    except Exception:  # noqa: BLE001 - logging aid only, never changes the result
-        pass
-
-
-def _attempt_diagnostics_snapshot(collector, attempt: dict) -> dict | None:
-    """Numbers-only measurements of this attempt for the test-only log (None outside test mode)."""
-    if collector is None:
-        return None
-    collector.record("action", attempt.get("action"))
-    if attempt.get("similarity") is not None:
-        collector.record("identity", attempt_diagnostics.number(attempt["similarity"]))
-    return collector.snapshot()
-
 
 class RetryChallengeError(HTTPException):
     """A 422 whose JSON body also carries a replacement challenge.
@@ -909,26 +814,6 @@ def _attendance_retry_challenge(challenge_id: str, current_user: AuthenticatedUs
         return None
 
 
-def _log_test_attempt_failure(
-    student_id: str, attempt: dict, detail: object, diagnostics: dict | None = None
-) -> None:
-    """Write one failed face attempt of a test course to the attempt log (never raises)."""
-    text = detail if isinstance(detail, str) else "เกิดข้อผิดพลาดภายในระบบ"
-    record_face_attempt(
-        student_id=student_id,
-        course_id=attempt["course_id"],
-        session_id=attempt["session_id"],
-        outcome="failed",
-        similarity_score=attempt["similarity"],
-        threshold_used=FACE_THRESHOLD,
-        liveness_action=attempt["action"],
-        failure_stage=classify_failure(text),
-        failure_reason=text,
-        app_version=APP_VERSION,
-        diagnostics=diagnostics,
-    )
-
-
 @app.post("/api/v1/attendance/verify")
 async def verify_hybrid_face_attendance(
     liveness_passive_images: list[UploadFile] = File(...),
@@ -937,27 +822,15 @@ async def verify_hybrid_face_attendance(
     challenge_id: str = Form(...),
     liveness_token: str = Form(...),
     liveness_evidence: str = Form(...),
-    # Optional, test mode only: device/browser numbers from the web scanner (JSON text). Outside
-    # test mode it is never parsed; a missing, oversized or malformed value never fails a request.
-    client_diagnostics: str | None = Form(None),
     current_user: AuthenticatedUser = Depends(require_roles("student")),
 ):
     processing_claim_token: str | None = None
     claim_renewal_task: asyncio.Task[None] | None = None
-    # Facts collected for the test-only attempt log (see services/test_mode_service.py).
-    attempt: dict = {"test": False, "course_id": None, "session_id": None, "similarity": None, "action": None}
-    # Test mode only: numbers measured by the checks below (services/attempt_diagnostics.py).
-    diagnostics_collector = attempt_diagnostics.begin()
-    if diagnostics_collector is not None:
-        attempt_diagnostics.record_client(client_diagnostics)
     try:
         if not current_user.student_id:
             raise HTTPException(status_code=409, detail="บัญชีนี้ยังไม่มีรหัสนักศึกษา กรุณาติดต่อผู้ดูแลระบบ")
 
         challenge = await run_in_threadpool(load_valid_challenge, challenge_id, current_user)
-        # Test mode only: learn the course early so that even a liveness-evidence failure is logged.
-        attempt["session_id"] = challenge["session_id"]
-        await run_in_threadpool(_resolve_test_attempt, attempt)
         verified_liveness = verify_attendance_liveness_submission(
             liveness_token,
             liveness_evidence,
@@ -966,8 +839,6 @@ async def verify_hybrid_face_attendance(
             challenge["session_id"],
         )
         session_id = challenge["session_id"]
-        attempt["session_id"] = session_id
-        attempt["action"] = verified_liveness.action
         session_res = await run_in_threadpool(
             lambda: supabase.table("attendance_sessions")
             .select("id, course_id, status, created_at, courses(late_threshold_minutes, absent_threshold_minutes)")
@@ -981,8 +852,6 @@ async def verify_hybrid_face_attendance(
             session_res.data[0]["course_id"],
             current_user.id,
         )
-        attempt["course_id"] = session_res.data[0]["course_id"]
-        attempt["test"] = is_test_course(attempt["course_id"])
         if verified_liveness.action == "blink" and action_fallback.forced_action(current_user.id) == "move_closer":
             # A blink token signed before the fallback became active: refuse it before any image
             # work and hand out the replacement move_closer challenge for the same QR claim.
@@ -1077,7 +946,6 @@ async def verify_hybrid_face_attendance(
 
         # ─── STEP 5: เปรียบเทียบใบหน้าสด กับ ใบหน้าในฐานข้อมูลโดยตรง ───
         similarity_score = face_service.calculate_similarity(emb_live, registered_embedding)
-        attempt["similarity"] = similarity_score
 
         # ตรวจสอบเกณฑ์คะแนน
         if similarity_score < FACE_THRESHOLD:
@@ -1098,41 +966,18 @@ async def verify_hybrid_face_attendance(
             course_cfg.get('absent_threshold_minutes') or 45,
         )
 
-        if attempt["test"]:
-            # A standing test session never closes, so the late/absent clock is meaningless:
-            # a successful face match is always recorded as "present".
-            calculated_status = "present"
-
         checked_in_at = datetime.now(timezone.utc).isoformat()
-        if attempt["test"]:
-            # Test course: the check-in right is NOT consumed and nothing is written to
-            # attendance_records, so the same student can check in again and again. The
-            # result and the score go to the attempt log instead.
-            await run_in_threadpool(
-                record_face_attempt,
-                student_id=profile_uuid,
-                course_id=attempt["course_id"],
-                session_id=session_id,
-                outcome="success",
-                attendance_status=calculated_status,
-                similarity_score=similarity_score,
-                threshold_used=FACE_THRESHOLD,
-                liveness_action=attempt["action"],
-                app_version=APP_VERSION,
-                diagnostics=_attempt_diagnostics_snapshot(diagnostics_collector, attempt),
-            )
-        else:
-            await run_in_threadpool(
-                finalize_face_attendance,
-                challenge_id=challenge_id,
-                student_id=profile_uuid,
-                session_id=session_id,
-                attendance_status=calculated_status,
-                similarity_score=similarity_score,
-                checked_in_at=checked_in_at,
-                claim_token=processing_claim_token,
-            )
-            processing_claim_token = None
+        await run_in_threadpool(
+            finalize_face_attendance,
+            challenge_id=challenge_id,
+            student_id=profile_uuid,
+            session_id=session_id,
+            attendance_status=calculated_status,
+            similarity_score=similarity_score,
+            checked_in_at=checked_in_at,
+            claim_token=processing_claim_token,
+        )
+        processing_claim_token = None
         # The blink fallback (services/action_fallback.py) ends with a completed check-in.
         action_fallback.record_success(current_user.id)
         # คืนค่าความสำเร็จกลับไปให้หน้าบ้าน (Frontend)
@@ -1145,7 +990,6 @@ async def verify_hybrid_face_attendance(
             "calculated_status": calculated_status,
             "check_in_time": checked_in_at,
             "message": f"เช็คชื่อคุณ {full_name} สำเร็จเรียบร้อยแล้ว!",
-            **({"test_mode": True, "recorded_in": "face_checkin_attempts"} if attempt["test"] else {}),
         }
 
     except Exception as e:
@@ -1157,14 +1001,6 @@ async def verify_hybrid_face_attendance(
             retry = await run_in_threadpool(_attendance_retry_challenge, challenge_id, current_user)
             if retry is not None:
                 e = RetryChallengeError(e.status_code, e.detail, retry)
-        if attempt["test"]:
-            await run_in_threadpool(
-                _log_test_attempt_failure,
-                current_user.id,
-                attempt,
-                e.detail if isinstance(e, HTTPException) else None,
-                _attempt_diagnostics_snapshot(diagnostics_collector, attempt),
-            )
         # หากเกิด HTTPException จากที่เราดักไว้ ให้โยนออกไปตามปกติ
         if isinstance(e, HTTPException):
             raise e
@@ -1174,7 +1010,6 @@ async def verify_hybrid_face_attendance(
             detail="เกิดข้อผิดพลาดภายในระบบ"
         )
     finally:
-        attempt_diagnostics.end()
         if claim_renewal_task:
             claim_renewal_task.cancel()
             try:

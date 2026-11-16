@@ -49,15 +49,6 @@ import {
   saveDelegateChoice,
 } from '../src/utils/delegateTuner.ts';
 import {
-  DIAGNOSTICS_LIMITS,
-  buildClientDiagnostics,
-  detectBrowser,
-  detectPlatform,
-  diagnosticsDelegate,
-  serializeClientDiagnostics,
-  fallbackClientDiagnostics,
-} from '../src/utils/clientDiagnostics.ts';
-import {
   CHUNK_RELOAD_GUARD_MS,
   ReloadGate,
   attendanceHoldsPage,
@@ -65,7 +56,6 @@ import {
   shouldReloadAfterChunkError,
 } from '../src/pwa/updateGate.ts';
 import { ENGINE_SWITCH_TIMEOUT_MS, EngineSwitchGuard } from '../src/utils/engineSwitchGuard.ts';
-import { BUILD_INFO, buildDiagnostics, buildLabel, parseBuildInfo } from '../src/config/buildInfo.ts';
 import { PAD_RETRY_CHECKLIST, isPadFailureMessage } from '../src/utils/padFailure.ts';
 import {
   HYBRID_BLINK_LIMITS,
@@ -421,58 +411,6 @@ for (const fps of [9, 12, 30]) {
 }
 assert.equal(moveCloser(9, 800, 1.18, 3), null, 'a person who stays 18% closer is never accepted');
 
-// ---- 4. Client diagnostics ----
-const androidChrome = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
-const uaCases: Array<[string, string, string]> = [
-  [androidChrome, 'android', 'chrome'],
-  ['Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0 Mobile Safari/537.36', 'android', 'samsung'],
-  ['Mozilla/5.0 (Linux; Android 13; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0 Mobile Safari/537.36', 'android', 'inapp'],
-  ['Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/119.0 Mobile Safari/537.36 Line/13.19.1/IAB', 'android', 'inapp'],
-  ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', 'ios', 'safari'],
-  ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1', 'ios', 'chrome'],
-  ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Edg/124.0', 'desktop', 'edge'],
-  ['Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0', 'desktop', 'firefox'],
-  ['curl/8', 'other', 'other'],
-];
-for (const [ua, platform, browser] of uaCases) {
-  assert.equal(detectPlatform(ua), platform, ua);
-  assert.equal(detectBrowser(ua), browser, ua);
-}
-assert.equal(detectPlatform('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', 5, 'MacIntel'), 'ios', 'iPadOS desktop mode');
-assert.equal(diagnosticsDelegate('worker', 'GPU'), 'gpu');
-assert.equal(diagnosticsDelegate('worker', 'CPU'), 'cpu');
-assert.equal(diagnosticsDelegate('main-thread', 'CPU'), 'main');
-assert.equal(diagnosticsDelegate(null, null), 'unknown');
-
-const diagnostics = buildClientDiagnostics({
-  userAgent: androidChrome, runtimeMode: 'worker', delegate: 'GPU',
-  cameraWidth: 1280, cameraHeight: 720, analysisFps: 9.4567, luma: 118.26, sharpness: 12.345,
-  frameErrors: 3, warmupMs: 1520.6,
-});
-assert.deepEqual(diagnostics, {
-  platform: 'android', browser: 'chrome', delegate: 'gpu', camera_w: 1280, camera_h: 720,
-  analysis_fps: 9.46, luma: 118.3, sharpness: 12.35, frame_errors: 3, warmup_ms: 1521,
-  web_build: 0, web_commit: 0,
-});
-const enums = new Set(['android', 'ios', 'desktop', 'other', 'chrome', 'safari', 'samsung', 'firefox', 'edge', 'inapp', 'gpu', 'cpu', 'main', 'unknown']);
-for (const value of Object.values(diagnostics)) {
-  assert.ok(typeof value === 'number' || value === null || (typeof value === 'string' && enums.has(value)), `enum or number only: ${value}`);
-}
-assert.doesNotMatch(JSON.stringify(diagnostics), /Mozilla|Android 10|Chrome\//, 'no User-Agent text');
-const extreme = buildClientDiagnostics({
-  userAgent: '', runtimeMode: null, delegate: null, cameraWidth: 99_999, cameraHeight: -5,
-  analysisFps: 1e9, luma: Number.NaN, sharpness: 1e12, frameErrors: 1e12, warmupMs: 1e12,
-});
-assert.equal(extreme.camera_w, DIAGNOSTICS_LIMITS.cameraSide);
-assert.equal(extreme.camera_h, 0);
-assert.equal(extreme.analysis_fps, 120);
-assert.equal(extreme.luma, null);
-assert.equal(extreme.sharpness, 100_000);
-assert.equal(extreme.frame_errors, 100_000);
-assert.equal(extreme.warmup_ms, 600_000);
-const serialized = serializeClientDiagnostics(extreme);
-assert.ok(serialized && new TextEncoder().encode(serialized).length <= 1024);
-
 // ---- 5. Wiring ----
 const scanner = readFileSync(new URL('../src/features/student/LivenessScanner.tsx', import.meta.url), 'utf8');
 const runtime = readFileSync(new URL('../src/services/faceLandmarkerRuntime.ts', import.meta.url), 'utf8');
@@ -484,20 +422,15 @@ assert.match(scanner, /if \(!video\.videoWidth \|\| !video\.videoHeight\) throw 
 assert.match(scanner, /bitmap\?\.close\(\)/, 'a failed frame copy is released');
 assert.match(scanner, /frameProblem\('runtime'/, 'a failed inference is transient');
 assert.match(scanner, /frameErrors\.success\(\)/);
-assert.match(scanner, /const fail = \(message: string, detail = ''\) => \{\s*if \(cancelled \|\| halted\) return;\s*halted = true;/, 'the first error wins and stops the loop');
+assert.match(scanner, /const fail = \(message: string\) => \{\s*if \(cancelled \|\| halted\) return;\s*halted = true;/, 'the first error wins and stops the loop');
 assert.match(scanner, /passiveWarmupDone\(firstCameraFrameAt, observation\.timestampMs, stableFrames, REQUIRED_STABLE_FRAMES\)/);
 assert.match(scanner, /sharpnessGate\.evaluate\(measured\?\.sharpness \?\? null\)/);
 assert.ok(scanner.indexOf('sharpnessGate.evaluate(') < scanner.indexOf('samples.push(frameToJpeg(frame, PASSIVE_JPEG_QUALITY))'));
 assert.match(scanner, /recoveryHint\(observation, baseline, challenge\.action\)/);
-assert.match(scanner, /const clientDiagnostics = TEST_MODE/);
-assert.match(scanner, /TEST_MODE && errorDetail/);
 assert.match(runtime, /classifyRuntimeLoadError\(message\)/);
 assert.doesNotMatch(runtime, /message\.includes\('worker'\)/, 'the old over-broad rule is gone');
 assert.match(runtime, /snapshot\.status === 'error' && !initialization\) await retryFaceLandmarkerPreload\(\)/);
-assert.match(api, /if \(TEST_MODE && clientDiagnostics\)/);
-assert.match(api, /formData\.append\('client_diagnostics', diagnosticsJson\)/);
-assert.doesNotMatch(api, /liveness_evidence', JSON\.stringify\(\{[^)]*client/, 'not inside the evidence');
-assert.match(home, /setClientDiagnostics\(TEST_MODE\s*\? capture\.clientDiagnostics/);
+assert.doesNotMatch(api, /client_diagnostics/, 'no device diagnostics are sent');
 
 // ---- 6. Review fixes ----
 // 9: a scan that simply ran too long gets the time-limit message, other timing faults the generic one.
@@ -531,14 +464,9 @@ assert.match(runtime, /if \(message\.clientId !== undefined\)[\s\S]*failWorker\(
 // 2026-11-16 (vivo V23e): engine switches replace the worker; a GPU-side crash restarts once on the CPU.
 assert.match(runtime, /function requestDelegateSwitch[\s\S]*?restartWorker\(target\)/);
 assert.match(runtime, /else if \(shouldRecoverOnCpu\(\)\) \{\s*recoverOnCpu\(error\);/);
-assert.match(scanner, /runtime status error\$\{runtime\.detail \? `: \$\{runtime\.detail\}` : ''\}/, 'raw detail in the test panel');
 assert.match(scanner, /const restartAfterEngineSwitch = \(\) => \{\s*\/\/[^\n]*\n\s*processing = false;/, 'a lost in-flight frame does not block the loop');
-// 7: the test-mode enrollment start screen shows the load error and a retry.
+
 const register = readFileSync(new URL('../src/features/student/StudentRegister.tsx', import.meta.url), 'utf8');
-const startSection = register.slice(register.indexOf("phase === 'start' && TEST_MODE"), register.indexOf("phase === 'card' && !TEST_MODE"));
-assert.match(startSection, /\{faceRuntime\.error\}/);
-assert.match(startSection, /retryFaceLandmarkerPreload\(\)/);
-assert.match(startSection, /ลองใหม่/);
 
 // ---- 7. F2: eye aspect ratio in true geometric units on every frame shape ----
 /**
@@ -598,7 +526,7 @@ for (const file of ['../src/workers/faceLandmarker.worker.ts', '../src/services/
   assert.match(readFileSync(new URL(file, import.meta.url), 'utf8'), /frame\.width \/ Math\.max\(\s*(message\.)?frame\.height, 1\)/);
 }
 
-// ---- 8. Stale builds, update reloads, client_diagnostics always present, PAD retry checklist ----
+// ---- 8. Stale builds, update reloads, PAD retry checklist ----
 // Reloads wait for every hold (scanner open, capture pending, upload running).
 let reloads = 0;
 const gate = new ReloadGate(() => { reloads += 1; });
@@ -620,34 +548,6 @@ const idleRelease = gate.hold();
 idleRelease();
 assert.equal(reloads, 2, 'releasing without a pending update does not reload');
 
-// Build identity: parsed defensively, visible as a label and as numbers.
-const info = parseBuildInfo({ commit: '59c9306', dirty: true, builtAt: '2026-11-15T10:30:00.000Z' });
-assert.deepEqual(info, { commit: '59c9306', dirty: true, builtAtMs: Date.parse('2026-11-15T10:30:00.000Z') });
-assert.equal(buildLabel(info), '59c9306+dirty · 2026-11-15 10:30 UTC');
-assert.deepEqual(buildDiagnostics(info), { web_build: Date.parse('2026-11-15T10:30:00.000Z') / 1000, web_commit: 0x59c9306 });
-assert.deepEqual(parseBuildInfo({ commit: 'evil<script>', builtAt: 'x' }), { commit: 'unknown', dirty: false, builtAtMs: 0 });
-assert.deepEqual(buildDiagnostics(parseBuildInfo(null)), { web_build: 0, web_commit: 0 });
-assert.equal(BUILD_INFO.commit, 'unknown', 'outside a Vite build the define is absent and nothing throws');
-const withBuild = buildClientDiagnostics({
-  userAgent: androidChrome, runtimeMode: 'worker', delegate: 'CPU', cameraWidth: 640, cameraHeight: 480,
-  analysisFps: 9, luma: null, sharpness: null, frameErrors: 0, warmupMs: 0, ...{ webBuild: 1_763_202_600, webCommit: 0x59c9306 },
-});
-assert.equal(withBuild.web_build, 1_763_202_600);
-assert.equal(withBuild.web_commit, 0x59c9306);
-// The fallback (a capture without diagnostics) is enums plus zeros, always serialisable.
-for (const ua of [androidChrome, 'Mozilla/5.0 (Linux; Android 13; K; wv) AppleWebKit/537.36 Version/4.0 Chrome/120.0 Mobile Safari/537.36', '', 'x'.repeat(5_000)]) {
-  const fallback = fallbackClientDiagnostics(ua, 0, '', buildDiagnostics(info));
-  const json = serializeClientDiagnostics(fallback);
-  assert.ok(json && new TextEncoder().encode(json).length <= 1024, 'always under the size limit');
-  assert.equal(fallback.web_commit, 0x59c9306);
-}
-assert.equal(fallbackClientDiagnostics('Mozilla/5.0 (Linux; Android 13; K; wv) AppleWebKit/537.36 Version/4.0 Chrome/120.0 Mobile Safari/537.36').browser, 'inapp');
-const worstCase = buildClientDiagnostics({
-  userAgent: '', runtimeMode: null, delegate: null, cameraWidth: 8192, cameraHeight: 8192, analysisFps: 119.99,
-  luma: 254.9, sharpness: 99_999.99, frameErrors: 99_999, warmupMs: 599_999, webBuild: 4_102_444_800, webCommit: 0xfffffff,
-});
-assert.ok((serializeClientDiagnostics(worstCase) ?? '').length < 400, 'largest possible payload is far under 1024 bytes');
-
 // PAD refusal -> checklist (not for the face-too-small / crop errors).
 const padMessage = 'ตรวจพบความเสี่ยงจากภาพถ่ายหรือหน้าจอ กรุณาลองใหม่: หันหน้าเข้าหาแสงสว่าง';
 assert.equal(isPadFailureMessage(padMessage), true);
@@ -664,22 +564,15 @@ for (const word of ['แสง', 'ระดับสายตา', '30–40 ซ�
 const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
 const swSource = readFileSync(new URL('../src/pwa/registerServiceWorker.ts', import.meta.url), 'utf8');
-const banner = readFileSync(new URL('../src/components/TestModeBanner.tsx', import.meta.url), 'utf8');
 assert.match(viteConfig, /registerType: 'autoUpdate'/);
 assert.match(viteConfig, /injectRegister: false/);
 assert.match(viteConfig, /skipWaiting: true/);
 assert.match(viteConfig, /clientsClaim: true/);
-assert.match(viteConfig, /__APP_BUILD__: JSON\.stringify\(appBuild\)/);
 assert.match(mainSource, /registerAppServiceWorker\(\)/);
 assert.match(swSource, /onNeedReload\(\) \{\s*appUpdateGate\.requestReload\(\);/, 'no unconditional reload');
 assert.match(swSource, /visibilitychange/);
 assert.match(swSource, /registration\.update\(\)/);
 assert.match(scanner, /useEffect\(\(\) => holdAppUpdates\(\), \[\]\)/);
-assert.match(scanner, /webBuild: buildNumbers\.web_build/);
-assert.match(scanner, /fallbackClientDiagnostics\(/);
-assert.match(scanner, /buildLabel\(BUILD_INFO\)/);
-assert.match(banner, /buildLabel\(BUILD_INFO\)/);
-assert.match(home, /capture\.clientDiagnostics \?\? fallbackClientDiagnostics\(/);
 assert.match(home, /const holdsPage = attendanceHoldsPage\(\{/);
 assert.match(home, /isPadFailureMessage\(resultMessage\) && <PadRetryChecklist \/>/);
 assert.match(register, /isPadFailureMessage\(errorMsg\)/);
@@ -759,9 +652,6 @@ assert.match(runtime, /broadcast\(\{ type: 'engine', phase: 'switched'/);
 assert.match(scanner, /message\.type === 'engine'/);
 assert.match(scanner, /if \(!engineGuard\.accepts\(observation\.timestampMs\)\) \{ frame\.close\(\); return; \}/);
 assert.match(scanner, /observedTimestamps\.splice\(0\);\s*startedAt = 0;/, 'the attempt timing restarts after a switch');
-// A1. The fps overlay keeps its last numbers once the scan stopped (no "0.0 fps" next to 160 ms).
-assert.match(scanner, /statsTimer = window\.setInterval\(\(\) => \{[\s\S]{0,260}if \(halted \|\| cancelled\) return;/);
-assert.match(scanner, /overallFps: measuredFps\(observedTimestamps\)/);
 
 // B. Move closer: final-frame size +-0.15 (Backend +-0.20), live guide, graceful late-return restart.
 const guideBase = { leftEar: 0.3, rightEar: 0.3, faceWidthRatio: 0.4, yaw: 0, pitch: 0, roll: 0 };

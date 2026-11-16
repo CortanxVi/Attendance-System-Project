@@ -108,10 +108,9 @@ async def fake_keep_alive(*_a):
 class Harness:
     """Patch everything around the endpoint; ``verifier`` decides what the frame check does."""
 
-    def __init__(self, db, verifier, store, test_course=False, user=USER):
+    def __init__(self, db, verifier, store, user=USER):
         self.db, self.store = db, store
         self.verifier_calls = []
-        self.recorded = []
 
         def verify_frames(*args, on_blink_passed=None, **_kwargs):
             self.verifier_calls.append(args[3])
@@ -129,8 +128,6 @@ class Harness:
             patch.object(main, "verify_hybrid_liveness_frames", verify_frames),
             patch.object(main.face_service, "calculate_similarity", return_value=0.9),
             patch.object(main, "finalize_face_attendance", lambda **_k: {"result": "created"}),
-            patch.object(main, "is_test_course", lambda _c: test_course),
-            patch.object(main, "record_face_attempt", lambda **k: self.recorded.append(k)),
             patch.object(main, "action_fallback", store),
             patch.object(ls, "action_fallback", store),
         ]
@@ -259,21 +256,6 @@ class RetryChallengeEndpointTests(unittest.TestCase):
              patch.object(ls, "action_fallback", store):
             self.assertIsNotNone(main._attendance_retry_challenge(CHALLENGE_ID, USER))
             self.assertIsNone(main._attendance_retry_challenge(CHALLENGE_ID, OTHER))  # not their claim / no fallback
-
-    def test_the_test_mode_path_is_the_same_and_logged(self):
-        store = af.ActionFallbackStore()
-        with Harness(FakeDb(), blink_fails, store, test_course=True) as h:
-            token = h.token("blink")
-            h.verify(token)
-            second = h.verify(token)
-            self.assertEqual(second.json()["retry_challenge"]["liveness_action"], "move_closer")
-            stale = h.verify(token)
-            self.assertEqual(stale.status_code, 422)
-            stages = [row["failure_stage"] for row in h.recorded]
-            self.assertEqual(stages, ["blink", "blink", "action_fallback"])
-            done = h.verify(second.json()["retry_challenge"]["liveness_token"])
-            self.assertEqual(done.status_code, 200, done.text)
-            self.assertEqual(h.recorded[-1]["outcome"], "success")
 
     def test_the_client_cannot_choose_the_action(self):
         """The QR step ignores any action the client sends; a forced student always gets move_closer."""

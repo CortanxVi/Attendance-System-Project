@@ -1,8 +1,6 @@
 import axios from 'axios';
 import { apiErrorMessage } from './apiError';
 import type { HybridLivenessAction, HybridLivenessEvidence } from '../utils/liveness';
-import { serializeClientDiagnostics, type ClientDiagnostics } from '../utils/clientDiagnostics';
-import { TEST_MODE } from '../config/testMode';
 import { AttendanceVerifyError, retryChallengeFromBody } from './retryChallenge';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
@@ -42,10 +40,9 @@ export interface EnrollmentLivenessChallenge {
 }
 
 export const faceService = {
-  // studentCardImage เป็น null ได้เฉพาะ build ทดสอบ (ไม่มีขั้นตอน OCR บัตร) ส่วน Backend ปกติจะปฏิเสธ (422)
-  createEnrollmentLivenessChallenge: async (studentCardImage: File | null): Promise<EnrollmentLivenessChallenge> => {
+  createEnrollmentLivenessChallenge: async (studentCardImage: File): Promise<EnrollmentLivenessChallenge> => {
     const formData = new FormData();
-    if (studentCardImage) formData.append('student_card_image', studentCardImage);
+    formData.append('student_card_image', studentCardImage);
     try {
       const response = await axios.post<EnrollmentLivenessChallenge>(
         `${API_BASE_URL}/enrollment/liveness-challenge`,
@@ -119,7 +116,6 @@ export const faceService = {
     challengeId: string,
     livenessToken: string,
     livenessEvidence: HybridLivenessEvidence,
-    clientDiagnostics?: ClientDiagnostics,
   ): Promise<VerifyResponse> => {
     const formData = new FormData();
     passiveImages.forEach((image) => formData.append('liveness_passive_images', image));
@@ -128,11 +124,6 @@ export const faceService = {
     formData.append('challenge_id', challengeId);
     formData.append('liveness_token', livenessToken);
     formData.append('liveness_evidence', JSON.stringify(livenessEvidence));
-    // Test builds only: device summary as its own field (enums/numbers, <= 1024 bytes, no identifiers).
-    if (TEST_MODE && clientDiagnostics) {
-      const diagnosticsJson = serializeClientDiagnostics(clientDiagnostics);
-      if (diagnosticsJson) formData.append('client_diagnostics', diagnosticsJson);
-    }
 
     try {
       const response = await axios.post<VerifyResponse>(

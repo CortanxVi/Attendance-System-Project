@@ -50,8 +50,8 @@ assert.deepEqual(parseRetryChallenge(valid, expected), {
   livenessPromptDelayMs: 900,
 });
 assert.equal(parseRetryChallenge({ ...valid, liveness_action: 'blink' }, expected)?.livenessAction, 'blink');
-// A test-mode claim lasts 4 hours, so a retry with ~3 hours left must be accepted.
-assert.equal(parseRetryChallenge({ ...valid, challenge_ttl_seconds: 3 * 60 * 60 }, expected)?.challengeTtlSeconds, 3 * 60 * 60, 'test-mode TTL accepted');
+// A QR claim lasts at most 600 s (QR_CHALLENGE_SECONDS), so a retry with the full 600 s is accepted.
+assert.equal(parseRetryChallenge({ ...valid, challenge_ttl_seconds: 600 }, expected)?.challengeTtlSeconds, 600, 'longest QR claim accepted');
 assert.ok(parseRetryChallenge({ ...valid, status: undefined, course_code: null, course_name: undefined }, expected), 'optional texts');
 assert.equal(parseRetryChallenge(null, expected), null);
 assert.equal(parseRetryChallenge(undefined, expected), null);
@@ -66,7 +66,7 @@ const invalid: Array<[string, Record<string, unknown>]> = [
   ['expired ttl', { challenge_ttl_seconds: 0 }],
   ['negative ttl', { challenge_ttl_seconds: -5 }],
   ['fractional ttl', { challenge_ttl_seconds: 12.5 }],
-  ['ttl too long', { challenge_ttl_seconds: 4 * 60 * 60 + 1 }],
+  ['ttl too long', { challenge_ttl_seconds: 10 * 60 + 1 }],
   ['ttl as text', { challenge_ttl_seconds: '245' }],
   ['old protocol', { liveness_protocol_version: 3 }],
   ['empty token', { liveness_token: '' }],

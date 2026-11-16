@@ -17,7 +17,6 @@
     "test:camera-quality": "node --experimental-strip-types scripts/test-camera-quality.mts",
     "test:api-origin": "node --experimental-strip-types scripts/test-api-origin.mts",
     "test:session-deadline": "node --experimental-strip-types scripts/test-session-deadline.mts",
-    "test:test-mode": "node --experimental-strip-types scripts/test-test-mode.mts",
     "test:device-support": "node --experimental-strip-types scripts/test-device-support.mts",
     "test:blink-profiles": "node --experimental-strip-types scripts/test-blink-profiles.mts",
     "test:passive-gate": "node --experimental-strip-types scripts/test-passive-gate.mts",

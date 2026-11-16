@@ -5,7 +5,6 @@ import {
   type FaceLandmarkerPoint,
   type LivenessObservation,
 } from '../utils/liveness';
-import { TEST_MODE } from '../config/testMode';
 import {
   RUNTIME_LOAD_MESSAGES,
   RUNTIME_NOT_READY_MESSAGE,
@@ -142,15 +141,9 @@ export function getLastBlendshapeSwitchMs(): number | null {
  * Android phones run the model on the GPU when they can: on slow CPUs the CPU path misses the
  * frame-rate the Backend requires. Everything else keeps the CPU path that is known to work
  * (iOS must stay on it). The worker falls back to the CPU by itself if the GPU path fails.
- * Test builds may force an engine with ?delegate=cpu or ?delegate=gpu to compare them.
  */
 function preferredDelegate(): FaceLandmarkerDelegate {
   tunable = false;
-  if (TEST_MODE) {
-    const forced = new URLSearchParams(window.location.search).get('delegate')?.toLowerCase();
-    if (forced === 'cpu') return 'CPU';
-    if (forced === 'gpu') return 'GPU';
-  }
   const platformDefault = /Android/i.test(navigator.userAgent) ? 'GPU' : 'CPU';
   if (platformDefault !== 'GPU') return platformDefault;
   // Android: the engine this phone measured as faster (see utils/delegateTuner.ts), else measure.

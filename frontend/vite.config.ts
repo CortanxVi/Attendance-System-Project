@@ -3,7 +3,6 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { readFileSync } from 'node:fs'
-import { execSync } from 'node:child_process'
 
 const mobileHttpsEnabled = process.env.DEV_MOBILE_HTTPS === '1'
 const backendPort = process.env.DEV_BACKEND_PORT || '8080'
@@ -14,28 +13,8 @@ const mobileHttps = mobileHttpsEnabled
     }
   : undefined
 
-function gitOutput(command: string): string {
-  try {
-    return execSync(command, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 }).toString().trim()
-  } catch {
-    return ''
-  }
-}
-
-// Identity of this web build (src/config/buildInfo.ts): shown in the test overlay and sent as
-// numbers in test-mode client_diagnostics, so a stale cached PWA build is visible in the data.
-const buildCommit = (process.env.VERCEL_GIT_COMMIT_SHA || gitOutput('git rev-parse --short=7 HEAD')).slice(0, 7)
-const appBuild = {
-  commit: /^[0-9a-f]{7}$/.test(buildCommit) ? buildCommit : 'unknown',
-  dirty: !process.env.VERCEL_GIT_COMMIT_SHA && gitOutput('git status --porcelain --untracked-files=no').length > 0,
-  builtAt: new Date().toISOString(),
-}
-
 // https://vite.dev/config/
 export default defineConfig({
-  define: {
-    __APP_BUILD__: JSON.stringify(appBuild),
-  },
   plugins: [
     react(),
     tailwindcss(),

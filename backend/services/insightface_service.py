@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Second eye-closure measure from the 2d106det landmark model (buffalo_s/2d106det.onnx, pinned in
 # backend/models/insightface-buffalo-s.sha256). It feeds the second blink rule
-# (liveness_frame_service.BLINK_106_*) for every course and for face enrollment, and in test mode
-# it is also recorded for the threshold study. It runs only while LIVENESS_BLINK_106_ENABLED is on
+# (liveness_frame_service.BLINK_106_*) for every course and for face enrollment. It runs only while LIVENESS_BLINK_106_ENABLED is on
 # (default) and only for blink frames (extract_strict_face_observation(with_106=True)). It is
 # loaded lazily on first use, checked against the pinned SHA-256, run on CPU inside the shared
 # inference semaphore, and when the file is missing or wrong it is skipped with ONE warning: the

@@ -32,10 +32,9 @@ function optionalString(value: unknown): boolean {
 }
 
 /** The validated retry challenge for the session/claim on screen, or null. */
-// The server owns the expiry; this is only a sanity bound. Production QR claims last at most 600 s
-// (QR_CHALLENGE_SECONDS is validated to 60-600), but test-mode claims last 4 hours
-// (TEST_CHALLENGE_SECONDS in backend/core/test_mode.py), so the bound must cover both.
-export const MAX_RETRY_TTL_SECONDS = 4 * 60 * 60;
+// The server owns the expiry; this is only a sanity bound. QR claims last at most 600 s
+// (QR_CHALLENGE_SECONDS is validated to 60-600 in backend/core/config.py).
+export const MAX_RETRY_TTL_SECONDS = 10 * 60;
 
 export function parseRetryChallenge(
   raw: unknown,

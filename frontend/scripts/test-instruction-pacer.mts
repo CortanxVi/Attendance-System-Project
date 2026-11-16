@@ -121,7 +121,7 @@ assert.match(frameLoop, /pacer\.tick\(performance\.now\(\)\)/, 'pending text is 
 assert.match(frameLoop, /window\.setInterval\(flushInstruction, INSTRUCTION_FLUSH_MS\)/, 'flushed when frames stop');
 assert.match(frameLoop, /window\.clearInterval\(instructionTimer\)/);
 // Errors never go through the pacer.
-assert.match(frameLoop, /const fail = \(message: string, detail = ''\) => \{\s*if \(cancelled \|\| halted\) return;\s*halted = true;[\s\S]{0,200}setError\(message\);/);
+assert.match(frameLoop, /const fail = \(message: string\) => \{\s*if \(cancelled \|\| halted\) return;\s*halted = true;[\s\S]{0,200}setError\(message\);/);
 // Blink wording.
 assert.match(frameLoop, /monitor\.shortClosureDropped/);
 assert.match(frameLoop, /showHint\(BLINK_TOO_SHORT_MESSAGE\)/);

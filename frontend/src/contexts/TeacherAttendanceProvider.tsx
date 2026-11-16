@@ -8,7 +8,6 @@ import { buildQrPayload, useQrTokenRotation } from '../hooks/useQrTokenRotation'
 import FloatingQrWindow from '../features/teacher/FloatingQrWindow';
 import { apiErrorMessage } from '../services/apiError';
 import { autoCloseDeadlineMs, normalizeLateThresholdMinutes } from '../utils/sessionDeadline';
-import { TEST_MODE } from '../config/testMode';
 
 const AUTO_CLOSE_RETRY_MS = 10_000;
 // setTimeout cannot wait longer than ~24.8 days; cap it so very old sessions still work.
@@ -32,8 +31,7 @@ export function TeacherAttendanceProvider({ children }: { children: ReactNode })
 
   const applyActiveSession = useCallback((session: ActiveTeacherSession | null) => {
     setActiveSession(session);
-    // Test mode keeps the session open until the teacher closes it.
-    setAutoCloseAt(session && !TEST_MODE
+    setAutoCloseAt(session
       ? autoCloseDeadlineMs(session.elapsed_seconds, session.late_threshold_minutes, Date.now())
       : null);
   }, []);
@@ -114,7 +112,7 @@ export function TeacherAttendanceProvider({ children }: { children: ReactNode })
   }, [activeSession, applyActiveSession]);
 
   // --- Shared QR token: rotates while the QR dialog or the floating window is showing ---
-  const qrNeeded = !TEST_MODE && Boolean(activeSession) && (activePanel === 'qr' || pipWindow !== null);
+  const qrNeeded = Boolean(activeSession) && (activePanel === 'qr' || pipWindow !== null);
   const { token: qrToken, error: qrError } = useQrTokenRotation(activeSession?.id ?? null, qrNeeded);
 
   // --- Floating window: only while a session is open ---
@@ -140,7 +138,7 @@ export function TeacherAttendanceProvider({ children }: { children: ReactNode })
   }, [refreshActiveSession]);
 
   const autoCloseSessionId = activeSession?.id ?? null;
-  const autoCloseMinutes = activeSession && !TEST_MODE ? normalizeLateThresholdMinutes(activeSession.late_threshold_minutes) : null;
+  const autoCloseMinutes = activeSession ? normalizeLateThresholdMinutes(activeSession.late_threshold_minutes) : null;
   useEffect(() => {
     if (!autoCloseSessionId || autoCloseAt === null) return;
     let cancelled = false;

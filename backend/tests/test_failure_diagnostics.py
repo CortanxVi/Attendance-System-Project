@@ -21,7 +21,6 @@ os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-t
 
 from services import failure_diagnostics as fd
 from services import liveness_frame_service as lfs
-from services import test_mode_service as tms
 from services.insightface_service import FaceObservation, StrictFaceFailure, face_service
 from services.liveness_service import create_liveness_challenge, verify_liveness_submission
 from services.passive_pad_service import passive_pad_service
@@ -46,7 +45,7 @@ class test_mode_on:
     """Context manager: switch the test-mode suffix on or off for the helper module."""
 
     def __init__(self, enabled: bool):
-        self.patch = patch.object(fd, "ATTENDANCE_TEST_MODE", enabled)
+        self.patch = patch.object(fd, "SHOW_MEASUREMENTS", enabled)
 
     def __enter__(self):
         self.patch.start()
@@ -63,7 +62,7 @@ class HelperTests(unittest.TestCase):
             text = "ข้อความ" + fd.diagnostic("framing_yaw", "เฟรม 2", "yaw +0.21")
         self.assertEqual(fd.failure_code(text), "framing_yaw")
         self.assertIsNone(fd.failure_code("ข้อความธรรมดา"))
-        self.assertEqual(tms.classify_failure(text), "framing_yaw")
+        self.assertEqual(fd.failure_code(text), "framing_yaw")
 
     def test_limit_text(self):
         self.assertEqual(fd.limit(1.056, 1.08, 1.70), "1.06 (เกณฑ์ 1.08–1.70)")
@@ -139,14 +138,14 @@ class DetectMessageTests(unittest.TestCase):
             self.assertIn(phrase, text)
             self.assertIn("ภาพต่อเนื่องลำดับที่ 3 ", text)  # the label is followed by a space
             self.assertNotIn("รหัส", text)
-            self.assertEqual(tms.classify_failure(text), stage)
+            self.assertIsNone(fd.failure_code(text))  # plain text carries no code
             seen.add(text)
         self.assertEqual(len(seen), 4)
 
     def test_unknown_reason_keeps_the_generic_sentence(self):
         text = self.message(None)
         self.assertIn("ต้องพบใบหน้าชัดเจนเพียง 1 คน", text)
-        self.assertEqual(tms.classify_failure(text), "detect")
+        self.assertIsNone(fd.failure_code(text))  # plain text carries no code
 
     def test_test_mode_adds_counts_and_scores(self):
         text = self.message(StrictFaceFailure("detect_multi", 2, (0.9, 0.6)), test_mode=True)
@@ -195,11 +194,11 @@ class FramingTests(unittest.TestCase):
                     text = lfs._framing_message(problem, lfs.FRAMING_PREFIX, "เฟรม 2")
                 self.assertTrue(text.startswith(lfs.FRAMING_PREFIX))
                 self.assertIn(f"[รหัส {code}", text)
-                self.assertEqual(tms.classify_failure(text), code)
+                self.assertEqual(fd.failure_code(text), code)
                 with test_mode_on(False):
                     plain = lfs._framing_message(problem, lfs.FRAMING_PREFIX, "เฟรม 2")
                 self.assertNotIn("รหัส", plain)
-                self.assertEqual(tms.classify_failure(plain), code)
+                self.assertIsNone(fd.failure_code(plain))  # plain text carries no code
 
     def test_the_first_matching_condition_wins_and_numbers_include_the_limit(self):
         with test_mode_on(True):
@@ -212,10 +211,10 @@ class FramingTests(unittest.TestCase):
         with test_mode_on(True):
             text = lfs._framing_message(problem, lfs.RECOVERY_PREFIX, "เฟรมสุดท้าย")
         self.assertTrue(text.startswith(lfs.RECOVERY_PREFIX))
-        self.assertEqual(tms.classify_failure(text), "recovery_pitch")
+        self.assertEqual(fd.failure_code(text), "recovery_pitch")
         with test_mode_on(False):
             plain = lfs._framing_message(problem, lfs.RECOVERY_PREFIX, "เฟรมสุดท้าย")
-        self.assertEqual(tms.classify_failure(plain), "recovery")
+        self.assertIsNone(fd.failure_code(plain))  # plain text carries no code
 
     def test_first_frame_size_and_position(self):
         self.assertIsNone(lfs._first_frame_problem(obs(scale=0.40)))
@@ -227,7 +226,7 @@ class FramingTests(unittest.TestCase):
             with test_mode_on(True):
                 text = lfs._first_frame_problem(candidate)
             self.assertTrue(text.startswith(lfs.FRAMING_PREFIX))
-            self.assertEqual(tms.classify_failure(text), code)
+            self.assertEqual(fd.failure_code(text), code)
             self.assertIn("เฟรม 1", text)
 
     def test_the_whole_verifier_reports_the_pose_that_broke_frame_three(self):
@@ -241,7 +240,7 @@ class FramingTests(unittest.TestCase):
         detail = caught.exception.detail
         self.assertIn("เอียง(roll)", detail)
         self.assertIn("เฟรม 3", detail)
-        self.assertEqual(tms.classify_failure(detail), "framing_roll")
+        self.assertEqual(fd.failure_code(detail), "framing_roll")
 
 
 class MoveCloserTests(unittest.TestCase):
@@ -264,9 +263,9 @@ class MoveCloserTests(unittest.TestCase):
         for code, (action, ratio) in cases.items():
             text = self.problem(action, ratio)
             self.assertIn(f"[รหัส {code}", text)
-            self.assertEqual(tms.classify_failure(text), code)
+            self.assertEqual(fd.failure_code(text), code)
             plain = self.problem(action, ratio, test_mode=False)
-            self.assertEqual(tms.classify_failure(plain), code)
+            self.assertIsNone(fd.failure_code(plain))  # plain text carries no code
             self.assertNotIn("รหัส", plain)
             texts.add(plain)
         self.assertEqual(len(texts), 5)
@@ -294,7 +293,7 @@ class PadMessageTests(unittest.TestCase):
         self.assertIn("0.88/0.57/0.12", detail)
         self.assertIn("ค่ากลาง 0.57 ต่ำสุด 0.12", detail)
         self.assertIn("กฎ median: ค่ากลาง ≥0.60 และต่ำสุด ≥0.30", detail)
-        self.assertEqual(tms.classify_failure(detail), "pad")
+        self.assertEqual(fd.failure_code(detail), "pad")
 
     def test_the_old_rule_reports_its_limit(self):
         from services import passive_pad_service as pps
@@ -308,14 +307,14 @@ class PadMessageTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as caught:
             self.run_pad([[0.0, 2.0]] * 3, False)
         self.assertNotIn("รหัส", caught.exception.detail)
-        self.assertEqual(tms.classify_failure(caught.exception.detail), "pad")
+        self.assertIsNone(fd.failure_code(caught.exception.detail))  # plain text carries no code
 
     def test_a_tiny_face_reports_its_size(self):
         images = [np.zeros((200, 200, 3), dtype=np.uint8)] * 3
         with test_mode_on(True), self.assertRaises(HTTPException) as caught:
             passive_pad_service.assert_live(images, [(10.0, 10.0, 50.0, 60.0)] * 3)
         self.assertIn("40×50", caught.exception.detail)
-        self.assertEqual(tms.classify_failure(caught.exception.detail), "pad_size")
+        self.assertEqual(fd.failure_code(caught.exception.detail), "pad_size")
 
 
 class IdentityAndRateTests(unittest.TestCase):
@@ -324,7 +323,7 @@ class IdentityAndRateTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 lfs._same_person(obs(), obs())
         self.assertIn("0.21 (เกณฑ์ ≥0.35)", caught.exception.detail)
-        self.assertEqual(tms.classify_failure(caught.exception.detail), "same_person")
+        self.assertEqual(fd.failure_code(caught.exception.detail), "same_person")
 
     def evidence_for(self, challenge):
         action = challenge.action
@@ -355,12 +354,12 @@ class IdentityAndRateTests(unittest.TestCase):
     def test_low_fps_reports_the_value_and_the_range(self):
         detail = self.submit(effectiveFps=5.4)
         self.assertIn("5.4 เฟรม/วินาที (เกณฑ์ 8–35)", detail)
-        self.assertEqual(tms.classify_failure(detail), "fps")
+        self.assertEqual(fd.failure_code(detail), "fps")
 
     def test_a_too_long_attempt_reports_its_duration(self):
         detail = self.submit(completedAtMs=35_000)
         self.assertIn("[รหัส duration", detail)
-        self.assertEqual(tms.classify_failure(detail), "duration")
+        self.assertEqual(fd.failure_code(detail), "duration")
 
 
 if __name__ == "__main__":

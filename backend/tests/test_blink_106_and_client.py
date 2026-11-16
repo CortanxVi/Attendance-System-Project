@@ -23,11 +23,9 @@ os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-two-characters")
 
-from services import attempt_diagnostics as ad
 from services import failure_diagnostics as fd
 from services import insightface_service as ins
 from services import liveness_frame_service as lfs
-from services import test_mode_service as tms
 from services.insightface_service import FaceObservation
 from services.passive_pad_service import passive_pad_service
 
@@ -56,8 +54,7 @@ class mode:
 
     def __init__(self, test_mode: bool, rule: bool = True):
         self.patches = [
-            patch.object(fd, "ATTENDANCE_TEST_MODE", test_mode),
-            patch.object(ad, "ATTENDANCE_TEST_MODE", test_mode),
+            patch.object(fd, "SHOW_MEASUREMENTS", test_mode),
             patch.object(lfs, "LIVENESS_BLINK_106_ENABLED", rule),
             patch.object(ins, "LIVENESS_BLINK_106_ENABLED", rule),
         ]
@@ -65,12 +62,11 @@ class mode:
     def __enter__(self):
         for item in self.patches:
             item.start()
-        return ad.begin()
+        return None
 
     def __exit__(self, *exc):
         for item in self.patches:
             item.stop()
-        ad.end()
 
 
 def values_106(closed_l, closed_r, back_l=1.0, back_r=1.0):
@@ -119,10 +115,6 @@ class Blink106RuleTests(unittest.TestCase):
                 with self.subTest(mode=label, case=name), mode(test_mode) as collector:
                     ol, orr, action, recovery, v106 = real_case(case)
                     self.assertIsNone(lfs.blink_aperture_problem(ol, orr, action, recovery, v106))
-                    if test_mode:
-                        self.assertEqual(collector.snapshot()["blink"]["blink_rule"], "106")
-                    else:
-                        self.assertIsNone(collector)  # nothing recorded in production
 
     def test_kill_switch_off_uses_the_68_point_rule_only(self):
         for label, test_mode in BOTH_MODES:
@@ -132,8 +124,6 @@ class Blink106RuleTests(unittest.TestCase):
                     problem = lfs.blink_aperture_problem(ol, orr, action, recovery, v106)
                     self.assertIsNotNone(problem)
                     self.assertNotIn("กฎ106", problem)
-                    if test_mode:
-                        self.assertEqual(collector.snapshot()["blink"]["rule_106"], "off")
 
     def test_production_failure_text_has_no_numbers(self):
         with mode(False):
@@ -146,7 +136,6 @@ class Blink106RuleTests(unittest.TestCase):
     def test_a_68_point_pass_is_recorded_as_rule_68(self):
         with mode(True) as collector:
             self.assertIsNone(lfs.blink_aperture_problem(0.30, 0.30, obs(0.10), obs(0.30), values_106(0.9, 0.9)))
-            self.assertEqual(collector.snapshot()["blink"]["blink_rule"], "68")
 
     def test_a_static_photo_never_passes(self):
         for label, test_mode in BOTH_MODES:
@@ -183,7 +172,6 @@ class Blink106RuleTests(unittest.TestCase):
             self.assertIsNotNone(lfs.blink_aperture_problem(ol, orr, action, recovery, None))
             partial = dict(v106, closed_right_106=None)
             self.assertIsNotNone(lfs.blink_aperture_problem(ol, orr, action, recovery, partial))
-            self.assertEqual(collector.snapshot()["blink"]["rule_106"], "missing")
             # The 68-point rule alone still passes a clear blink without 106 values.
             self.assertIsNone(lfs.blink_aperture_problem(0.30, 0.30, obs(0.10), obs(0.30), None))
 
@@ -202,9 +190,6 @@ class Blink106RuleTests(unittest.TestCase):
                 self.assertIsNotNone(problem)
                 self.assertIn(f"กฎ106 ไม่ผ่าน:{reason}", problem)
                 self.assertEqual(fd.failure_code(problem), "blink")
-                self.assertEqual(tms.classify_failure(problem), "blink")
-                blink = collector.snapshot()["blink"]
-                self.assertEqual((blink["blink_rule"], blink["rule_106"]), ("none", reason))
         with mode(True):
             self.assertIsNone(lfs.blink_aperture_problem(ol, orr, action, recovery, values_106(0.50, 0.50, 0.70, 0.70)))
 
@@ -247,10 +232,9 @@ class Blink106VerifierTests(unittest.TestCase):
         # every blink frame asks for the 106-point measure
         self.assertEqual([c.kwargs.get("with_106") for c in self.extract_calls], [True] * 5)
 
-    def test_real_shape_passes_end_to_end_in_test_mode(self):
-        snap, error = self.run_verifier(self.sequence(), True)
+    def test_real_shape_passes_end_to_end_with_measurements(self):
+        _snap, error = self.run_verifier(self.sequence(), True)
         self.assertIsNone(error)
-        self.assertEqual(snap["blink"]["blink_rule"], "106")
 
     def test_kill_switch_off_fails_the_real_shape(self):
         _snap, error = self.run_verifier(self.sequence(), False, rule=False)
@@ -275,9 +259,8 @@ class Blink106VerifierTests(unittest.TestCase):
 
     def test_without_106_values_the_verifier_uses_the_68_point_rule(self):
         seq = [replace(o, left_eye_aperture_106=None, right_eye_aperture_106=None) for o in self.sequence()]
-        snap, error = self.run_verifier(seq, True)
+        _snap, error = self.run_verifier(seq, True)
         self.assertIsNotNone(error)
-        self.assertEqual(snap["blink"]["rule_106"], "missing")
         self.assertLessEqual(len(error.detail), fd.MAX_REASON_CHARS)
 
     def test_a_failed_tag_with_106_numbers_fits_the_column(self):
@@ -297,13 +280,6 @@ class Landmark106ProductionTests(unittest.TestCase):
     def tearDown(self):
         fs = ins.face_service
         fs._landmark_106, fs._landmark_106_unavailable, fs._model_root = self.saved
-
-    def test_production_runs_the_model_without_a_collector(self):
-        model = MagicMock()
-        model.get.return_value = np.zeros((106, 2), dtype=np.float32)
-        with patch.object(ins.face_service, "_landmark_106_model", return_value=model), mode(False):
-            ins.face_service._eye_apertures_106(np.zeros((10, 10, 3), np.uint8), object())
-        model.get.assert_called_once()
 
     def test_kill_switch_off_never_loads_or_runs_the_model(self):
         loader = MagicMock()
@@ -592,108 +568,6 @@ GOOD_CLIENT = {
     "camera_w": 640, "camera_h": 480, "analysis_fps": 9.4, "luma": 112.5,
     "sharpness": 38.2, "frame_errors": 0, "warmup_ms": 1830,
 }
-
-
-class ClientDiagnosticsTests(unittest.TestCase):
-    def test_valid_object_is_kept(self):
-        self.assertEqual(ad.sanitise_client(json.dumps(GOOD_CLIENT)), GOOD_CLIENT)
-
-    def test_unknown_enum_values_fall_back(self):
-        clean = ad.sanitise_client({"platform": "windows-phone", "browser": "Chrome", "delegate": "npu"})
-        self.assertEqual(clean, {"platform": "other", "browser": "other", "delegate": "unknown"})
-
-    def test_unknown_keys_text_and_ids_are_dropped(self):
-        raw = dict(GOOD_CLIENT, user_agent="Mozilla/5.0 ...", email="a@b.c", student_id="6500000000",
-                   nested={"x": 1})
-        clean = ad.sanitise_client(raw)
-        self.assertEqual(set(clean), set(GOOD_CLIENT))
-
-    def test_numbers_are_finite_and_clamped(self):
-        clean = ad.sanitise_client({
-            "camera_w": 99999, "camera_h": -5, "analysis_fps": 1e9, "luma": "bright",
-            "sharpness": None, "frame_errors": True, "warmup_ms": 12.7,
-        })
-        self.assertEqual(clean, {"camera_w": 8192, "camera_h": 0, "analysis_fps": 120, "warmup_ms": 13})
-        self.assertIsNone(ad.sanitise_client('{"analysis_fps": NaN, "luma": Infinity}'))
-
-    def test_bad_input_is_ignored(self):
-        # The cap counts UTF-8 bytes: 400 Thai characters are 1200 bytes.
-        for raw in ("not json", "[1,2]", "", json.dumps(GOOD_CLIENT) + " " * 2000, 42, None,
-                    json.dumps(dict(GOOD_CLIENT, pad="ก" * 400), ensure_ascii=False)):
-            with self.subTest(raw=str(raw)[:20]):
-                self.assertIsNone(ad.sanitise_client(raw))
-
-    def test_recorded_under_client_in_test_mode_within_the_cap(self):
-        with mode(True) as collector:
-            ad.record_client(json.dumps(GOOD_CLIENT))
-            ad.record("pad", {"live": [0.9, 0.8, 0.7]})
-            snap = collector.snapshot()
-        self.assertEqual(snap["client"], GOOD_CLIENT)
-        self.assertLessEqual(ad.json_size(snap), ad.MAX_JSON_BYTES)
-
-    def test_ignored_outside_test_mode(self):
-        with mode(False) as collector:
-            self.assertIsNone(collector)
-            with patch.object(ad, "sanitise_client") as sanitiser:
-                ad.record_client(json.dumps(GOOD_CLIENT))
-            sanitiser.assert_not_called()
-
-    def test_endpoint_field_is_optional_and_only_parsed_in_test_mode(self):
-        import main
-
-        signature = inspect.signature(main.verify_hybrid_face_attendance)
-        field = signature.parameters["client_diagnostics"]
-        self.assertIsNone(field.default.default)  # Form(None): optional, old clients unaffected
-        source = inspect.getsource(main.verify_hybrid_face_attendance)
-        self.assertIn("if diagnostics_collector is not None:\n        attempt_diagnostics.record_client", source)
-        schema = main.app.openapi()
-        body = schema["paths"]["/api/v1/attendance/verify"]["post"]["requestBody"]["content"]["multipart/form-data"]
-        component = schema["components"]["schemas"][body["schema"]["$ref"].rsplit("/", 1)[-1]]
-        self.assertIn("client_diagnostics", component["properties"])
-        self.assertNotIn("client_diagnostics", component.get("required", []))
-        self.assertIn("liveness_evidence", component["required"])
-
-
-class AnalyzeAttemptsScriptTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        import importlib.util
-        import sys
-        from pathlib import Path
-
-        path = Path(__file__).resolve().parents[2] / "scripts" / "analyze_attempts.py"
-        spec = importlib.util.spec_from_file_location("analyze_attempts", path)
-        cls.script = importlib.util.module_from_spec(spec)
-        sys.modules.setdefault("analyze_attempts", cls.script)
-        spec.loader.exec_module(cls.script)
-
-    def test_blink_constants_match_the_backend(self):
-        self.assertEqual(self.script.BLINK_RECOVERY_RATIO, lfs.BLINK_RECOVERY_RATIO)
-        self.assertEqual(self.script.BLINK_106_CLOSED_RATIO_MAX, lfs.BLINK_106_CLOSED_RATIO_MAX)
-        self.assertEqual(self.script.BLINK_106_68_CEILING, lfs.BLINK_106_68_CEILING)
-        self.assertEqual(self.script.BLINK_106_MIN_OPEN_BASE, lfs.BLINK_106_MIN_OPEN_BASE)
-        self.assertEqual(self.script.BLINK_106_RECOVERY_RATIO, lfs.BLINK_106_RECOVERY_RATIO)
-
-    def test_report_holds_numbers_only(self):
-        blink = {"closed_left": 0.79, "closed_right": 0.74, "limit_left": 0.78, "limit_right": 0.78,
-                 "back_left": 1.02, "back_right": 0.97, "closed_left_106": 0.49, "closed_right_106": 0.47,
-                 "back_left_106": 1.01, "back_right_106": 1.01}
-        rows = [
-            {"id": "row-uuid-1", "student_id": "student-uuid-1", "tester": "T9", "created_at": "2026-11-15T02:43:12+00:00",
-             "outcome": "failed", "failure_stage": "blink", "failure_reason": "secret text", "liveness_action": "blink",
-             "app_version": "build-xyz", "similarity_score": None,
-             "diagnostics": {"pad": {"live": [0.4, 0.9, 0.95]}, "timing": {"fps": 9.1, "duration_ms": 8000},
-                             "reference": {"width": 0.5, "det": 0.8}, "blink": blink,
-                             "client": dict(GOOD_CLIENT)}},
-            {"id": "row-uuid-2", "outcome": "success", "liveness_action": "move_closer", "similarity_score": 0.7,
-             "created_at": "2026-11-15T02:44:00+00:00", "diagnostics": json.dumps({"pad": {"live": [0.9, 0.9, 0.9]}})},
-        ]
-        report = self.script.build_report(rows)
-        for forbidden in ("row-uuid", "student-uuid", "T9", "2026-11-15", "secret text", "build-xyz"):
-            self.assertNotIn(forbidden, report)
-        self.assertIn("platform  android", report)
-        self.assertIn("refused 1/2", report)  # min rule refuses the 0.4 frame
-        self.assertIn("106", report)
 
 
 if __name__ == "__main__":

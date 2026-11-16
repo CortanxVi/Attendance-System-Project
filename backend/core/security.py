@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from core.config import ATTENDANCE_TEST_EXTERNAL_EMAIL, supabase_db
+from core.config import supabase_db
 from services.temporary_admin_service import extract_verified_session_id, load_valid_grant
 from services.student_year_service import (
     derive_admission_year,
@@ -47,19 +47,9 @@ def is_allowed_kmutnb_email(email: str | None) -> bool:
     return bool(email and KMUTNB_EMAIL_PATTERN.fullmatch(email.strip()))
 
 
-# Any well-formed address, accepted only while the test-only external e-mail switch is on.
-EXTERNAL_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
 def is_allowed_login_email(email: str | None) -> bool:
-    """University addresses always pass; other addresses only in the test-only mode."""
-    if is_allowed_kmutnb_email(email):
-        return True
-    return bool(
-        ATTENDANCE_TEST_EXTERNAL_EMAIL
-        and email
-        and EXTERNAL_EMAIL_PATTERN.fullmatch(email.strip())
-    )
+    """Only KMUTNB Google accounts may sign in."""
+    return is_allowed_kmutnb_email(email)
 
 
 def trusted_google_avatar_url(user_metadata: object) -> str | None:

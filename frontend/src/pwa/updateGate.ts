@@ -61,7 +61,6 @@ export class ReloadGate {
 
 /** How often an open page asks the server for a new build (also checked whenever it becomes visible). */
 export const UPDATE_CHECK_EVERY_MS = 5 * 60_000;
-export const TEST_UPDATE_CHECK_EVERY_MS = 60_000;
 
 /** The app-wide gate (the reload callback only runs in a browser, when it fires). */
 export const appUpdateGate = new ReloadGate(() => window.location.reload());

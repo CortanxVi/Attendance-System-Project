@@ -24,11 +24,9 @@ os.environ.setdefault("SUPABASE_KEY", "test-server-key")
 os.environ.setdefault("OCR_SERVICE_TOKEN", "unit-test-key-with-at-least-thirty-two-characters")
 
 from core import config
-from services import attempt_diagnostics as ad
 from services import failure_diagnostics as fd
 from services import liveness_frame_service as lfs
 from services import passive_pad_service as pps
-from services import test_mode_service as tms
 from services.insightface_service import FaceObservation
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -67,18 +65,16 @@ def old_rule(logits):
 
 class test_mode:
     def __init__(self, enabled):
-        self.patches = [patch.object(fd, "ATTENDANCE_TEST_MODE", enabled),
-                        patch.object(ad, "ATTENDANCE_TEST_MODE", enabled)]
+        self.patches = [patch.object(fd, "SHOW_MEASUREMENTS", enabled)]
 
     def __enter__(self):
         for item in self.patches:
             item.start()
-        return ad.begin()
+        return None
 
     def __exit__(self, *exc):
         for item in self.patches:
             item.stop()
-        ad.end()
 
 
 def run_assert_live(logits, enabled=False):
@@ -167,14 +163,14 @@ class PadMessageAndDiagnosticsTests(unittest.TestCase):
         error, snap = run_assert_live(to_logits((0.07, 0.68, 0.63)), enabled=False)
         detail = error.detail
         self.assertIsNone(snap)
-        self.assertTrue(detail.startswith("ตรวจพบความเสี่ยงจากภาพถ่ายหรือหน้าจอ"))  # classifier marker
-        self.assertEqual(tms.classify_failure(detail), "pad")
+        self.assertTrue(detail.startswith("ตรวจพบความเสี่ยงจากภาพถ่ายหรือหน้าจอ"))
+        self.assertIsNone(fd.failure_code(detail))
         for advice in ("แสงสว่าง", "ระดับสายตา", "30–40 ซม.", "นิ่ง", "เลนส์", "Chrome", "Safari", "ในแอป"):
             self.assertIn(advice, detail)
         self.assertNotIn("รหัส", detail)
         self.assertNotIn("0.6", detail)
 
-    def test_test_mode_tag_and_diagnostics(self):
+    def test_measurement_tag(self):
         error, snap = run_assert_live(to_logits((0.51, 0.33, 0.93)), enabled=True)
         detail = error.detail
         self.assertEqual(fd.failure_code(detail), "pad")
@@ -182,18 +178,6 @@ class PadMessageAndDiagnosticsTests(unittest.TestCase):
         self.assertIn("ค่ากลาง 0.51 ต่ำสุด 0.33", detail)
         self.assertIn("กฎ median: ค่ากลาง ≥0.60 และต่ำสุด ≥0.30", detail)
         self.assertLessEqual(len(detail), fd.MAX_REASON_CHARS)
-        pad = snap["pad"]
-        self.assertEqual((pad["rule"], pad["median_threshold"], pad["floor"], pad["threshold"]),
-                         ("median", 0.6, 0.3, 0.6))
-        self.assertEqual(pad["all_frames_threshold"], 0.65)
-        self.assertIs(pad["passed"], False)
-        _error, snap = run_assert_live(to_logits((0.55, 0.77, 0.71)), enabled=True)
-        self.assertIs(snap["pad"]["passed"], True)
-        with patch.object(pps, "LIVENESS_PAD_RULE", "all_frames"):
-            _error, snap = run_assert_live(to_logits((0.55, 0.77, 0.71)), enabled=True)
-        self.assertEqual(snap["pad"]["rule"], "all_frames")
-        self.assertEqual(snap["pad"]["threshold"], 0.65)
-        self.assertIs(snap["pad"]["passed"], False)
 
 
 def obs(scale=0.40):
@@ -287,19 +271,6 @@ class PadSettingsValidationTests(unittest.TestCase):
         ):
             with self.subTest(extra=extra):
                 self.assertIn(message, self.preflight(extra))
-
-    def test_analysis_script_mirrors_the_production_rule(self):
-        import importlib.util
-
-        path = PROJECT_ROOT / "scripts" / "analyze_attempts.py"
-        spec = importlib.util.spec_from_file_location("analyze_attempts_pad", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules.setdefault("analyze_attempts_pad", module)
-        spec.loader.exec_module(module)
-        self.assertEqual(module.PAD_MEDIAN_THRESHOLD, config.LIVENESS_PAD_MEDIAN_THRESHOLD)
-        self.assertEqual(module.PAD_MIN_FRAME_FLOOR, config.LIVENESS_PAD_MIN_FRAME_FLOOR)
-        self.assertEqual(module.PAD_THRESHOLD, config.LIVENESS_PAD_THRESHOLD)
-
 
 if __name__ == "__main__":
     unittest.main()

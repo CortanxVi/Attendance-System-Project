@@ -2,16 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
 import FaceScanPrepGate from './FaceScanPrepGate';
-import TestModePanel from './TestModePanel';
-import { TEST_MODE } from '../../config/testMode';
 import { faceService } from '../../services/api';
 import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
 import { ArrowRight, Camera, CheckCircle, Loader2, QrCode, RotateCw, ScanFace, ShieldCheck, UserCheck, XCircle } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import type { HybridLivenessAction, HybridLivenessEvidence } from '../../utils/liveness';
-import { fallbackClientDiagnostics, type ClientDiagnostics } from '../../utils/clientDiagnostics';
-import { BUILD_INFO, buildDiagnostics } from '../../config/buildInfo';
 import { holdAppUpdates } from '../../pwa/registerServiceWorker';
 import { attendanceHoldsPage } from '../../pwa/updateGate';
 import { isPadFailureMessage } from '../../utils/padFailure';
@@ -49,8 +45,6 @@ export default function StudentHome() {
   const [capturedActionData, setCapturedActionData] = useState<string | null>(null);
   const [capturedRecoveryData, setCapturedRecoveryData] = useState<string | null>(null);
   const [livenessEvidence, setLivenessEvidence] = useState<HybridLivenessEvidence | null>(null);
-  // Test builds only (the scanner fills it only when TEST_MODE is on).
-  const [clientDiagnostics, setClientDiagnostics] = useState<ClientDiagnostics | null>(null);
   
   // สถานะการส่งข้อมูล
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -98,21 +92,13 @@ export default function StudentHome() {
     setLivenessPromptDelayMs(info.livenessPromptDelayMs);
   };
 
-  // Test mode only: the QR step is replaced by a direct start from the session list.
-  const handleTestChallenge = (info: VerifiedSessionInfo) => {
-    handleVerifySuccess(info);
-    setIsLivenessActive(true);
-  };
-
-  // Test mode only: forget the previous attempt so the next press asks for a fresh
-  // random liveness action (blink or move closer).
+  // Forget the previous attempt so the next press uses a fresh liveness challenge.
   const clearCapture = () => {
     setCapturedFaceData(null);
     setCapturedPassiveData(null);
     setCapturedActionData(null);
     setCapturedRecoveryData(null);
     setLivenessEvidence(null);
-    setClientDiagnostics(null);
   };
 
   const resetAttempt = () => {
@@ -129,7 +115,6 @@ export default function StudentHome() {
     setCapturedActionData(null);
     setCapturedRecoveryData(null);
     setLivenessEvidence(null);
-    setClientDiagnostics(null);
   };
 
   const closeQrScanner = useCallback(() => {
@@ -139,7 +124,7 @@ export default function StudentHome() {
 
   const handleFaceCapture = (capture: LivenessCapture) => {
     if (capture.mode !== 'hybrid') {
-      setResultMessage(TEST_MODE ? 'รูปแบบ Liveness ไม่ตรงกับ Challenge กรุณาเริ่มสแกนใหม่' : 'รูปแบบ Liveness ไม่ตรงกับ Challenge กรุณาสแกน QR ใหม่');
+      setResultMessage('รูปแบบ Liveness ไม่ตรงกับ Challenge กรุณาสแกน QR ใหม่');
       setFinalResult('failed');
       setIsLivenessActive(false);
       return;
@@ -150,9 +135,6 @@ export default function StudentHome() {
     setCapturedRecoveryData(capture.recoveryImageSrc);
     setLivenessEvidence(capture.evidence);
     // Test builds always send the field: a capture without it gets the enum-only fallback.
-    setClientDiagnostics(TEST_MODE
-      ? capture.clientDiagnostics ?? fallbackClientDiagnostics(navigator.userAgent, navigator.maxTouchPoints, navigator.platform, buildDiagnostics(BUILD_INFO))
-      : null);
     setIsLivenessActive(false);
   };
 
@@ -182,7 +164,6 @@ export default function StudentHome() {
         challengeId,
         livenessToken,
         livenessEvidence,
-        clientDiagnostics ?? undefined,
       );
 
       // 3. สำเร็จ — เก็บข้อมูลจากหลังบ้านเพื่อแสดงผล
@@ -242,18 +223,6 @@ export default function StudentHome() {
           )}
           {resultScore !== null && <p className="text-sm text-gray-500">คะแนนความเหมือน: {resultScore}</p>}
           {resultCheckInTime && <p className="mt-1 text-sm text-gray-500">เวลาเช็คชื่อ: {new Date(resultCheckInTime).toLocaleString('th-TH')}</p>}
-          {TEST_MODE && (
-            <>
-              <p className="mt-3 text-xs text-gray-500">ผลนี้ถูกบันทึกในตารางผลทดสอบ ไม่ใช่ตารางเช็คชื่อจริง จึงเช็คชื่อซ้ำได้ไม่จำกัด</p>
-              <button
-                type="button"
-                onClick={() => { setFinalResult(null); setResultMessage(''); resetAttempt(); }}
-                className="mt-4 min-h-11 cursor-pointer rounded-lg bg-green-600 px-6 font-bold text-white hover:bg-green-700"
-              >
-                เช็คชื่ออีกครั้ง
-              </button>
-            </>
-          )}
         </div>
       ) : finalResult === 'failed' ? (
         /* หน้าจอสุดท้าย: ไม่สำเร็จ */
@@ -271,8 +240,6 @@ export default function StudentHome() {
                  // Same claim, new token: back to "start face scan" without the used capture.
                  clearCapture();
                  setIsLivenessActive(true);
-               } else if (TEST_MODE) {
-                 resetAttempt();
                } else if (retryNote) {
                  // The claim ran out meanwhile: a new QR scan is needed.
                  resetAttempt();
@@ -304,7 +271,6 @@ export default function StudentHome() {
                setCapturedActionData(null);
                setCapturedRecoveryData(null);
                setLivenessEvidence(null);
-    setClientDiagnostics(null);
              }}
              disabled={isSubmitting}
              className="w-full mt-3 text-sm text-gray-500 hover:text-gray-700 underline"
@@ -327,7 +293,7 @@ export default function StudentHome() {
           <h2 className="text-xl font-bold text-green-700 mb-2">เข้าสู่ห้องเรียน {verifiedCourse} แล้ว</h2>
           <div className="mx-auto my-4 flex size-16 items-center justify-center rounded-full bg-white text-green-700 shadow-sm"><ScanFace size={32} /></div>
           <p className="mb-4 text-sm leading-6 text-gray-600">ขั้นตอนต่อไปสแกนใบหน้าเพียงอย่างเดียว ไม่ต้องถ่ายหรืออัปโหลดบัตรนักศึกษา</p>
-          {challengeExpiresAt && !TEST_MODE && (
+          {challengeExpiresAt && (
             <p className="mb-3 text-xs text-gray-500">
               สิทธิ์จาก QR ใช้ลองสแกนซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
               {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 30 วินาที
@@ -347,13 +313,7 @@ export default function StudentHome() {
       ) : (
         /* หน้าจอเริ่มต้น */
         <div className="flex flex-col gap-4">
-          {TEST_MODE && (
-            <TestModePanel
-              disabled={faceRuntime.status !== 'ready'}
-              onChallenge={handleTestChallenge}
-            />
-          )}
-          <section hidden={TEST_MODE} className="overflow-hidden rounded-3xl bg-slate-900 text-white shadow-lg shadow-slate-900/10">
+          <section className="overflow-hidden rounded-3xl bg-slate-900 text-white shadow-lg shadow-slate-900/10">
             <div className="px-[clamp(1rem,5vw,1.5rem)] pb-5 pt-6">
               <p className="text-xs font-bold tracking-wide text-orange-300">DYNAMIC QR CHECK-IN</p>
               <h2 className="mt-2 text-[clamp(1.35rem,6vw,1.75rem)] font-black leading-tight">สแกน QR หน้าห้องเรียน</h2>
@@ -417,7 +377,7 @@ export default function StudentHome() {
                 </p>
                 <p className="mt-0.5 text-xs opacity-80">
                   {faceRuntime.status === 'ready'
-                    ? (TEST_MODE ? 'พร้อมเริ่มตรวจใบหน้าได้ทันที' : 'สามารถสแกน QR แล้วเริ่มตรวจใบหน้าได้ทันที')
+                    ? 'สามารถสแกน QR แล้วเริ่มตรวจใบหน้าได้ทันที'
                     : faceRuntime.status === 'error'
                       ? faceRuntime.error
                       : 'ครั้งแรกอาจต้องดาวน์โหลดประมาณ 15 MB ระบบจะเปิดปุ่มสแกน QR เมื่อโมเดลพร้อม'}

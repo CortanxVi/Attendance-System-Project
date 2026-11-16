@@ -1,9 +1,7 @@
 /// <reference types="vite-plugin-pwa/client" />
 import { registerSW } from 'virtual:pwa-register';
-import { TEST_MODE } from '../config/testMode';
 import {
   CHUNK_RELOAD_KEY,
-  TEST_UPDATE_CHECK_EVERY_MS,
   UPDATE_CHECK_EVERY_MS,
   appUpdateGate,
   shouldReloadAfterChunkError,
@@ -68,7 +66,7 @@ export function registerAppServiceWorker(): void {
         if (navigator.onLine === false || registration.installing) return;
         void registration.update().catch(() => undefined);
       };
-      window.setInterval(check, TEST_MODE ? TEST_UPDATE_CHECK_EVERY_MS : UPDATE_CHECK_EVERY_MS);
+      window.setInterval(check, UPDATE_CHECK_EVERY_MS);
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') check();
       });
