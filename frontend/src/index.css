@@ -300,3 +300,41 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 } */
+
+/* Face-registration reminder: the profile row the person must use blinks for a few seconds. */
+.attention-blink {
+  position: relative;
+  border-radius: 0.75rem;
+  animation: attention-blink 1s ease-in-out 6;
+  box-shadow: inset 0 0 0 3px #f97316;
+}
+
+@keyframes attention-blink {
+  0%,
+  100% {
+    background-color: #fff7ed;
+    box-shadow: inset 0 0 0 3px #f97316;
+  }
+
+  50% {
+    background-color: #fed7aa;
+    box-shadow: inset 0 0 0 3px #c2410c;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attention-blink {
+    animation: none;
+    background-color: #fff7ed;
+  }
+}
+
+/* Bottom sheets (course session detail): slide up with a soft scrim; motion-safe only. */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes sheet-fade {
+  from { background-color: rgb(2 6 23 / 0); }
+}

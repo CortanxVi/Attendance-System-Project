@@ -2,6 +2,7 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { BookOpen, Home, History, User } from 'lucide-react'; // ใช้ไอคอนจาก lucide-react
 import AppBackButton from '../navigation/AppBackButton';
+import FaceRegistrationReminder from '../../features/student/FaceRegistrationReminder';
 
 export default function StudentLayout() {
   const navigate = useNavigate();
@@ -32,6 +33,8 @@ export default function StudentLayout() {
         
         {/* พื้นที่สำหรับแสดงเนื้อหาหน้าต่างๆ (เช่น กล้อง, ประวัติ) */}
         <main id="student-scroll-region" className="student-content-scroll" tabIndex={-1}>
+          {/* Shown while the account has no registered face (hidden on the profile/register pages). */}
+          <FaceRegistrationReminder />
           <Outlet /> 
         </main>
 

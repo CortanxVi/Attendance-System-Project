@@ -5,8 +5,10 @@ import App from './App.tsx'
 import { installAuthInterceptor } from './services/http.ts'
 import { NotificationProvider } from './components/notifications/NotificationProvider.tsx'
 import { TemporaryAdminProvider } from './contexts/TemporaryAdminContext.tsx'
+import { registerAppServiceWorker } from './pwa/registerServiceWorker.ts'
 
 installAuthInterceptor()
+registerAppServiceWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

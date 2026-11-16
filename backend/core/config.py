@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 import re
@@ -5,6 +6,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
+
 
 # Resolve the environment file from this module so startup works from the
 # repository root and from the backend directory on every supported Linux OS.
@@ -24,8 +26,62 @@ OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:3001").rstrip("
 OCR_TIMEOUT_SECONDS = float(os.getenv("OCR_TIMEOUT_SECONDS", "42"))
 OCR_SERVICE_TOKEN = os.getenv("OCR_SERVICE_TOKEN", "")
 LIVENESS_SIGNING_KEY = os.getenv("LIVENESS_SIGNING_KEY", "")
-LIVENESS_PAD_THRESHOLD = float(os.getenv("LIVENESS_PAD_THRESHOLD", "0.65"))
+# Passive PAD (services/passive_pad_service.py) turns 3 per-frame live probabilities into one
+# decision. Owner decision 2026-11-15:
+#   "median"     (default): median of the 3 >= LIVENESS_PAD_MEDIAN_THRESHOLD AND every frame
+#                >= LIVENESS_PAD_MIN_FRAME_FLOOR. On 42 genuine scans (all real people) it refused
+#                11/42 versus 16/42 for the old rule. NO consented attack data exists yet, so its
+#                false-accept rate is unknown; revisit with scripts/evaluate_pad_roc.py once there is.
+#   "all_frames" (kill switch, the old rule): every frame >= LIVENESS_PAD_THRESHOLD.
+def _float_setting(name: str, default: str) -> float:
+    """Strict float setting: unset or blank gives ``default``; text fails startup."""
+
+    raw = (os.getenv(name) or "").strip() or default
+    try:
+        return float(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} must be a number") from None
+
+
+LIVENESS_PAD_THRESHOLD = _float_setting("LIVENESS_PAD_THRESHOLD", "0.65")
+PAD_RULES = ("median", "all_frames")
+LIVENESS_PAD_RULE = (os.getenv("LIVENESS_PAD_RULE") or "").strip().lower() or "median"
+LIVENESS_PAD_MEDIAN_THRESHOLD = _float_setting("LIVENESS_PAD_MEDIAN_THRESHOLD", "0.60")
+LIVENESS_PAD_MIN_FRAME_FLOOR = _float_setting("LIVENESS_PAD_MIN_FRAME_FLOOR", "0.30")
 LIVENESS_PAD_CONCURRENCY = int(os.getenv("LIVENESS_PAD_CONCURRENCY", "2"))
+# Second blink rule from the InsightFace 2d106det eye landmarks (buffalo_s/2d106det.onnx):
+# a blink also passes when the 106-point measure shows both eyes clearly closed and reopened while
+# the 68-point measure stays below a photo ceiling (services/liveness_frame_service.py BLINK_106_*).
+# Default on (owner decision 2026-11-15). "0"/"false"/"no"/"off" is the kill switch: the rule AND
+# the 2d106det inference are both turned off, leaving the 68-point rule alone.
+def parse_on_off_setting(name: str, raw: str | None, default: bool) -> bool:
+    """Strict on/off parser: 1/true/yes/on or 0/false/no/off (any case); unset or blank gives
+    ``default``; anything else fails startup."""
+
+    value = (raw or "").strip().lower() or ("true" if default else "false")
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be true or false (1/0, yes/no, on/off)")
+
+
+def validate_pad_rule_settings(rule: str, median_threshold: float, floor: float) -> None:
+    """Startup check of the PAD rule settings: known rule, finite values, 0 < floor <= median < 1."""
+
+    if rule not in PAD_RULES:
+        raise RuntimeError("LIVENESS_PAD_RULE must be median or all_frames")
+    if not all(math.isfinite(value) for value in (median_threshold, floor)):
+        raise RuntimeError("LIVENESS_PAD_MEDIAN_THRESHOLD and LIVENESS_PAD_MIN_FRAME_FLOOR must be numbers")
+    if not 0 < floor <= median_threshold < 1:
+        raise RuntimeError(
+            "PAD settings must satisfy 0 < LIVENESS_PAD_MIN_FRAME_FLOOR <= LIVENESS_PAD_MEDIAN_THRESHOLD < 1"
+        )
+
+
+LIVENESS_BLINK_106_ENABLED = parse_on_off_setting(
+    "LIVENESS_BLINK_106_ENABLED", os.getenv("LIVENESS_BLINK_106_ENABLED"), True
+)
 FACE_ENROLLMENT_CHALLENGE_SECONDS = int(
     os.getenv("FACE_ENROLLMENT_CHALLENGE_SECONDS", "180")
 )
@@ -112,6 +168,7 @@ if APP_ENV == "production" and len(LIVENESS_SIGNING_KEY) < 32:
     raise RuntimeError("LIVENESS_SIGNING_KEY must contain at least 32 characters in production")
 if not 0.50 <= LIVENESS_PAD_THRESHOLD <= 0.95:
     raise RuntimeError("LIVENESS_PAD_THRESHOLD must be between 0.50 and 0.95")
+validate_pad_rule_settings(LIVENESS_PAD_RULE, LIVENESS_PAD_MEDIAN_THRESHOLD, LIVENESS_PAD_MIN_FRAME_FLOOR)
 if not 1 <= LIVENESS_PAD_CONCURRENCY <= 4:
     raise RuntimeError("LIVENESS_PAD_CONCURRENCY must be between 1 and 4")
 if not 90 <= FACE_ENROLLMENT_CHALLENGE_SECONDS <= 300:

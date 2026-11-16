@@ -17,6 +17,18 @@
     "test:camera-quality": "node --experimental-strip-types scripts/test-camera-quality.mts",
     "test:api-origin": "node --experimental-strip-types scripts/test-api-origin.mts",
     "test:session-deadline": "node --experimental-strip-types scripts/test-session-deadline.mts",
+    "test:device-support": "node --experimental-strip-types scripts/test-device-support.mts",
+    "test:blink-profiles": "node --experimental-strip-types scripts/test-blink-profiles.mts",
+    "test:passive-gate": "node --experimental-strip-types scripts/test-passive-gate.mts",
+    "test:scan-guards": "node --experimental-strip-types scripts/test-scan-guards.mts",
+    "test:scan-robustness": "node --experimental-strip-types scripts/test-scan-robustness.mts",
+    "test:retry-challenge": "node --experimental-strip-types scripts/test-retry-challenge.mts",
+    "test:runtime-recovery": "node scripts/test-runtime-recovery.mjs",
+    "test:instruction-pacer": "node --experimental-strip-types scripts/test-instruction-pacer.mts",
+    "test:scan-prep-gate": "node --experimental-strip-types scripts/test-scan-prep-gate.mts",
+    "test:face-reminder": "node --experimental-strip-types scripts/test-face-reminder.mts",
+    "test:student-courses": "node --experimental-strip-types scripts/test-student-courses.mts",
+    "test:course-history-detail": "node --experimental-strip-types scripts/test-course-history-detail.mts",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -5,6 +5,9 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 model_root="${INSIGHTFACE_MODEL_ROOT:-$HOME/.insightface}"
 model_dir="$model_root/models/buffalo_s"
 manifest="$project_root/backend/models/insightface-buffalo-s.sha256"
+# Every file in the manifest is required, including 2d106det.onnx (second blink rule,
+# LIVENESS_BLINK_106_ENABLED). The Backend falls back to the 68-point rule if it is missing at
+# runtime, but a release must not ship without it.
 
 if [[ ! -d "$model_dir" ]]; then
   echo "ไม่พบ InsightFace buffalo_s ที่ $model_dir" >&2

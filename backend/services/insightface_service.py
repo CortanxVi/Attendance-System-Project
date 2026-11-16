@@ -1,11 +1,60 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
+import logging
+import math
 import os
 from pathlib import Path
 import threading
+import time
 
 import numpy as np
 import cv2
 from insightface.app import FaceAnalysis
+
+from core.config import APP_ENV, LIVENESS_BLINK_106_ENABLED
+
+logger = logging.getLogger(__name__)
+
+# Second eye-closure measure from the 2d106det landmark model (buffalo_s/2d106det.onnx, pinned in
+# backend/models/insightface-buffalo-s.sha256). It feeds the second blink rule
+# (liveness_frame_service.BLINK_106_*) for every course and for face enrollment. It runs only while LIVENESS_BLINK_106_ENABLED is on
+# (default) and only for blink frames (extract_strict_face_observation(with_106=True)). It is
+# loaded lazily on first use, checked against the pinned SHA-256, run on CPU inside the shared
+# inference semaphore, and when the file is missing or wrong it is skipped with ONE warning: the
+# 68-point rule then decides alone and no scan fails because of it. Production preflight and
+# scripts/verify_face_models.sh require the file, so a missing copy is caught at deploy time.
+# A failed load (missing file, wrong checksum, unreadable through a bind mount, a file still being
+# copied, a transient onnxruntime error) is retried after this many seconds instead of being
+# remembered for the life of the process.
+LANDMARK_106_RETRY_SECONDS = 300.0
+LANDMARK_106_FILE = "2d106det.onnx"
+LANDMARK_106_SHA256 = "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf"
+# Index groups verified against the model output (image-left eye = keypoint 0 = the same eye as
+# the 68-point "left" 36-41; it stays image-left on a mirrored image, i.e. it is positional):
+# corners (outer/inner along x) and three upper/lower lid pairs.
+EYE_106_LEFT = ((35, 39), ((41, 36), (40, 33), (42, 37)))
+EYE_106_RIGHT = ((89, 93), ((95, 90), (94, 87), (96, 91)))
+
+
+def eye_aperture_106(landmarks: np.ndarray, eye: tuple) -> float | None:
+    """Mean lid gap / corner distance for one eye of a (106, 2) landmark array, or None."""
+
+    (corner_a, corner_b), pairs = eye
+    horizontal = float(np.linalg.norm(landmarks[corner_a] - landmarks[corner_b]))
+    if not np.isfinite(horizontal) or horizontal < 1.0:
+        return None
+    vertical = float(np.mean([np.linalg.norm(landmarks[upper] - landmarks[lower]) for upper, lower in pairs]))
+    value = vertical / horizontal
+    return value if np.isfinite(value) else None
+
+
+@dataclass(frozen=True)
+class StrictFaceFailure:
+    """Why `extract_strict_face_observation` returned nothing (numbers only, no image data)."""
+
+    code: str            # detect_none | detect_multi | detect_low_score | detect_landmarks | detect_error
+    face_count: int = 0
+    scores: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -20,6 +69,9 @@ class FaceObservation:
     face_width_ratio: float
     center_offset: float
     bbox: tuple[float, float, float, float]
+    # 2d106det eye apertures (blink frames only); None when the rule is off or the model is missing.
+    left_eye_aperture_106: float | None = None
+    right_eye_aperture_106: float | None = None
 
     @property
     def eye_aperture_proxy(self) -> float:
@@ -50,7 +102,106 @@ class FaceService:
         self.app.prepare(ctx_id=0, det_size=(640, 640))
         inference_concurrency = max(1, min(int(os.getenv("FACE_INFERENCE_CONCURRENCY", "2")), 4))
         self._inference_slots = threading.BoundedSemaphore(inference_concurrency)
+        # The reason of the last strict-extraction failure, kept per thread so that the caller
+        # (which runs in the same worker thread) can explain the rejection without a second inference.
+        self._strict_state = threading.local()
+        self._model_root = model_root
+        self._landmark_106 = None          # loaded on first blink scan (when the rule is enabled)
+        self._landmark_106_unavailable = False
+        self._landmark_106_failed_at = 0.0  # time.monotonic() of the last failed load
+        self._landmark_106_lock = threading.Lock()
         print("InsightFace Model Loaded Successfully!")
+
+    def _landmark_106_retry_due(self) -> bool:
+        return time.monotonic() - self._landmark_106_failed_at >= LANDMARK_106_RETRY_SECONDS
+
+    def _landmark_106_model(self):
+        """Load the 2d106det model; None (one log line per failed attempt) when it cannot be used.
+
+        A failure is retried after LANDMARK_106_RETRY_SECONDS. Each failed attempt logs once: an
+        ERROR in production (the release checks should have caught it), a WARNING elsewhere.
+        """
+
+        if self._landmark_106 is not None:
+            return self._landmark_106
+        if self._landmark_106_unavailable and not self._landmark_106_retry_due():
+            return None
+        with self._landmark_106_lock:
+            if self._landmark_106 is not None:
+                return self._landmark_106
+            if self._landmark_106_unavailable and not self._landmark_106_retry_due():
+                return None
+            path = self._model_root / "models" / "buffalo_s" / LANDMARK_106_FILE
+            try:
+                if not path.is_file():
+                    raise FileNotFoundError("model file is missing")
+                # The file is hashed, then loaded again by path. This hash-then-load window (TOCTOU)
+                # is the same trust level as the other buffalo_s models, which FaceAnalysis loads from
+                # the same read-only model directory after scripts/verify_face_models.sh hashed them.
+                if hashlib.sha256(path.read_bytes()).hexdigest() != LANDMARK_106_SHA256:
+                    raise ValueError("model checksum does not match the pinned value")
+                from insightface.model_zoo import get_model
+
+                model = get_model(str(path), providers=["CPUExecutionProvider"])
+                model.prepare(ctx_id=0)
+                self._landmark_106 = model
+                self._landmark_106_unavailable = False
+            except Exception as exc:  # noqa: BLE001 - fall back to the 68-point rule
+                self._landmark_106_unavailable = True
+                self._landmark_106_failed_at = time.monotonic()
+                logger.log(
+                    logging.ERROR if APP_ENV == "production" else logging.WARNING,
+                    "2d106det eye measure is unavailable; the blink check uses the 68-point rule only "
+                    "(retry in %.0f s) (%s: %s)",
+                    LANDMARK_106_RETRY_SECONDS, type(exc).__name__, exc,
+                )
+        return self._landmark_106
+
+    def preload_landmark_106(self) -> str:
+        """Eager load at startup when the rule is enabled; never raises. Returns blink_106_status()."""
+
+        if LIVENESS_BLINK_106_ENABLED:
+            self._landmark_106_model()
+        return self.blink_106_status()
+
+    def blink_106_status(self) -> str:
+        """"disabled" (kill switch off), "ready", "unavailable" (last load failed) or "not_loaded"."""
+
+        if not LIVENESS_BLINK_106_ENABLED:
+            return "disabled"
+        if self._landmark_106 is not None:
+            return "ready"
+        if self._landmark_106_unavailable:
+            return "unavailable"
+        return "not_loaded"
+
+    def _eye_apertures_106(self, image_bgr: np.ndarray, face) -> tuple[float, float] | None:
+        """(left, right) 2d106det eye apertures, or None (rule off, model unavailable). Never raises."""
+
+        if not LIVENESS_BLINK_106_ENABLED:
+            return None
+        model = self._landmark_106_model()
+        if model is None:
+            return None
+        try:
+            with self._inference_slots:
+                landmarks = np.asarray(model.get(image_bgr, face), dtype=np.float32)
+            if landmarks.shape != (106, 2):
+                return None
+            left = eye_aperture_106(landmarks, EYE_106_LEFT)
+            right = eye_aperture_106(landmarks, EYE_106_RIGHT)
+            if left is None or right is None or not (math.isfinite(left) and math.isfinite(right)):
+                return None
+            return left, right
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never fail the scan
+            logger.warning("2d106det eye measure failed for one frame (%s)", type(exc).__name__)
+            return None
+
+    def reset_strict_failure(self) -> None:
+        self._strict_state.failure = None
+
+    def last_strict_failure(self) -> StrictFaceFailure | None:
+        return getattr(self._strict_state, "failure", None)
 
     def _detect_faces(self, image_bgr: np.ndarray) -> list:
         """Bound concurrent ONNX inference so bursts do not exhaust CPU/RAM."""
@@ -139,12 +290,13 @@ class FaceService:
 
         left_eye_aperture = eye_aspect_ratio((36, 37, 38, 39, 40, 41))
         right_eye_aperture = eye_aspect_ratio((42, 43, 44, 45, 46, 47))
-        if left_eye_aperture <= 0 or right_eye_aperture <= 0 or image_width <= 0:
+        # Fail closed: a NaN/inf aperture would make every later "value > limit" check False.
+        if not (left_eye_aperture > 0 and right_eye_aperture > 0 and image_width > 0):
             return None
         x1, _y1, x2, _y2 = (float(value) for value in face.bbox)
         face_width_ratio = max(0.0, x2 - x1) / image_width
         center_offset = abs(((x1 + x2) / 2.0) / image_width - 0.5)
-        return FaceObservation(
+        observation = FaceObservation(
             embedding=np.asarray(face.normed_embedding, dtype=np.float32),
             yaw_proxy=float((nose[0] - face_axis_mid[0]) / eye_distance),
             pitch_proxy=float((nose[1] - eye_mid[1]) / vertical_distance),
@@ -156,22 +308,56 @@ class FaceService:
             center_offset=center_offset,
             bbox=(x1, float(face.bbox[1]), x2, float(face.bbox[3])),
         )
+        numbers = (
+            observation.yaw_proxy, observation.pitch_proxy, observation.roll_proxy,
+            observation.detection_score, observation.left_eye_aperture_proxy,
+            observation.right_eye_aperture_proxy, observation.face_width_ratio,
+            observation.center_offset, *observation.bbox,
+        )
+        if not all(math.isfinite(value) for value in numbers):
+            return None  # unreadable landmarks (treated like detect_landmarks)
+        if not np.all(np.isfinite(observation.embedding)):
+            return None
+        return observation
 
-    def extract_strict_face_observation(self, image_bgr: np.ndarray) -> FaceObservation | None:
+    def extract_strict_face_observation(
+        self, image_bgr: np.ndarray, *, with_106: bool = False
+    ) -> FaceObservation | None:
         """Return one high-confidence face with geometry for server liveness checks."""
 
+        self._strict_state.failure = None
         try:
             # Liveness fails closed on every confidently detected second face.
             # Unlike enrollment, a small background face cannot be ignored here.
             faces = [face for face in self._detect_faces(image_bgr) if float(face.det_score) >= 0.50]
+            scores = tuple(sorted((round(float(face.det_score), 3) for face in faces), reverse=True)[:3])
+            if not faces:
+                self._strict_state.failure = StrictFaceFailure("detect_none")
+                return None
+            if len(faces) > 1:
+                self._strict_state.failure = StrictFaceFailure("detect_multi", len(faces), scores)
+                return None
             # Webcam bridges and phone cameras can lose a little confidence to
             # compression. Keep the multi-face fail-closed rule, but tolerate
             # a modest score reduction for the single intended face.
-            if len(faces) != 1 or float(faces[0].det_score) < 0.55:
+            if float(faces[0].det_score) < 0.55:
+                self._strict_state.failure = StrictFaceFailure("detect_low_score", 1, scores)
                 return None
-            return self._observation_from_face(faces[0], image_bgr.shape[1])
+            observation = self._observation_from_face(faces[0], image_bgr.shape[1])
+            if observation is None:
+                self._strict_state.failure = StrictFaceFailure("detect_landmarks", 1, scores)
+                return None
+            apertures_106 = self._eye_apertures_106(image_bgr, faces[0]) if with_106 else None
+            if apertures_106 is not None:
+                observation = replace(
+                    observation,
+                    left_eye_aperture_106=apertures_106[0],
+                    right_eye_aperture_106=apertures_106[1],
+                )
+            return observation
         except Exception as exc:
             print(f"FaceObservation Error: {type(exc).__name__}")
+            self._strict_state.failure = StrictFaceFailure("detect_error")
             return None
 
     def extract_face_for_registration(self, image_bgr: np.ndarray):
@@ -185,7 +371,7 @@ class FaceService:
                 faces = self._detect_faces(padded_img)
             
             if len(faces) == 0:
-                return None, "ไม่พบใบหน้า กรุณาถ่ายในที่สว่าง ถอดแว่นตาและหน้ากากอนามัย"
+                return None, "ไม่พบใบหน้า กรุณาเปิดหน้าผากและเก็บผมที่ปิดคิ้วหรือตา ถ่ายในที่สว่าง ถอดแว่นตาและหน้ากากอนามัย"
 
             # 🌟 [แก้ไข] กรองหน้าปลอม/เล็กเกินไป (เช่น ลวดลายพื้นหลัง หรือคนไกลๆ) ออกก่อนตัดสินว่า
             # มีมากกว่า 1 คนในภาพ ดูรายละเอียดเหตุผลที่ _filter_significant_faces
@@ -205,7 +391,7 @@ class FaceService:
             # orientation ไปแล้ว ภาพที่มุมกล้องเอียงเล็กน้อยจะได้คะแนนใกล้เคียงปกติมากขึ้น จึงลด
             # threshold ลงมาที่ 0.60 ให้ตรงกับจุดที่ตั้งใจไว้แต่แรก
             if target_face.det_score < 0.60:
-                return None, "ภาพใบหน้าไม่ชัดเจน หรือมีสิ่งบดบัง กรุณาถอดแว่น/หน้ากาก แล้วถ่ายใหม่ให้เห็นหน้าเต็มๆ"
+                return None, "ภาพใบหน้าไม่ชัดเจน หรือมีสิ่งบดบัง กรุณาเปิดหน้าผาก เก็บผมที่ปิดคิ้วหรือตา ถอดแว่น/หน้ากาก แล้วถ่ายใหม่ให้เห็นหน้าเต็มๆ"
                 
             return target_face.normed_embedding.tolist(), None
             

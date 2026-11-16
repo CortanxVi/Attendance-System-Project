@@ -50,7 +50,7 @@ FastAPI/OCR containers ------------------------------------> Supabase Staging
 - `backend/.env` มี Supabase Staging key และ `OCR_SERVICE_TOKEN`
 - `ocr-service/.env` มี `OCR_SERVICE_TOKEN` ค่าเดียวกับ Backend
 - `OCR_SERVICE_TOKEN` ยาวอย่างน้อย 32 ตัวอักษร
-- มีโมเดล InsightFace `buffalo_s` ที่ผ่าน checksum
+- มีโมเดล InsightFace `buffalo_s` ที่ผ่าน checksum ครบ 4 ไฟล์ (`det_500m.onnx`, `w600k_mbf.onnx`, `1k3d68.onnx` และ `2d106det.onnx` ที่ใช้กับกฎกะพริบตาชุดที่สอง)
 - ห้ามใช้ฐานข้อมูล Production ในการทดสอบนี้
 
 OCR image ใช้ Debian Trixie เพราะ Light OCR native addon ต้องการ glibc 2.38+
@@ -192,3 +192,41 @@ docker compose -f deployment/docker/compose.staging.yml build --no-cache
 ชุด Staging นี้ไม่แทน Production deployment: Production ต้องใช้ hostname/TLS คงที่,
 environment secrets แยก, Supabase Production ที่ผ่าน migration review, monitoring,
 backup/restore และ rollback ที่ทดสอบแล้ว
+
+## 8. ระบบตรวจใบหน้า: ค่าที่ใช้ในระบบจริงและสิ่งที่ต้องเตรียมก่อน deploy
+
+ค่าทั้งหมดในส่วนนี้มาจากรอบปรับจูนกับโทรศัพท์จริง (branch `tuningModel`, 2026-11-12 ถึง 2026-11-17)
+โหมดทดสอบที่ใช้ระหว่างปรับจูน (ไม่ใช้ QR, อีเมลภายนอก, ข้ามบัตร/OCR, เช็คชื่อซ้ำได้ไม่จำกัด,
+เข้าวิชาทดสอบอัตโนมัติ, ตารางผลทดสอบ และสคริปต์ ngrok สำหรับทดสอบ) ถูกถอดออกทั้งหมดก่อนรวมเข้า `main`
+
+### 8.1 เกณฑ์ฝั่ง Backend
+
+| เรื่อง | ค่า | ที่อยู่ในโค้ด / สวิตช์ |
+|---|---|---|
+| ความเหมือนใบหน้า (1:1 กับบัญชีที่เข้าสู่ระบบ) | ≥ 0.50 | `FACE_THRESHOLD` ใน `backend/main.py` |
+| ตรวจภาพปลอม (PAD) | ค่ากลางของ 3 เฟรม ≥ 0.60 และทุกเฟรม ≥ 0.30 | `LIVENESS_PAD_RULE=median` (ค่าเริ่มต้น), `LIVENESS_PAD_MEDIAN_THRESHOLD`, `LIVENESS_PAD_MIN_FRAME_FLOOR`; ตั้ง `LIVENESS_PAD_RULE=all_frames` เพื่อกลับไปใช้กฎเดิม (ทุกเฟรม ≥ `LIVENESS_PAD_THRESHOLD`) |
+| กะพริบตา กฎที่สองจาก 106 จุด | เปิด | `LIVENESS_BLINK_106_ENABLED` (ค่าเริ่มต้น `true`, ตั้ง `false` เพื่อใช้กฎ 68 จุดอย่างเดียว) |
+| เปลี่ยนเป็นคำสั่งขยับเข้าใกล้ | หลังกะพริบตาไม่ผ่าน 2 ครั้งติด | `backend/services/action_fallback.py` (สถานะอยู่ในหน่วยความจำ) |
+| เวลา | ทำคำสั่งถึงกลับท่าเดิม ≤ 5 วินาที, ทั้งรอบ ≤ 30 วินาที | `backend/services/liveness_service.py` |
+
+ข้อความล้มเหลวที่ผู้ใช้เห็นเป็นประโยคภาษาไทยบอกเงื่อนไขที่ไม่ผ่านเพียงข้อเดียว ไม่มีตัวเลขที่วัดได้
+(`SHOW_MEASUREMENTS = False` ใน `backend/services/failure_diagnostics.py` เป็นค่าคงที่ในโค้ด ไม่ใช่ค่าตั้ง)
+
+### 8.2 ก่อน deploy
+
+- วางไฟล์ `2d106det.onnx` (ชุด buffalo_s) คู่กับโมเดลอีก 3 ไฟล์ และตรวจด้วย `scripts/verify_face_models.sh`
+  ถ้าไฟล์หายหรือ hash ไม่ตรง ระบบจะใช้กฎ 68 จุดอย่างเดียวและบันทึกคำเตือน
+- รัน Backend ด้วย `--workers 1` เพราะสถานะการเปลี่ยนเป็นคำสั่งขยับเข้าใกล้เก็บในหน่วยความจำของ process
+  (บังคับโดย `backend/tests/test_deploy_guards.py`)
+- รัน `python3 scripts/production_preflight.py` และ `scripts/verify_release.sh` สคริปต์จะปฏิเสธค่าตั้งของโหมดทดสอบ
+  (`ATTENDANCE_TEST_*`, `VITE_TEST_MODE`) หากหลงเหลืออยู่ในไฟล์ environment
+- อย่า apply SQL ทดสอบใด ๆ กับฐานข้อมูลจริง (ไฟล์เหล่านั้นถูกลบออกจาก repository แล้ว)
+
+### 8.3 ฝั่งหน้าเว็บ (สรุปพฤติกรรม)
+
+- เก็บ 3 เฟรมนิ่งห่างกัน 550 มิลลิวินาที เฉพาะเมื่อท่าทางใกล้เฟรมแรกและภาพไม่เบลอ
+- หยุดเองพร้อมข้อความเมื่อเครื่องประมวลผลได้ช้ากว่าที่ Backend ยอมรับ (8 fps)
+- Android: ใช้ GPU ก่อน วัดความเร็ว แล้วสลับเป็น CPU ด้วย worker ตัวใหม่ถ้าช้า และกู้กลับมาบน CPU หนึ่งครั้งถ้า worker ล้ม
+- คำสั่งบนจอค้างอย่างน้อย 1.5 วินาที, ก่อนเปิดกล้องมีหน้าต่างเตรียมตัว (ปุ่ม "เข้าใจแล้ว" และปุ่ม X),
+  ภาพสุดท้ายหลังหลับตาเก็บเมื่อตาเปิดเกือบสุดค้างไว้ 0.5 วินาที
+- PWA ตรวจเวอร์ชันใหม่ทุก 5 นาทีและรีโหลดเมื่อไม่มีการสแกนหรือการส่งเช็คชื่อค้างอยู่

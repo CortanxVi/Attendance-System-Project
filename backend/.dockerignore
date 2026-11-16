@@ -1,8 +1,13 @@
 .env
+# Backups and copies such as .env.old hold real keys: never copy them into the image.
+.env.*
+!.env.example
 .venv
 .venv-windows
 __pycache__
 *.py[cod]
+.pytest_cache
+*.bak
 tests
 req_clean.txt
 req_fixed*.txt

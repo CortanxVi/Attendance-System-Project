@@ -1953,3 +1953,824 @@ This is the append-only engineering record for the project's two-agent hybrid wo
 - **Database or deployment impact:** One new migration, NOT applied to production. It creates `public.teacher_domain_exclusions` and replaces `public.handle_new_user()`. The trigger on `auth.users` is not defined in the repository's migrations (the base schema is not in `supabase/migrations`), so the live trigger and function must be checked after applying. Rollback: re-run the function body from `20260828111609_temporary_admin_and_student_profile.sql`; the exclusion table can stay.
 - **Verification performed:** Ran the migration against a throwaway Supabase Postgres 17 container (removed afterwards) with a minimal stand-in for `profiles`, `profile_invites`, `profile_invite_courses`, `enrollments` and an `after insert` trigger on `auth.users`; the full migration chain cannot be replayed because the baseline schema is not in the repository. Results: `x@cit`, `Name.S@eng`, and `a@x.cit` addresses became teacher; `s<13 digits>@email` became student with the id extracted; `s<13 digits>@cit` and `<13 digits>@eng` rejected; `@email` with a non-student local part rejected; `@a.email` and an excluded `alumni` subdomain rejected; bare `@kmutnb.ac.th` rejected; an invitation with role admin yielded admin and was marked claimed, including on a department address; `cit.kmutnb.ac.th.evil.com`, `evilkmutnb.ac.th`, `gmail.com` rejected; a rejected sign-up left no profile row; the `anon` role could not read the exclusion table. Backend suite: 202 tests, OK, 1 skipped (previously 195; 7 new). `psql` was used only against the throwaway container.
 - **Remaining risks or handoff work:** Apply the migration to production by hand after review (`supabase db push --dry-run` first) and check the live `handle_new_user()` and its trigger. Set the first admin with the SQL in section 3.6 of the deployment guide. Confirm with the university which subdomains are not staff. The admin promotion `update` was documented but not executed in the test container. The thesis chapter 3.5 still says teachers need an invitation and needs a wording update by the owner. `log.md` and the new files are uncommitted.
+
+## 2026-11-06 - Claude - Thesis text updated for automatic teacher role
+
+- **Objective:** Bring the thesis document in line with the sign-in role rules implemented in `20261106120000_auto_teacher_for_department_domains.sql` (teacher role from department mailboxes, admin role set by the database owner).
+- **Files or components changed:** Created a new Word file `โครงเล่มจริง ver43.docx` in the user's documents folder, copied from `โครงเล่มจริง ver42.docx` (which was open in an editor, so it was left untouched). Edited paragraphs: 3.2.2 teacher, 3.2.3 administrator, the database tables paragraph and the `profile_invites` row of Table 2, section 3.5 (rewritten as the five-step decision order, the reason admin is not automatic, the three guards, and the trust assumption), section 4.5 (Backend suite 195 to 202 tests, 201 passed 1 skipped; Table 4 row "permissions and authentication" 22 to 29, total 202; added a paragraph on the temporary-Postgres test of `handle_new_user()`), and sections 5.2 and 5.3 (one new limitation and one new recommendation). No repository source files changed.
+- **Implementation rationale:** The previous text said teachers and administrators both needed an invitation, which no longer matches the database function. Test numbers were updated to the actual new run so that Table 4 stays consistent with the text. The new 4.5 paragraph states that the SQL test used a temporary container with stand-in tables and does not claim a production test.
+- **Security and privacy impact:** None added. Example addresses in the text are generic; no real accounts, secrets, or student records were written.
+- **Database or deployment impact:** None.
+- **Verification performed:** Edited document.xml was parsed as valid XML; the file was converted with LibreOffice (page count rose from 45 to 48 because of the added text) and the pages with section 3.5 and Table 4 were viewed, showing the new paragraphs and the updated table without layout damage. Table and figure numbering was not changed.
+- **Remaining risks or handoff work:** The owner should read the new text and adjust wording. Table 4 categories assume the 7 new tests belong to "permissions and authentication". If the owner has already tested the migration on the live Supabase project, a sentence about that could be added to 4.5. Word may paginate differently from LibreOffice.
+
+## 2026-11-06 - Claude - Thesis ver4-5-5 updated and re-aligned (saved as ver4-5-6)
+
+- **Objective:** Take the owner's `โครงเล่มจริง ver4-5-5.docx`, bring its content in line with the current system (automatic teacher role from department mailboxes, admin role set by the database owner, new test counts), fix Thai distributed alignment, spacing and line breaks for Microsoft Word, and check statements against the project.
+- **Files or components changed:** Created `Documents/Claude/โครงเล่มจริง ver4-5-6.docx`; the source file in `Project/Source` was not modified. Only `word/document.xml` changed; styles, headers, footers and images are byte-identical to the source. No repository source files changed.
+- **Implementation rationale:** Content: sections 3.1.2, 3.1.3, 3.3, Table 2 (`profile_invites`), 3.4 (decision order, reason admin is manual, guards, trust assumption), 4.4, 4.5 (202 tests, 201 passed, 1 skipped; Table 4 row 22 to 29; paragraph on the temporary-Postgres test), 5.2 and 5.3 (item 6 each). Corrections found by checking against the code: the QR interval was written as 10 to 15 seconds in 3.1.2 but the default is 12 s (range 10 to 15); "exam eligibility threshold" was replaced by the maximum absence percentage that the course settings actually store; administrator statements about managing report periods, closing courses and editing scores were removed because the admin API has no such functions (it lists, creates, edits and deletes users, lists and deletes courses, reads logs, and handles temporary-admin requests); section 2.9 said OCR runs on the student's machine, it runs on the Mini PC; the table count in 3.3 became 19 with `teacher_domain_exclusions`. Format: 195 body paragraphs now use `thaiDistribute` (English abstract uses `both`); 36 mid-sentence hard line breaks left from copy and paste were removed with correct spacing; stray spaces and non-breaking spaces were normalised; non-breaking spaces were added between "รูปที่/ตารางที่/หัวข้อ" and the number and between numbers and units; the first-line indent was restored on body paragraphs that had lost it; headings got keep-with-next; two table captions were centred like the others; the author line spacing was fixed.
+- **Security and privacy impact:** None. Example addresses in the text are generic; no personal data, secrets or roster contents were added.
+- **Database or deployment impact:** None.
+- **Verification performed:** Compared every paragraph of the old and new text; checked the XML parses and that `pPr` child order is schema-valid in all paragraphs; converted with LibreOffice (46 pages) and viewed the pages with sections 3.1, 3.4, Table 4 and chapter 5; checked claims against `backend/core/config.py`, `backend/routers/admin.py`, `backend/services/light_ocr_service.py`, the migrations and the frontend course settings. Word itself was not available, so pagination and Thai line breaking in Word were not seen.
+- **Remaining risks or handoff work:** Open the file in Word and update fields and the table of contents if any; page numbers may shift. Figures 8 to 24 are still empty frames. Table 5 numbers come from real roster sheets and were not re-checked. The thesis still does not state whether the new migration was applied on the live Supabase project.
+
+## 2026-11-06 - Claude - Thesis screenshots inserted into figures 8 to 24 (saved as ver4-5-7)
+
+- **Objective:** Put the 17 screenshots the owner attached into the empty figure frames of chapter 4 (figures 8 to 24) of the thesis, sized for readability and matched to each figure caption.
+- **Files or components changed:** Created `Documents/Claude/โครงเล่มจริง ver4-5-7.docx` from `โครงเล่มจริง ver4-5-6.docx` (the earlier file was not modified). In `word/document.xml` the 17 dashed placeholder tables ("[วางภาพหน้าจอ]" plus a hint line) were replaced by a centred inline picture paragraph with keep-with-next so it stays on the page of its caption. Added 17 PNG files `word/media/fig8.png` to `fig24.png` and 17 relationships `rId108` to `rId124`. Nothing else changed.
+- **Implementation rationale:** Images were matched by screen content to the caption text: 8 login, 9 student home with the QR scan button, 10 QR scan camera, 11 face check, 12 check-in result, 13 course attendance history, 14 profile, 15 teacher course list, 16 session QR dialog, 17 floating QR window, 18 live check-in list, 19 roster import preview, 20 roster/course mismatch dialog, 21 report export, 22 user management, 23 temporary admin approval, 24 audit log. One attached image (roster file picker) matches no caption and was left out. WebP files were converted to PNG and transparent images flattened onto white. Widths: desktop screens 15.5 to 16 cm, phone screens 13.5 cm high (about 6.2 cm wide), small crops 6.5 to 13 cm, always at original aspect ratio. Each picture has alt text equal to its caption.
+- **Security and privacy impact:** Screenshots contain real names and 13-digit student ids of project team members (figures 12, 14, 22, 23, 24) and, in figure 19, a roster preview with student names and ids. The owner supplied them for the thesis; no such data was copied into this log or the repository. The owner should decide whether figure 19 and the user-management screen should be blurred before the thesis is distributed.
+- **Database or deployment impact:** None.
+- **Verification performed:** The docx zip passes an integrity test, `document.xml` and the relationships file parse as XML, no "[วางภาพหน้าจอ]" placeholder remains, and a LibreOffice conversion gives 49 pages (46 before) with every figure 8 to 24 on a page together with its caption. Page images were inspected visually. Word itself was not available, so pagination in Word was not seen.
+- **Remaining risks or handoff work:** Open the file in Word and check page breaks and any large white gaps near the tall phone screenshots; update fields or the table of contents if any. Some text in small screenshots (figures 17, 18, 20) is small by nature of the source image. Figure 20 also shows a few student names and ids faintly behind the dialog. Table 5 numbers and production migration status are still unverified, as noted in the previous entry.
+
+## 2026-11-06 - Claude - English summary of the thesis written as .md and .json
+
+- **Objective:** Produce a detailed English explanation of how the project thesis is written and what it contains, as a Markdown file and a JSON file.
+- **Files or components changed:** Created `Documents/Claude/Thesis_Summary_EN.md` and `Documents/Claude/Thesis_Summary_EN.json`. Source read: `Documents/Claude/โครงเล่มจริง ver4-6.docx` (the owner's Word re-save of the version with screenshots; the earlier ver4-5-6 and ver4-5-7 files are no longer in that folder). No repository code or the thesis itself was changed.
+- **Implementation rationale:** The thesis text was extracted from `document.xml` and summarised chapter by chapter (structure, technology choices, design, numbers, results, limits). Every number in the summary was taken from the thesis text. The JSON mirrors the Markdown in structured form.
+- **Security and privacy impact:** Author emails, student ids and biographies were deliberately left out of both files. Table 5 appears only as course codes and counts. No secrets or student records were written.
+- **Database or deployment impact:** None.
+- **Verification performed:** JSON parses; test counts in Table 4 add up to 202; key figures (0.45, 0.65, 0.60, 12 s, 420 s, 180 s, 19 tables, 16 emails, 202/201/1) were checked to appear in the Markdown; pattern search found no student ids in either file.
+- **Remaining risks or handoff work:** The summary lists gaps found in the thesis itself: section 1.2 (objectives) and a scope section are missing although 5.1 cites them; cover spelling and degree-name inconsistencies; no statement about production status of the new migration; screenshots contain real names. The owner should decide on these. The log was written from the repository path because the session working directory changed to `Documents/Claude`.
+
+## 2026-11-07 - Claude - Google sign-in (Supabase social login) and OAuth 2.0 guide written
+
+- **Objective:** Explain what the Supabase "Authentication, Sign In / Providers, Google" feature is, how this project uses it, how to set it up from scratch, and what OAuth 2.0 is, using the three pages the owner named.
+- **Files or components changed:** Created `Project/Source/markdown/GOOGLE_OAUTH_LOGIN_GUIDE_TH.md` (Thai). No repository code, migration or configuration was changed.
+- **Implementation rationale:** The guide maps the real code (`Login.tsx`, `App.tsx`, `supabaseClient.ts`, `backend/core/security.py`, the role-assignment migration) onto the OAuth 2.0 roles and flow, then gives ordered setup steps (Supabase callback URL, Google Auth Platform branding/audience/scopes, Web OAuth client, provider fields, Site URL and Redirect URLs, env variables, migration and trigger, first admin, tests, go-live checklist) and a troubleshooting table. A verification table separates facts checked in code, facts taken from official pages, and facts that could not be checked.
+- **Security and privacy impact:** No secrets, keys, project references or student data were written. The guide tells the reader to keep the Google client secret only in Supabase and the service key only in the back end. It records that the Google side does not restrict the domain; restriction is done by `handle_new_user()` and the back end.
+- **Database or deployment impact:** None.
+- **Verification performed:** Read the code files listed above; confirmed from `node_modules` that supabase-js 2.106.1 / auth-js default `flowType` is `implicit` with `detectSessionInUrl`, `autoRefreshToken` and `persistSession` on; read the Google and oauth.net pages and the Supabase Google, redirect-URL, sessions, implicit/PKCE and troubleshooting pages through web-fetch helpers; the Medium article returned HTTP 403 to the fetcher and was read through the in-app browser instead; confirmed the cross-referenced section 3.6 and `CORS_ORIGINS` example exist in the repo files.
+- **Remaining risks or handoff work:** The real Google Cloud and Supabase dashboard settings (audience, publish status, redirect URLs, Site URL) were not visible and are not verified. The hosted callback URL format is not printed on the Supabase page that was read; the guide tells the reader to copy it from the dashboard. The user-facing error for a rejected non-KMUTNB email and a possible switch to PKCE were not tested.
+
+## 2026-11-12 - Claude - Script to run Backend and OCR without Docker behind ngrok (tuningModel)
+
+- **Objective:** On branch `tuningModel`, let the owner run the branch's Backend and Light OCR directly on the development machine (no Docker) and expose only the Backend through ngrok, so a separately hosted Frontend Preview can be tested from the Internet without touching the production Frontend portal. The owner chose to keep using the existing Supabase project with test accounts.
+- **Files or components changed:** Created `scripts/start_backend_ngrok.sh` (start, status, stop) and `frontend/.env.staging.example` (placeholders only). Appended section 8 to `deployment/docker/README_TH.md`. The script keeps its private settings outside the repository in `~/.config/km-attendance/staging.env` (mode 600) and its logs and pid files in `~/.local/state/km-attendance-staging/`. No backend or frontend source file was changed by this task.
+- **Implementation rationale:** ngrok starts first so the public host is known and can be placed in `TRUSTED_HOSTS`; then Light OCR, then the Backend with `APP_ENV=production` so `/docs`, `/redoc` and `/openapi.json` are disabled and CORS must be exact HTTPS origins. Staging-only liveness signing key and temporary-admin PIN pepper are generated once and stored outside the repo; the OCR token must already be 32 or more characters and identical in both env files. Values override `backend/.env` because the loader does not replace existing environment variables. Dotenv-style files are parsed, never sourced. PIDs are checked against the process command line before being signalled.
+- **Security and privacy impact:** While running, the Backend is reachable from the Internet through ngrok, which terminates TLS, so access tokens and face images pass through that provider; the tunnel must be opened only for tests. The Backend still binds to loopback only and Light OCR is not tunnelled. Without Docker the processes run with the current user's privileges (no non-root user, capability drop or memory ceiling). The script reads `backend/.env`, so tests write to whichever Supabase project that file points to; only test accounts and test courses should be used. No secrets, tokens, tunnel host names or frontend host names were written to this log.
+- **Database or deployment impact:** None to the database. Nothing was deployed. The existing Docker staging containers were left running and were not modified; the default ports 8000 and 3001 are used by the script, so the Docker stack must be stopped first or other ports given.
+- **Verification performed:** `bash -n` passed (shellcheck is not installed). Ran the script on spare ports 8010 and 3011 with a real ngrok tunnel: first run created the settings file and exited as designed; second run reached ready state; checks returned: `/health/live` through ngrok 200, `/docs`, `/openapi.json`, `/redoc` 404, `/health/ready` ready for database, OCR and face, `/api/v1/auth/me` without a token 401, CORS preflight from an allowed origin 200 with a matching allow-origin header, from an unlisted origin 400 with no allow-origin header, request with an untrusted Host header 400, Backend and OCR listening on 127.0.0.1 only. `stop` closed ngrok, Backend and OCR and freed the ports. Not verified: a real Vercel Preview, Google sign-in through the Preview, a full QR plus face check-in over the tunnel, phone camera use, the default ports 8000 and 3001 (Docker was occupying 8000), nvm switching from a Node 18 shell, the cleanup trap on Ctrl+C in an interactive terminal.
+- **Remaining risks or handoff work:** The owner must stop Docker staging (or use other ports), push `tuningModel`, set Preview environment variables and Deployment Protection in the hosting dashboard, add the Preview URL to the settings file and to Supabase Redirect URLs. ngrok free-plan monthly quotas may be reached quickly with face images; the per-check-in data size was not measured. The staging settings file prefilled origins from the ignored `deployment/docker/.env`; the owner should review them. `/health/ready` is reachable without authentication through the tunnel and reveals dependency status only. Strict-Transport-Security and cache-control headers were not seen on `/health/live`; production Nginx behaviour was not part of this path. An unrelated uncommitted edit to `frontend/vite.config.ts` (removal of three comments) was present in the working tree during this task and was left untouched.
+
+## 2026-11-12 - Claude - AI inventory and real-experiment tuning guide for the Backend (tuningModel)
+
+- **Objective:** Before any tuning, list the AI components of the project with their locations and call sites, list every tunable value with its source, and write a step-by-step test guide so the owner can find values from real experiments instead of guessing.
+- **Files or components changed:** Created `docs/ai_tuning/AI_TUNING_TEST_GUIDE_TH.md` (Thai guide: AI registry, parameter registry, measurement principles, setup, test cases, tuning loop, change rules), `docs/ai_tuning/ai_trials_template.csv` (header-only record sheet), `docs/ai_tuning/ai_threshold_sweep.py` (standard-library script that computes FAR/FRR tables and BPCER/APCER with Wilson 95% intervals from recorded trials). No backend, frontend, migration or configuration file was changed. Note that `docs/` is git-ignored (`.gitignore` line 30), so these files exist only on this machine unless the owner decides otherwise.
+- **Implementation rationale:** Read the real code paths to inventory six AI systems: SCRFD detector, MobileFaceNet/ArcFace recognizer and 3D 68-point landmark model (InsightFace buffalo_s, `backend/services/insightface_service.py`), MiniFASNet V2-SE passive PAD (`backend/services/passive_pad_service.py`), Light OCR (Node service `ocr-service/ocr-server.js`, called from `backend/services/light_ocr_service.py`), and MediaPipe Face Landmarker in the browser. Every tunable constant was recorded with file and line, direction of effect, and the metric that must decide it. Test cases are black-box trials through the real UI, using the similarity score that the success screen and the identity-failure message already expose, so they work without code changes; failure stages are mapped from the exact Thai messages in the code.
+- **Security and privacy impact:** The guide requires written consent, pseudonymous participant codes, no student ids, emails, images or card numbers in records, deletion of test accounts afterwards, and attack tests only against consenting participants' own test accounts. No personal data or secrets were written. The ngrok quota and the shared-Supabase risk are stated in the guide.
+- **Database or deployment impact:** None. The tests described run against the existing Supabase project with test accounts, as the owner chose; cleanup steps are in the guide.
+- **Verification performed:** Baseline backend suite on this branch: `cd backend && .venv/bin/python -m unittest discover -s tests` ran 202 tests, OK with 1 skipped. The sweep script was run on synthetic data (deleted afterwards) to confirm it executes and prints tables; no synthetic number appears in the guide. Line references in the guide were re-checked against the files. No real experiment was run, so there are no measured results yet.
+- **Remaining risks or handoff work:** (1) Findings: the student enrollment path uses a detection score minimum of 0.55 (`insightface_service.py:170`), while thesis Table 3 states 0.60 for enrollment; 0.60 applies only to the administrator image-upload path (`:207`). The embedding used for both enrollment and check-in comes from a single recovery frame. Passive PAD checks only the three passive frames. The same 0.78 constant is used for both "eye closed" and "eye reopened" in the blink check. Frontend and backend limits differ (for example yaw 0.12 versus 0.14 and 0.15). The legacy `verify_liveness_frames` is only used by tests. (2) Proposed but not started, awaiting owner confirmation: phase 0 make the chosen constants readable from validated environment variables with unchanged defaults and a test that pins the defaults; phase 1 an offline measurement tool that computes all metrics without stopping at the first failed rule; thesis wording fix for the 0.60 versus 0.55 statement after experiments.
+
+## 2026-11-13 14:00 - Claude - Test-only mode: face check-in without the dynamic QR step and its timers (tuningModel)
+
+- **Objective:** For AI baseline experiments, let students of listed TEST courses start the face scan directly from a list of open sessions, with no QR scan and without the QR/challenge/auto-close timers. The owner asked to "turn off all security temporarily"; only the QR step and timers were removed. The owner chose to keep recording real attendance rows (no dry run).
+- **Files or components changed:** Created `backend/core/test_mode.py` (settings loader and gates), `backend/routers/test_mode.py` (`GET /api/v1/test/open-sessions`, `POST /api/v1/test/sessions/{id}/challenge`), `backend/tests/test_attendance_test_mode.py` (20 tests), `frontend/src/config/testMode.ts`, `frontend/src/services/testMode.ts`, `frontend/src/features/student/TestModePanel.tsx`, `frontend/src/components/TestModeBanner.tsx`, `frontend/scripts/test-test-mode.mts`. Modified `backend/core/config.py` (loads the settings), `backend/main.py` (imports the router only when the mode is on; `/api/v1/system/config` reports `test_mode`), `frontend/src/features/student/StudentHome.tsx`, `frontend/src/contexts/TeacherAttendanceProvider.tsx` (no auto-close in test builds), `frontend/src/main.tsx`, `frontend/package.json`, `frontend/.env.staging.example`, `scripts/start_backend_ngrok.sh` (`start --test-mode`), `scripts/production_preflight.py` and `scripts/build_release_bundle.sh` (refuse the switches), `scripts/verify_release.sh` (runs the new frontend test), `deployment/docker/README_TH.md` (section 8.4) and `docs/ai_tuning/AI_TUNING_TEST_GUIDE_TH.md` (note).
+- **Implementation rationale:** The challenge endpoint issues the same one-time check-in right and signed liveness token as the QR validate endpoint, so liveness, PAD, the face comparison, the claim/finalize transaction and the one-record-per-session rule are untouched. Gates: the backend refuses to start unless the switch, an exact acknowledgement phrase and at least one course UUID are all set; only listed courses are accepted (a real course the student belongs to gets 403); the router is not even imported when the mode is off; frontend test UI exists only in builds with `VITE_TEST_MODE=1` and shows a red banner. Not removed on purpose: login and token checks, roles, course membership, open-session check, CORS and trusted hosts, liveness timing rules, late/absent status calculation, enrollment challenge timer.
+- **Security and privacy impact:** In test mode, any enrolled student of a listed course can check in without being in the room, and the result is saved to the shared Supabase project; use only test courses and test accounts. Release scripts and the production preflight refuse the switches; a unit test checks that production deployment files never mention them. The backend log line for a QR-free challenge contains no user data. No secrets, course ids or host names were written to this log.
+- **Database or deployment impact:** No migration. Challenge rows are inserted with a 4-hour expiry (the database only requires expires_at later than created_at). Nothing was deployed; the Docker staging containers were left running and untouched.
+- **Verification performed:** Backend suite `unittest discover`: 222 tests, OK, 1 skipped (was 202). Frontend under Node 22.23.2: `test:test-mode`, `test:session-deadline`, `test:api-origin`, `test:liveness`, `test:overlays`, `test:camera-quality` and `lint` pass; `npm run build` passes and the normal bundle contains no test-mode text; a scratch build with `VITE_TEST_MODE=1` passes and contains the banner. Four real backend starts on spare ports: mode off gave 404 for the test route and none in OpenAPI; mode on listed both routes and returned 401 without a token; missing acknowledgement and missing course list both made the backend exit with a clear error. The ngrok script with `start --test-mode` ran end to end on ports 8010 and 3011 (tunnel health 200, docs 404, test route 401 through the tunnel, /openapi.json 404), then stopped cleanly.
+- **Remaining risks or handoff work:** Not verified: the student test panel and face scan in a real browser or phone (no Preview was built or tested), the teacher side in a test build, and an actual check-in through the test endpoint (it needs a signed-in test student). The owner must supply course UUIDs in the private staging settings file (a commented line `STAGING_TEST_COURSE_IDS=` is added only to newly created files), set `VITE_TEST_MODE=1` in the Preview environment and redeploy. Late/absent status is still computed from elapsed time, so long sessions record later check-ins as late or absent. Unrelated uncommitted edit to `frontend/vite.config.ts` (comment removal) was present and left untouched. Phase 0 (env-tunable thresholds) and the numbers-only metrics logger remain proposed and not started.
+
+## 2026-11-13 14:32 - Claude - Test course list now read from the Supabase courses table
+
+- **Objective:** The owner asked to drop the placeholder test-course setting and use the real values from the Supabase table. Added a read-only way to list the real courses and filled the private settings file with the chosen test course.
+- **Files or components changed:** `scripts/start_backend_ngrok.sh` (new `courses` subcommand that reads courses, member counts and pending roster invites through the backend's own Supabase settings and prints no personal data); `deployment/docker/README_TH.md` (section 8.4 step 1). The private file `~/.config/km-attendance/staging.env` (outside the repository, mode 600) received one `STAGING_TEST_COURSE_IDS` line with one course UUID. No backend or frontend source changed.
+- **Implementation rationale:** The allow-list gate was kept instead of removing it. The read-only listing showed that two courses (about 13 and 24 pending roster invites) have real students waiting to sign in for the first time, so they would be enrolled automatically and could use the QR-free flow; they must not be test courses. The chosen course has members but no pending invites. The list stores fixed UUIDs, so courses created later are never included by accident.
+- **Security and privacy impact:** The listing uses the service-role settings of `backend/.env` read-only and prints only course code, name, section, term, counts and course ids; no names, emails, student ids or teacher ids. No ids or hosts are recorded in this log.
+- **Database or deployment impact:** Read-only queries on `courses`, `enrollments`, `profile_invites`, `profile_invite_courses`. Nothing written, no migration, nothing deployed.
+- **Verification performed:** `bash -n` passes; the `courses` subcommand ran against the live table and listed 8 courses with the pending-invite warning on the two courses that have real rosters waiting; the new settings line matches the UUID format check used by the start script.
+- **Remaining risks or handoff work:** The owner should confirm that the chosen course is the intended test course (it contains the team's test accounts). Courses with pending invites can later become safe when their roster is claimed or removed, but treat them as real classes. A dedicated new test course would be the cleanest option.
+
+## 2026-11-13 14:42 - Claude - All-courses option for the test mode, explicit flag only; courses command restored
+
+- **Objective:** The owner asked to remove the need to list test course ids and to work directly with the real database. Two sessions answered the same message: one kept the allow-list and added a read-only `courses` listing (previous entry), this one added an optional "all courses" scope. Both are now reconciled: the allow-list stays the default and the all-courses scope needs an explicit command-line flag.
+- **Files or components changed:** `backend/core/test_mode.py` (second typed acknowledgement, `ATTENDANCE_TEST_ALL_COURSES_ACK`; listing course ids and the acknowledgement together is rejected), `backend/core/config.py`, `backend/main.py` (warning text), `backend/routers/test_mode.py` (all-courses scope still requires membership and an open session), `backend/tests/test_attendance_test_mode.py` (now 27 tests), `scripts/production_preflight.py` (also refuses the new variable), `scripts/start_backend_ngrok.sh` (new `--all-courses` flag, `courses` command restored), `frontend/src/components/TestModeBanner.tsx` and `frontend/src/features/student/TestModePanel.tsx` (wording no longer says "test courses only"; says results are recorded for real), `deployment/docker/README_TH.md` section 8.4, `docs/ai_tuning/AI_TUNING_TEST_GUIDE_TH.md`, `frontend/.env.staging.example`.
+- **Implementation rationale:** The previous entry found that two courses have real students waiting to sign in for the first time; they would become members automatically and could then check in remotely without a QR. An empty list must therefore never mean "everything", so the wider scope needs its own typed phrase in the backend and the `--all-courses` flag in the script, and the script refuses the flag while a course list is set. While editing, my write to `scripts/start_backend_ngrok.sh` removed the `courses` command that the other session had added (the two sessions edited the same file); it was rewritten here from that entry's description (read-only; code, name, section, year/semester, member count and pending-invite count per course, no personal data) and checked against the live table (8 courses listed, the two courses with pending invites flagged).
+- **Security and privacy impact:** With `--all-courses`, anyone who can reach the tunnelled backend with a valid KMUTNB sign-in could check into any real class they belong to without a QR, and the record is stored for real. The default is unchanged (the owner's private settings file still lists one test course). Preflight and release scripts refuse all the new variables. No ids, hosts or personal data are written here.
+- **Database or deployment impact:** None to schema. The `courses` command reads four tables. Nothing deployed; Docker staging untouched.
+- **Verification performed:** Backend suite 229 tests, OK, 1 skipped. Frontend under Node 22: `test:test-mode`, lint and build pass; the normal bundle contains no test-mode text. Script checks: `--all-courses` without `--test-mode` is refused; `--all-courses` while a course list is set is refused; list mode ran end to end through ngrok on spare ports (tunnel health 200, docs 404, banner says one course) and stopped cleanly. Backend started on loopback only with the all-courses acknowledgement: route present, 401 without a token, warning logged; with both a list and the acknowledgement it refuses to start. The all-courses path of the script itself was NOT run through ngrok, to avoid exposing it. A loopback test process left by my own mistake was stopped.
+- **Remaining risks or handoff work:** The owner should say which behaviour was meant (course ids fetched from the real table, or all real courses). Not verified in a browser or phone. Coordinate so only one session edits the script at a time.
+
+## 2026-11-13 15:03 - Claude - Host the web app and the API on this machine behind one ngrok URL (--host-frontend)
+
+- **Objective:** The owner changed the plan: host both Frontend and Backend on this local machine and use ngrok to let outside users in, instead of putting the Frontend on Vercel. Fix and verify the whole path.
+- **Files or components changed:** Created `frontend/vite.hosting.config.mts` (serves a built frontend on 127.0.0.1, forwards only `/api` to the backend, restricts the Host header) and `backend/tests/test_local_hosting.py` (9 static guards). Modified `scripts/start_backend_ngrok.sh`: new `start --host-frontend` mode (works with or without `--test-mode`), `status` and `stop` know the web process, new port variable `STAGING_WEB_PORT` (default 4173). Modified `deployment/docker/README_TH.md` (new section 8.5) and `docs/ai_tuning/AI_TUNING_TEST_GUIDE_TH.md` (note). No application source of the backend or frontend was changed in this task.
+- **Implementation rationale:** One ngrok URL (free plan gives one stable dev domain) serves the web at `/` and the API at `/api`, so the browser sees one origin: no CORS between web and API, no Vercel settings, and no `STAGING_FRONTEND_ORIGINS`. The frontend is built with an empty `VITE_API_ORIGIN` (relative `/api`), with `VITE_TEST_MODE=1` only for `--test-mode`, into `~/.local/state/km-attendance-staging/web-dist`, never `frontend/dist`, so a release build cannot inherit it. In this mode the backend allows only the ngrok origin and trusts only the ngrok host plus loopback. The web server uses `vite preview` with an explicit config instead of changing `frontend/vite.config.ts`.
+- **Security and privacy impact:** The whole stack is reachable from the Internet while the script runs, but only `/api` reaches the backend (health, docs, OpenAPI are not forwarded; a foreign Host header gets 403; the web server listens on loopback only). The `--test-mode` limits from the earlier entries still apply (listed test course only). ngrok terminates TLS, so tokens and face images pass through that provider. `vite preview` is a test server without edge rate limiting. The free-plan quota (1 GB out, 20,000 requests per month) is now also consumed by static files; the built output is about 42 MB, mostly MediaPipe WASM and the face model, and the real per-device download was not measured.
+- **Database or deployment impact:** None to the schema; nothing deployed. Same Supabase project as `backend/.env`. A one-time manual step remains for the owner: add the ngrok URL to Supabase Redirect URLs.
+- **Verification performed:** Ran `start --host-frontend --test-mode` on spare ports (8010, 3011, 4180). Self-checks: web `/` 200, `/api/v1/auth/me` 401, backend `/docs` 404. Through the public URL: `/` returns the app (title correct), `/api/v1/test/open-sessions` and `/api/v1/system/config` 401 without a token, `/health/ready` and `/openapi.json` return the web page and not backend data, a foreign Host header to the web server gets 403, the web server listens on 127.0.0.1 only, the test bundle contains the red banner text, `frontend/dist` was not touched. In the in-app browser the ngrok free-plan warning page appeared once; after "Visit Site" the login page rendered over HTTPS with the red test banner, a secure context with camera API available, a service worker available, and no console errors. Google sign-in was not attempted. After the run: ngrok, backend, OCR and web all stopped and ports freed. Backend-only mode was re-run after the script changes and still passes its checks. Full backend suite: 238 tests, OK, 1 skipped. Frontend lint and the test-mode script pass.
+- **Remaining risks or handoff work:** Not verified: Google sign-in and a real face check-in through the public URL (needs the Supabase Redirect URL and a signed-in test student), phone camera behaviour, many concurrent users, and the actual bytes downloaded per device. Every frontend code change needs a restart of the script to rebuild. The default backend port in the script is 8079 (changed by someone else before this task); the earlier sections of the README that mention 8000 describe the Docker staging setup. The Docker staging containers were found stopped at the end of this task; it was not me who stopped them.
+
+## 2026-11-13 15:29 - Claude - Test builds: no QR for teachers, sessions reach students fast, add-test-course command
+
+- **Objective:** The owner reported that, in the hosted test system, students no longer scan a QR (as intended) but teachers still saw a QR after opening a session and the opened session never appeared on the student side. The owner wants the dynamic QR gone for both roles in the test system, and a newly opened session to show up at once for students who joined the course.
+- **Root cause (verified):** The session was opened in a course created that day (same course code as an older course, a different row). The QR-free list only covers the course UUIDs in the private settings file, and that file listed only the older course. The student endpoint therefore answered 200 with an empty list (81 such calls in the backend log). A read-only simulation against the live database, using the single member of the new course, returned no sessions with the old list and the open session with the updated list.
+- **Files or components changed:** `frontend/src/features/teacher/LiveAttendance.tsx` (in test builds the QR image, full-screen and floating-window controls and token error are hidden and a notice is shown), `frontend/src/contexts/TeacherAttendanceProvider.tsx` (no QR token rotation calls in test builds), `frontend/src/features/student/TestModePanel.tsx` (refresh every 2 seconds and when the tab or phone becomes active again), `frontend/src/features/student/StudentHome.tsx` (two messages no longer mention QR in test builds), `scripts/start_backend_ngrok.sh` (new `add-test-course <uuid>`; `courses` now sorts newest first and shows which courses are on the test list), `backend/tests/test_attendance_test_mode.py` (4 more guards, 31 tests in the file), `deployment/docker/README_TH.md` section 8.4. The private settings file outside the repository received the new course id (done by the new command; nothing else in it changed).
+- **Implementation rationale:** All changes are behind `VITE_TEST_MODE`, so normal builds keep the QR flow and the QR code stays in the source and the production bundle; deleting the feature from the source was not done because it would remove a core control from releases and break many tests. `add-test-course` takes one explicit UUID (no "latest" shortcut), refuses a course that has unclaimed roster invites, is idempotent and rewrites the private file atomically with mode 600.
+- **Security and privacy impact:** Nothing was widened beyond adding one course with one member and no pending invites to the list. A course with real students waiting to sign in is still refused. The tradeoff is unchanged: in test mode listed courses can be checked into without a QR and the result is stored for real. No ids or personal data are written here.
+- **Database or deployment impact:** Read-only queries for the diagnosis. No writes to the database, no migration. Nothing was restarted: the owner's running stack still uses the old settings and the old web build until it is stopped and started again.
+- **Verification performed:** Backend suite 242 tests, OK, 1 skipped. Frontend under Node 22: lint, `test:test-mode`, `test:session-deadline`, `test:liveness`, `test:overlays` pass; normal build passes; a scratch test build passes and contains the teacher notice, while the normal bundle does not contain it and still contains the QR code library. `add-test-course` ran against the live data: added the new course, was idempotent on a second run, refused a course with pending invites, and rejected a course code that is not a UUID. Backend log review of the owner's run: 3 calls to the enrollment challenge returned 422 (the card image could not be read by OCR), and one rotate-token and one checkins call returned 500 from a dropped connection to Supabase (httpx RemoteProtocolError); not investigated further.
+- **Remaining risks or handoff work:** Not verified: the teacher dialog and the student list in a real browser with sign-in (no credentials), a real check-in on the new course, and how fast the list appears on a phone. The owner must stop and restart the script (it rebuilds the web app and re-reads the course list). New courses created later must be added with `add-test-course`. The wider rule "any joined course" was not implemented: a real class session opened by a real teacher would then appear to every member using the test URL, who could check in without a QR.
+
+## 2026-11-13 16:45 - Claude - Test-only extras: external e-mail sign-in, no card/OCR, auto-join Test course, face_checkin_attempts, unlimited check-ins
+
+- **Objective:** The owner asked for these behaviours in the test system only (production unchanged): (1) any Google account can sign in; (2) no student card/OCR and no student id needed; (3) a "Test" course; (4) everyone is enrolled in the Test course(s) automatically after face registration; (5) a new table that records every check-in result with status, similarity score and the reason a scan failed; (6) check-in of the Test course stays open and the same student can check in repeatedly; (7) no QR to enter the classroom; (8) a "check in again" action. The owner then chose a separate, cloned Supabase project for testing.
+- **Files or components changed:**
+  - Created `supabase/test-only/20261113120000_test_external_email_and_face_attempts.sql` (kept OUT of `supabase/migrations/` so `db push` to production cannot include it): `test_mode_flags` (default off), `test_student_id_seq`, replacement `handle_new_user()` that accepts a non-university e-mail only when the flag is on, table `face_checkin_attempts` (RLS on, no policies, no grants to anon/authenticated).
+  - Created `backend/services/test_mode_service.py` (failure classification, test-course lookup, best-effort attempt recording, auto-join).
+  - Modified `backend/core/test_mode.py`, `backend/core/config.py`, `backend/core/security.py` (external e-mail setting with its own typed acknowledgement and a gate function), `backend/main.py` (card optional only in test mode, auto-join after enrollment, test courses record to `face_checkin_attempts` and skip the final attendance write, config flags), `backend/routers/test_mode.py` (no one-per-session rule).
+  - Modified `frontend/src/features/student/StudentRegister.tsx`, `frontend/src/services/api.ts`, `StudentHome.tsx`, `TestModePanel.tsx`, `frontend/src/features/auth/Login.tsx` (card step and ID text removed in test builds, "check in again" button, notes). All behind `VITE_TEST_MODE`; the normal bundle was checked to contain none of the new text and still has the card upload.
+  - Modified `scripts/start_backend_ngrok.sh` (`--allow-external-email`, `--test-database`; the first refuses to run without the second and without `--test-mode`; the test database values come only from the private settings file and are passed through the environment of that run, never written to `backend/.env` or `frontend/.env.local`; refuses a URL equal to the one in `backend/.env`), `scripts/production_preflight.py` (also rejects the new acknowledgement variable), `deployment/docker/README_TH.md` (section 8.6, outdated note corrected).
+  - Tests: updated `backend/tests/test_attendance_test_mode.py`; created `backend/tests/test_external_email_and_attempts.py`; extended `backend/tests/test_local_hosting.py`.
+- **Implementation rationale:** The attendance table is unique per session and student, so unlimited check-ins in the Test course are done by not writing it for test courses and writing every outcome to the new table instead; the challenge is not consumed so repeated attempts work. External e-mail needs two independent switches (Backend acknowledgement and a database flag) because the role trigger in the database rejects non-university addresses on its own. Placeholder student ids are 13 digits, unique, and cannot be mistaken for real ones.
+- **Security and privacy impact:** Everything stays off by default. Production files must not mention the new variables (unit test) and the preflight rejects them. The attempts table stores ids, scores, status, stage and a trimmed reason only: no images, face vectors, e-mails or names; it has RLS with no policies and no grants, so only the server key reads it. Letting any Google account in widens who can create accounts; it is therefore allowed only with the separate test database. Residual risk: anyone with a Google account can register and consume the test system's resources while it is exposed through ngrok.
+- **Database or deployment impact:** No change to production or to `supabase/migrations`. The test-only SQL was applied only to a throwaway local Postgres (now removed), where the flag-off rejection, flag-on acceptance, the invite/student/teacher paths and the table checks were verified. It has NOT been applied to any Supabase project. Creating the separate Supabase project failed: the free plan allows two active projects per owner and the limit is reached; no other project was touched. Nothing deployed.
+- **Verification performed:** Backend suite 274 tests, OK, 1 skipped. Frontend under Node 22: type check and lint clean, `test:test-mode`, `test:liveness`, `test:api-origin`, `test:overlays`, `test:security`, `test:session-deadline`, `test:card-image` pass; normal and test bundles both build; test-only strings found only in the test bundle and the card upload only in the normal bundle. `bash -n` on the launcher passes. Not verified: real Google sign-in with an external account, a real registration and check-in in a browser, the launcher's new flags end to end (needs the test project values).
+- **Remaining risks or handoff work:** The owner must free or upgrade a Supabase slot (or choose another way), then: create the test project, clone the schema (schema only), run the test-only SQL there, turn on the flag there only, set the Google provider and Redirect URLs (consent screen External and published for outside accounts), put the three STAGING_TEST_SUPABASE_* values in the private settings file, create the Test course and run `add-test-course`. Students who registered before this change are not auto-enrolled until they register again or are added by hand (a `join-test-courses` helper was not written). The `face_checkin_attempts` rows are the intended input for the later threshold tuning.
+
+## 2026-11-13 17:40 - Claude - Separate Supabase test project created and cloned (schema only) from production
+
+- **Objective:** The owner freed a Supabase slot and asked to proceed with the plan: create a new Supabase project for testing with the same tables as the existing one, then use it for the test-only features (external e-mail sign-in, results table).
+- **Files or components changed:** `scripts/start_backend_ngrok.sh` (with `--test-database` the course list now comes from `STAGING_TEST_DB_COURSE_IDS`, a variable separate from the real database's list), `backend/tests/test_local_hosting.py` (one more check), `deployment/docker/README_TH.md` (section 8.6 step 6: teacher invite and course variable). The owner's private settings file outside the repository received the test project's URL, its public (anon) key, an empty placeholder for the service key and the test course list; the file stays mode 600 and nothing from it is printed here.
+- **Implementation rationale:** Production was only read (catalog queries and counts, schema only; no row data was copied). The repository migrations do not create the six base tables or the `auth.users` trigger (they were made in the dashboard earlier), so a baseline for those was written from production's catalog in their pre-migration shape, then the 22 migrations were replayed in order. Migrations 5 and 6 (only redefinitions of `handle_new_user`) were skipped because migration 22 replaces it anyway, and the superseded six-argument `finalize_face_attendance` was never created. The test-only SQL from `supabase/test-only/` was applied afterwards, on the test project only.
+- **Security and privacy impact:** The test project allows any well-formed e-mail to sign in once the flag `allow_external_email` is on; that flag was switched on in the test project only. Production does not have the flag table, the attempts table, or any function mentioning them (checked). The test project has no users or data. The service key was not read; the owner must paste it into the private settings file. The project URL and keys are deliberately not written to this log.
+- **Database or deployment impact:** New project in the same organisation and region, free plan ($0). Production: no writes. Test project: baseline + migrations + test-only SQL applied through the Supabase tool, one "Test" course (year 2569, semester 2, no teacher yet) inserted. Nothing deployed.
+- **Verification performed:** Fingerprints of production and test were compared and are identical for columns, constraints (101), indexes (72), policies (19), RLS flags (19 tables), triggers, table grants, function grants and bodies (22 functions, compared with blank lines removed; production's stored copies lack blank lines), the storage bucket and the realtime publication, except the two intended test-only tables (not compared in production). Two mistakes found and fixed during the comparison: `attendance_records.method` was made NOT NULL by mistake (production allows null). Trigger behaviour on the test project, run inside a block that rolled back: flag off rejects an external and a bare university address and accepts a student and a department teacher; flag on accepts external addresses as students with placeholder ids 0000000000001 and 0000000000002 and rejects a malformed address; the attempts table rejects a failed row without a reason. Afterwards the sequence was reset and the flag turned on. Not verified: a real Google sign-in against the test project, and the launcher end to end (needs the service key).
+- **Remaining risks or handoff work:** Owner steps: paste the service key into the private settings file; in the test project's dashboard enable the Google provider with the Google client id and secret and add the hosting URL to Redirect URLs (and make the Google consent screen External and published for outside accounts); create a teacher invite for the owner's own Google e-mail and assign the Test course (SQL in section 8.6); then run the launcher with `--test-database --allow-external-email`. Production data such as the real courses and students was intentionally not cloned.
+
+## 2026-11-13 18:05 - Claude - Fix the test-database guard that rejected the new project; verified the full start
+
+- **Objective:** The owner ran the launcher with `--test-database` and was refused because the test project's URL equalled the one in `backend/.env`. The owner wants to run against the new Supabase project and not the old one.
+- **Files or components changed:** `scripts/start_backend_ngrok.sh` (the "test database must not be the real project" check now compares with `STAGING_PROTECTED_SUPABASE_URL` from the private settings file instead of `backend/.env`; `--allow-external-email` is refused unless that variable is set; without it a warning is printed), `backend/tests/test_local_hosting.py`, `deployment/docker/README_TH.md`. The real project's URL was added to the private settings file (outside the repository).
+- **Implementation rationale:** The old check assumed `backend/.env` always holds the real project. The owner has since pointed `backend/.env` at the new project (observed by comparing project references only; the file was not edited by this agent), so the check refused a correct setup. The guard now names the real project explicitly, which is correct whatever `backend/.env` points to.
+- **Security and privacy impact:** The protection is kept and now cannot be defeated by editing `backend/.env`; external e-mail sign-in still needs the test database flag, the Backend acknowledgement and the protected URL. Note for the owner: because `backend/.env` now points at the test project, any run that does not pass `--test-database` (including a production-style start from that file) would use the test project, and the real project's values are no longer in that file.
+- **Database or deployment impact:** None. No SQL run. Nothing deployed.
+- **Verification performed:** Backend tests for the script and the test mode: 48, OK. Ran the exact command on spare ports: frontend built, OCR and Backend started, `/health/ready` reported database, ocr and face "ok" (so the new project's service key works and the cloned schema is reachable), through ngrok `/` was 200, `/api/v1/auth/me` 401, `/docs` 404, no errors in the Backend log. Then stopped everything with the script's `stop`; all four processes confirmed stopped. Not verified: the test flags as reported by `/api/v1/system/config` (the check returned no test keys, probably because the endpoint needs a sign-in; covered by unit tests only), Google sign-in, registration and check-in in a browser.
+- **Remaining risks or handoff work:** Owner still has to finish the Google provider and Redirect URLs in the new project, create the teacher invite and link the Test course (README_TH section 8.6). `frontend/.env.local` still points at the real project; the launcher overrides it for this run only, but a plain `npm run dev` would use the real project.
+
+## 2026-11-13 18:40 - Claude - Diagnosis: external Gmail sign-in blocked by Google (org_internal), not by the database trigger
+
+- **Objective:** The owner reported that a Gmail account could not sign in to the test system and suspected a stale PostgreSQL trigger function.
+- **Files or components changed:** none (diagnosis only).
+- **Implementation rationale:** The screenshot shows Google's own page "access blocked ... only for users in the organization", error 403 org_internal. That page appears before Supabase receives anything, so no database function can be involved. Checked the test project anyway (read-only): the flag `allow_external_email` is on, `handle_new_user` is the test version (mentions the flag table), the `on_auth_user_created` trigger is enabled, and `auth.users` is empty, which means no sign-in ever reached Supabase user creation. PostgreSQL does not cache function bodies across sessions in a way that would explain this.
+- **Security and privacy impact:** none from this entry. Note for the owner: the Google OAuth client in use belongs to a Google Cloud project whose consent screen is set to Internal; switching that project to External would also remove Google's organisation-only barrier for the real system (the real database trigger and the Backend would still reject non-university addresses). A separate Google Cloud project for testing avoids this.
+- **Database or deployment impact:** none.
+- **Verification performed:** read-only SQL on the test project (flag, function text, trigger state, user counts) and its auth log (only a bad_jwt warning for a stale token sent to the new project from the hosting domain, no sign-in event). Not verified: the fix itself, which is a Google Cloud setting only the owner can change.
+- **Remaining risks or handoff work:** owner to create an External consent screen (preferably in a separate Google Cloud project), create a Web OAuth client with the test project's Supabase callback URL, and paste its client id and secret into the test project's Google provider. If an old browser session misbehaves, clear site data for the hosting domain.
+
+## 2026-11-13 19:30 - Claude - Permanent test course 030513702 wired in; stale-connection retry; integration check on the test database
+
+- **Objective:** After external sign-in worked, the owner reported that the remaining items still did not work and asked for the permanent test course: code 030513702, name "Select Topic React", semester 1, section 1, kept (not recreated) if it already exists and used for all testing.
+- **Root cause (verified):** The test database already held that course (created by the teacher), but the Backend's test-course list pointed at a placeholder course "TEST" created earlier by this agent. Students therefore never saw the sessions the teacher opened in the real course (both earlier sessions were in it), and no check-in attempt was ever made (`face_checkin_attempts` had 0 rows). Auto-join and registration without a card had worked (one registered student, enrolled in the placeholder).
+- **Files or components changed:** created `supabase/test-only/20261113130000_permanent_test_course.sql` (creates the course only if missing, enrols registered students, delete guard trigger); `backend/routers/test_mode.py` (the polled `/open-sessions` reads are retried once on a transport error, because the log showed two 500s from "Server disconnected" on a pooled HTTP/2 connection); tests in `backend/tests/test_external_email_and_attempts.py`; `deployment/docker/README_TH.md`. In the private settings file, `STAGING_TEST_DB_COURSE_IDS` now holds the real course's id.
+- **Implementation rationale:** The course already matched the requested data, so it was kept untouched (same id, teacher, join code, sessions). The placeholder course had no sessions and was removed after the permanent course was confirmed; its one student was already a member of the permanent course. The delete guard makes "keep it forever" hold against accidental deletion; it can be disabled on purpose. The retry is limited to reads of the test-mode router; other Backend code paths were not changed.
+- **Security and privacy impact:** None added. The guard and seed live in `supabase/test-only/` and must never be applied to production. No keys or ids written to this log.
+- **Database or deployment impact:** Test project only: migration applied (seed, guard trigger), placeholder course deleted. Production untouched. The running stack must be restarted for the new course list to take effect (the launcher reads the settings file at start).
+- **Verification performed:** Backend suite 280 tests, OK, 1 skipped. Integration check against the real test database using the Backend's own functions: test course recognised, auto-join idempotent (one enrolment after two joins), student sees an opened session with code and name, three check-in rights in a row, success and failed attempts written with score, status, stage and reason, no `attendance_records` row written; all rows and the session were removed afterwards (0 open sessions, 0 attempts left). Delete guard verified (delete refused, course still present). Not verified: the real face scan, liveness and the browser UI for registration and the "check in again" button.
+- **Remaining risks or handoff work:** Restart the stack after the settings change; the teacher must open a new session (the two earlier ones are closed). Students who have not registered a face are not enrolled until they do. The same "Server disconnected" reset can still hit other endpoints (for example the profile lookup in `get_current_user` answers 503 and the client retries); a shared fix (HTTP/1.1 or a retrying transport for the Supabase client) was deliberately not made because it changes the production code path.
+
+## 2026-11-13 21:10 - Claude - Audit against the eight requirements; standing test session, backfill, test status, earlier failure logging
+
+- **Objective:** The owner asked whether the system really does everything the original request listed, especially keeping the test course's check-in open, and to fix what does not.
+- **Audit result (requirement -> state before this change):** (1) external e-mail sign-in: works, confirmed by the owner. (2) no card/OCR and no student id: works (placeholder id), confirmed by data. (3) test course: exists and is the only listed course. (4) auto-join after face registration: works, but only at registration time, so a student who registered before the course was listed was never enrolled: gap. (5) results table: written for success and for failures, but a failure raised while checking the liveness evidence was not logged because the course was not yet known: gap. (6) check-in left open and unlimited: NOT met. Nothing opened a session by itself; the teacher had to open one, it was closed by hand earlier, and the status was computed from the session's start time, so after the absent threshold (45 minutes) every successful check-in would have been recorded as "absent": gap. (7) no QR: works on both sides. (8) check in again: works (button and unlimited rights).
+- **Files or components changed:** `backend/services/test_mode_service.py` (`ensure_test_course_sessions`, a throttled variant, `backfill_test_course_members`), `backend/routers/test_mode.py` (the student poll recreates a closed session), `backend/main.py` (a startup keeper loop only inside the test-mode block, every 30 seconds; the course is resolved right after the challenge is loaded so liveness-evidence failures are logged; test courses record status "present"), tests in `backend/tests/test_external_email_and_attempts.py`, `deployment/docker/README_TH.md`.
+- **Implementation rationale:** The session is opened in the course teacher's name so the teacher's dashboard shows it and can close it (it comes back within the interval). Only the listed course UUIDs are touched and never in all-courses mode, so real classes are never given sessions. "Present" is used for test courses because a session that never closes has no meaningful late/absent clock; normal courses keep the clock. The startup hook uses `app.on_event` because this FastAPI version has no `add_event_handler` (found by running the real app).
+- **Security and privacy impact:** Test mode only; the keeper code is not reached when the mode is off (unit test checks it is inside the test block). It writes only session rows for listed courses and enrolments for already registered students. No secrets or personal data logged.
+- **Database or deployment impact:** No schema change. Test project data: one standing open session exists for the permanent test course after the checks. Production untouched. The running stack must be restarted to load the new code.
+- **Verification performed:** Backend suite run in full (result in the report). Real app started with TestClient against the test database: from a state with no open session, a session appeared on startup in the teacher's name, registered students were enrolled, closing it made the student poll recreate exactly one session, no duplicates. Not verified: the real face scan and the browser UI end to end after these changes.
+- **Remaining risks or handoff work:** The one-open-session-per-teacher rule means the standing session cannot be created while the teacher has another course's session open. The teacher's live page reads `attendance_records` only, so test check-ins do not appear there; results are in `face_checkin_attempts`. A failure of the check-in right itself (invalid or expired challenge) cannot be attributed to a session and is not logged. The shared Supabase client can still hit "Server disconnected" on other endpoints (see the earlier entry).
+
+## 2026-11-13 22:30 - Claude - Android "camera frame rate not sufficient" error: cause analysis, smaller analysis frames, test-build fps readout
+
+- **Objective:** Two Android phones (Nothing Phone 2a, vivo V21) could not register a face and got "อัตราภาพจากกล้องไม่เพียงพอสำหรับตรวจบุคคลจริง". The owner asked what causes it, how phone front cameras work (general, iPhone, Android) and how to make it work on both platforms.
+- **Cause (from the code, not yet measured on the phones):** the message comes from the Backend (`liveness_service.py`) when the client-reported `effectiveFps` is outside 8-35. The browser computes it in `LivenessScanner.tsx` as processed frames per second over the whole attempt, not the camera's frame rate: one frame at a time goes camera -> `createImageBitmap(video)` at the camera's full resolution -> Face Landmarker (WASM, CPU, two faces, blendshapes) -> back. A phone that needs more than about 125 ms per cycle reports under 8 and is refused. The upper limit 35 cannot be reached because submissions are limited to one every 50 ms (20 per second at most). Likely contributors, in order: slow single-thread WASM inference (the page is not cross-origin isolated, so no threads), full-size frames, `numFaces: 2` (the detector keeps running while only one face is visible), low light lowering the camera's own frame rate, battery saver or heat throttling (the vivo showed 25% battery).
+- **Files or components changed:** `frontend/src/features/student/LivenessScanner.tsx` (analysis frames are scaled to a longest side of 640 px with `createImageBitmap` resize options, falling back to the full frame; in test builds only, a small on-screen readout of camera fps, processing fps, milliseconds per frame and the source and analysis sizes), `backend/tests/test_external_email_and_attempts.py` (guards: analysis size not larger than the 640 px sent to the server, required-fps label equals the Backend floor, readout only in test builds).
+- **Implementation rationale:** the images sent to the server were already limited to 640 px (`frameToJpeg`), so analysing a 640 px frame changes no evidence and the server checks, while removing most of the per-frame copy and preprocessing work. The readout turns the guesswork into numbers the owner can screenshot from the phone. Thresholds, the liveness rules and the Backend were not changed.
+- **Security and privacy impact:** none; the Backend still verifies every submitted frame. The readout shows no personal data and is not in the normal bundle (checked). The change to smaller analysis frames IS in the normal bundle, so a release needs a new build to benefit.
+- **Database or deployment impact:** none. The test stack must be restarted (it rebuilds the web app); the production-like domain in the screenshots needs a redeploy.
+- **Verification performed:** type check and lint clean; frontend tests liveness, camera-quality, test-mode, overlays and face-runtime pass; normal and test bundles build; readout text found only in the test bundle; backend suite run in full. Not verified: the effect on the two phones (no access to them).
+- **Remaining risks or handoff work:** if the readout still shows under 8 fps after this change, the next steps in order are: ask Face Landmarker for one face (the Backend already rejects frames with more than one face), enable cross-origin isolation headers so WASM can use threads, lower the Backend floor (the value is self-reported by the client, so it only guards honest clients). Do not lower security checks before the numbers are known.
+
+## 2026-11-13 23:20 - Claude - Android 11+ support gate; GPU face model with CPU fallback; blink scores only when needed
+
+- **Objective:** After the Huawei Y9 2019 (Android 9) readings showed 4 fps with a face in view (75 ms per frame without a face, 236 ms with one), the owner limited the supported Android range to version 11 and newer and accepted the plan: run the face model on the GPU with a CPU fallback, and switch the eye-blink scores on only when needed.
+- **Files or components changed:** created `frontend/src/utils/deviceSupport.ts`, `frontend/src/hooks/useDeviceSupport.ts`, `frontend/src/components/UnsupportedDeviceNotice.tsx`, `frontend/scripts/test-device-support.mts` (and the `test:device-support` script, also added to `scripts/verify_release.sh`); modified `frontend/src/workers/faceLandmarker.worker.ts` (GPU delegate, 20 second start timeout, CPU rebuild when the GPU fails at start or on a real frame, blend shapes start off and switch by message, messages handled one at a time), `frontend/src/services/faceLandmarkerRuntime.ts` (Android prefers the GPU, everything else the CPU; engine and switch-time getters; `setBlendshapes`), `frontend/src/features/student/LivenessScanner.tsx` (device gate wrapper, blend shapes on only for the blink action just after the three passive samples, readout of engine and switch time in test builds), `frontend/src/features/student/StudentRegister.tsx` (shows the unsupported notice instead of the card or start step), `frontend/scripts/test-face-runtime.mjs`, `deployment/docker/README_TH.md`.
+- **Implementation rationale:** The Android version cannot be read from the User-Agent of Chrome-based browsers (frozen at "Android 10; K"), so the gate reads the real version from User-Agent Client Hints and allows the device when it cannot be determined, instead of blocking new phones by mistake. iOS keeps the existing main-thread CPU path (it works there). The earlier image-size reduction was not the main lever (readouts proved it): the per-frame model cost is, so this change targets the model itself.
+- **Security and privacy impact:** none on the checks. The gate is a support message, not a control, and the Backend never uses it. The URL switches `?delegate=` and `?blendshapes=` only work in test builds. No data is sent anywhere new.
+- **Database or deployment impact:** none. The web app must be rebuilt and redeployed (the test stack rebuilds on start).
+- **Verification performed:** type check and lint clean; frontend tests device-support (new), face-runtime, liveness, camera-quality, test-mode, overlays pass; normal and test bundles build (engine readout text only in the test bundle, notice text in both); backend suite 297 tests OK, 1 skipped. Not verified: the GPU path on any real phone (including inside a module worker), the time the blend-shape switch takes, and the actual frame rate on Android 11+ phones. A GPU that silently produces wrong results rather than failing would not be caught by the fallback; the engine readout and `?delegate=cpu` exist to compare.
+- **Remaining risks or handoff work:** collect readings from an Android 11+ phone (for example the Nothing Phone 2a) with the default, `?delegate=cpu` and `?blendshapes=always`. If the GPU is slower or unstable on some chips, make the engine choice adaptive. The Backend's frame-rate floor of 8 is unchanged on purpose (blink detection needs two consecutive closed-eye frames). Browsers without Client Hints and with an old real User-Agent (older WebViews) are blocked correctly; a phone whose version cannot be read is allowed.
+
+## 2026-11-14 00:10 - Claude - Forehead occlusion measured on the real models; narrow/wide eye blink rules, simulated profiles and clear-your-face instructions
+
+- **Objective:** The owner asked to tune the face scan for up to 50% of the forehead being covered (and to tell users to clear their face when it cannot be read), and to support people with narrow or wide eyes: write detailed blink-measurement tests for many eye shapes and run them against the real system.
+- **Measured on the real models (public sample photos only, a synthetic dark fringe, 3 shapes per level, 7 faces):** with 50% of the forehead zone covered, detection 21/21, strict observation 21/21, lowest identity similarity 0.86 against the 0.45 threshold, passive PAD failures 0/21. At 100% (to the brow line) lowest similarity 0.66; over the brows/eyes (125%) 0.50. The clear photo itself already failed the PAD threshold in 1 of 7 cases, so PAD jitter is independent of the fringe. Similarity is measured against the same photo without hair, so it is an upper bound. Real MediaPipe Face Landmarker in the browser pane: 18/18 fringe frames detected as one face, eye apertures stable; a fringe over the eyes (125%) raised the eye-blink score to 0.54, so hair over the eyes reads as a closed eye. No threshold change was needed for the forehead.
+- **Measured and NOT usable for tuning:** squeezing the eye region of real photos (a proxy, not a real eyelid) moved the Backend 68-point aperture only from 0.35 to 0.29 even when the eyes looked shut (ratio about 0.82-0.96), while MediaPipe followed it strongly (ratio 0.36 at nearly shut) but its blink score only reached 0.34. The proxy cannot show how real closed eyelids read, so the Backend limit for narrow eyes is a hypothesis to confirm on real phones. The Backend aperture is the most likely place a real blink could still be rejected.
+- **Files or components changed:** `frontend/src/utils/liveness.ts` (adaptive closed ratio 0.75 -> 0.88 by open aperture, relaxed/firm blend-score paths, recovery ratio 0.70, shared `HybridActionMonitor`, `faceProblemInstruction`, advice constants), `frontend/src/features/student/LivenessScanner.tsx` (uses the monitor, timed clear-face hints, blink prompt "close both eyes firmly and hold about 1 second", retry hint after 4 s, test-build eye readout), `backend/services/liveness_frame_service.py` (`blink_closed_ratio_limit` 0.78 -> 0.88, `blink_aperture_problem`, recovery 0.70, hints; measured ratios appended to the message only when test mode is on), `backend/services/insightface_service.py` and `backend/main.py` (messages mention clearing hair), tests `frontend/scripts/test-blink-profiles.mts` (new, in `verify_release.sh` and `package.json`), `backend/tests/test_blink_aperture_profiles.py` (new), `scripts/evaluate_forehead_occlusion.py` (new, repeatable real-model measurement), `deployment/docker/README_TH.md` section 8.7.
+- **Implementation rationale:** a landmark mesh cannot close below an absolute floor, so narrow eyes show a smaller relative drop; the closed limit therefore scales with each person's open aperture and a stronger blink score confirms the looser limit. Held closure and one decisive frame make low frame rates workable. The Backend failure text carries the measured numbers in test mode so real phones supply the data the synthetic proxy could not.
+- **Simulation result (logic only, 300 trials per cell, signal model documented in the test file):** before: natural blink at 17 fps passed 25-67%, very narrow eyes failed light blinks; after: natural blink 94-100% at 17 fps and 100% for instructed blinks (natural, slow, held) at 12-30 fps for every shape; photo, wink, squint and nod are rejected (at most 1%). Shallow blinks at 12 fps on very narrow eyes remain below 95% and are informational.
+- **Security and privacy impact:** the closed-eye limit is looser for narrow eyes and the recovery limit lower (0.78 -> 0.70). A photo stays near ratio 1.0 and PAD, identity, frame-difference and pose checks are unchanged. Known weak spot (unit-tested as a documented limit): for very narrow eyes whose closed aperture sits at 0.70-0.88 of the open one a closed frame cannot be told from a relaxed open one by aperture alone. No images, numbers about people or secrets stored; evaluation uses public sample photos.
+- **Database or deployment impact:** none (no schema change). The web app must be rebuilt and the Backend restarted. Production untouched.
+- **Verification performed:** backend suite 310 tests OK (1 skipped); all 13 frontend test scripts OK; type check, lint and production build clean. Real-model runs: InsightFace/PAD forehead experiment and MediaPipe in the browser pane through the app's own worker. Not verified: a full sign-in plus camera flow (Google sign-in cannot be automated here) and any real closed eyelid.
+- **Remaining risks or handoff work:** test on real people (narrow, wide, uneven eyes) with the test build overlay and the numbers in the failure text, then adjust `BLINK_CLOSED_RATIO_NARROW`, `BLINK_NARROW_EAR` and `HYBRID_BLINK_LIMITS`. If the Backend aperture rejects real blinks, consider a blend-score based check on the Backend side. Face similarity is still one frame against one stored vector; enrolling several vectors would help changed hairstyles but needs a schema change (not done).
+
+## 2026-11-14 00:45 - Claude - Test course joined automatically at sign-in (no class code, no approval)
+
+- **Objective:** The owner asked that every user who finishes signing in joins the existing test course automatically, without the class-code flow and without waiting for an approval.
+- **Files or components changed:** `backend/services/test_mode_service.py` (new `auto_join_test_courses_on_login`: students only, idempotent, remembered per user for 10 minutes, never raises; `backfill_test_course_members` now covers every student account, not only face-registered ones), `backend/main.py` (`/api/v1/auth/me` calls it when test mode is on), `backend/tests/test_external_email_and_attempts.py` (6 new tests, 1 updated), `deployment/docker/README_TH.md` section 8.8.
+- **Implementation rationale:** `/api/v1/auth/me` is the request the app makes right after sign-in, so it covers new and returning sessions without a new endpoint. Enrolment is written directly into `enrollments`; no join request is created or approved, so the code/approval flow is simply bypassed for the listed test courses. Teachers and admins are skipped because they are not students of the course (assumption: "every user" meant every student account; say if teachers should be enrolled too). The existing face-registration auto-join and the startup backfill stay as a safety net.
+- **Security and privacy impact:** Test mode only; the call sits behind `if ATTENDANCE_TEST_MODE` and the service function also returns 0 outside test mode and in all-courses mode, so production behaviour is unchanged. Only the listed course UUIDs are written. No personal data logged.
+- **Database or deployment impact:** No schema change. Test Supabase project only: during verification one existing student account in the test project was enrolled in the test course (intended behaviour); two other student accounts get enrolled by the startup backfill. Backend must be restarted. Production untouched.
+- **Verification performed:** Backend suite 316 tests OK (1 skipped). Against the real test database with the service's own function: students 5, enrolled before 2; first call joined one missing student, second call returned 0 (cached), a teacher-role call returned 0, one enrolment row, 0 pending join requests for the test course.
+- **Remaining risks or handoff work:** Restart the stack. Pending join requests created earlier for the test course (none found now) are not auto-approved. The join-by-code screen is still visible in the UI; hide it if wanted. The enrolment cache is per process, so a restart re-checks each user once.
+
+## 2026-11-14 01:30 - Claude - Error report and remediation plan for five phone screenshots written to TuningModelLog.md
+
+- **Objective:** The owner supplied five phone screenshots of liveness failures and asked where each message comes from (file and line), what the compared values are and why they were chosen, and then asked that the report be written to a new file, `TuningModelLog.md`, with a remediation plan (best way to tune the model or settings) added after every finished task from now on.
+- **Files or components changed:** created `TuningModelLog.md` (report for the five errors with file:line, thresholds, provenance of each value, likely cause with confidence level, six cross-cutting problems, and a four-phase remediation plan: make failures observable, close the web/Backend gaps, tune from consented measurements, change architecture only if needed). No source code changed.
+- **Implementation rationale:** Analysis only. The plan separates what was read from code, what was measured earlier, and what is still a hypothesis, and keeps the safety rule of not lowering PAD or identity thresholds without attack-set data.
+- **Security and privacy impact:** none. The report omits private URLs, student data, images and keys.
+- **Database or deployment impact:** none.
+- **Verification performed:** every file:line reference was re-checked against the current source (two constants were corrected from an earlier reply: fps constants at `liveness_service.py:29-30`, check at 302). Not verified: which sub-condition actually failed in each screenshot, because the messages carry no measured values.
+- **Remaining risks or handoff work:** the plan is awaiting approval. First step (phase 0) is to split the shared messages and attach measured values in test mode, so the next failed attempts can be classified from the `face_checkin_attempts` table. Proposed thresholds in the plan are starting hypotheses, not measurements.
+
+## 2026-11-14 02:20 - Claude - Phase 0 of the tuning plan: every liveness rejection names its condition and, in test mode, the measured numbers
+
+- **Objective:** Start phase 0 of `TuningModelLog.md`: split the shared failure messages and attach measured values in test mode, so the next failed attempts can be classified from `face_checkin_attempts`.
+- **Files or components changed:** created `backend/services/failure_diagnostics.py` (test-mode-only `[รหัส code · value (limit)]` suffix and code reader); `backend/services/insightface_service.py` (`StrictFaceFailure`, per-thread reason for `extract_strict_face_observation`: none / multiple / low score / unreadable landmarks / error); `backend/services/liveness_frame_service.py` (specific messages and codes for face detection, frame 1 size/position, frames 2-3 and the final frame pose, move-closer, identity continuity, static frames; blink message moved to the shared helper); `backend/services/passive_pad_service.py` (per-frame live probability, face-size numbers); `backend/services/liveness_service.py` (fps and duration with measured value and range); `backend/main.py` (identity tag); `backend/services/test_mode_service.py` (classifier reads the code tag first, then ordered phrase markers; new stage codes); tests `backend/tests/test_failure_diagnostics.py` (27 new), adjusted `test_external_email_and_attempts.py` and `test_blink_aperture_profiles.py`; docs `deployment/docker/README_TH.md` section 8.9 and `TuningModelLog.md` entry 2 (report and next plan).
+- **Implementation rationale:** One message per failing condition makes the failure table usable for tuning; numbers appear only in test mode so production users keep a single plain Thai sentence. The detector keeps the reason of its last failure per thread, so no second inference is needed. No threshold changed.
+- **Security and privacy impact:** none on the checks. The suffix is numbers only (scores, ratios, counts), no images, vectors, names, e-mails or student ids, and stays under the 500-character column limit (tested). It appears only when test mode is on.
+- **Database or deployment impact:** no schema change (`failure_stage` is free text up to 40 characters; the new codes fit). Backend restart needed. Production untouched.
+- **Verification performed:** backend suite 343 tests OK (1 skipped). Real detector check: a black frame gives `detect_none`, a six-person photo gives `detect_multi` with count 6, a single face passes. Not verified: a live phone attempt; the real failure condition behind the five earlier screenshots is still unknown until new attempts are recorded.
+- **Remaining risks or handoff work:** restart the test Backend and collect attempts as described in `TuningModelLog.md` 2.B; then phase 1 (web scanner pose-stability gate, size margin for move-closer, early fps check, low-light and in-app-browser hints) awaits approval. Proposed phase 1 limits are hypotheses.
+
+## 2026-11-14 04:10 - Claude - Phase 1.1 and 1.3: pose gate for the three still frames; scanner stops itself when the camera is too slow
+
+- **Objective:** Do plan items 1.1 and 1.3 from `TuningModelLog.md`: stop the scanner letting a scan finish that the Backend will refuse for head movement between the first three frames, and stop it from sending a scan whose frame rate is under the Backend floor.
+- **Files or components changed:** `frontend/src/utils/liveness.ts` (head `roll` in `LivenessObservation` and `observationFromLandmarker(…, aspectRatio)`; `PASSIVE_POSE_LIMITS`, `passivePoseProblem`, `PassivePoseGate`, messages; `measuredFps`, `fpsProblem`, `slowCameraMessage`), `frontend/src/features/student/LivenessScanner.tsx` (gate on the three still frames with restart after 2.5 s of drift, early and final frame-rate stop, late results ignored once stopped), `frontend/src/workers/faceLandmarker.worker.ts` and `frontend/src/services/faceLandmarkerRuntime.ts` (pass frame width/height for roll), `frontend/scripts/test-passive-gate.mts` (new, registered in `package.json` and `scripts/verify_release.sh`), `deployment/docker/README_TH.md` section 8.10, `TuningModelLog.md` entry 3.
+- **Implementation rationale:** Before choosing limits, the web (MediaPipe) and Backend (InsightFace) pose values were compared on 56 transformed public photos: yaw, roll and size read 1:1, pitch is about 1.3x larger in the Backend, and the models disagree by about 0.06 on small yaw. My earlier assumption of a 2.3x yaw ratio was wrong and was not used. Limits keep about one disagreement of margin under the Backend's: yaw 0.08, pitch 0.09, roll 0.12, size 15%. The early stop only fires below 6 fps after 24 frames and 3 s; the final check uses the Backend's 8 fps.
+- **Security and privacy impact:** none on the checks; the Backend rules and thresholds are unchanged and still decide. The scanner only refuses more attempts earlier. Nothing is sent to the Backend when the scan is stopped for speed, so the signed one-use challenge is not consumed. No images or personal data in the tests or logs (public sample photos only).
+- **Database or deployment impact:** none. The web app must be rebuilt (the test stack rebuilds on start).
+- **Verification performed:** type check, lint and production build clean; all 14 frontend test scripts pass (new `test:passive-gate`). Real-model comparison on 47 pairs: pose combinations the gate accepts but the Backend would reject = 0 (without the gate the Backend would have rejected 18 of 47); extra rejections caused by the margin = 7 of 47. Not verified: real head movement and live phones (the comparison uses transformed still photos).
+- **Remaining risks or handoff work:** collect phone attempts and compare the `framing_*`, `recovery_*`, `move_closer_*` and `fps` counts before and after; if people are asked to restart often, widen yaw from 0.08 to 0.10 first. The action and final-frame tolerances (`hybridActionDetected`, `hybridRecoveryDetected`) are still equal to the Backend's with no margin (plan item 1.1b, recommended next). Items 1.2 and 1.4 and phase 2 await approval.
+
+## 2026-11-14 05:20 - Claude - Phase 1.1b: head pose at the action and final frames measured against the first still frame, with a roll check
+
+- **Objective:** Close the remaining web/Backend pose gap from `TuningModelLog.md` plan item 1.1b.
+- **Files or components changed:** `frontend/src/utils/liveness.ts` (`HYBRID_POSE_LIMITS`, shared `hybridPoseStable`; `blinkClosure`, `hybridActionDetected`, `hybridRecoveryDetected` use it; baseline gets optional `roll`), `frontend/src/features/student/LivenessScanner.tsx` (yaw, pitch, size and roll of the baseline now come from the first still frame, like the Backend's reference; eye openness still from the median), `frontend/scripts/test-passive-gate.mts` (pose-margin tests), `frontend/scripts/test-blink-profiles.mts` (head-sway scenarios), `deployment/docker/README_TH.md` section 8.11, `TuningModelLog.md` entry 4.
+- **Implementation rationale:** Measured on the real models (47 photo pairs): the old final-frame rule let 11 pairs through that the Backend refuses, all because it never checked head tilt (the Backend does, at 0.18). The limits were chosen by scanning candidate sets on that data: yaw 0.11, pitch 0.12, roll 0.14 (final frame), size 17% (final frame), centre 0.22 give no pass-then-refuse pair and 6 of 47 over-strict refusals. A stricter set I proposed earlier (yaw 0.09 and similar) refused 10 of 47 without protecting more, so it was not used.
+- **Security and privacy impact:** none on the Backend checks, which are unchanged and still decide. The web scanner now refuses sooner. No images or personal data used (public sample photos).
+- **Database or deployment impact:** none; the web app must be rebuilt.
+- **Verification performed:** type check, lint and production build clean; all 14 frontend test scripts pass; the blink simulation still passes for every eye shape with head sway 0.03 added; real-model check as above. Not verified: real hand-held phones.
+- **Remaining risks or handoff work:** the yaw margin is only 0.03 (the two models disagree by about 0.06 on small yaw); if `recovery_yaw` or `move_closer_yaw` still appear in `face_checkin_attempts`, lower yaw to 0.09. Next in the plan: run real phones now, then 1.2, 1.4 and phase 2.
+
+## 2026-11-15 01:35 - Claude (lead, with three subagents) - Real-phone data pulled; blink, move-closer, timing, light hints, per-attempt diagnostics and PAD evaluator
+
+- **Objective:** The owner asked me to pull the real test data myself, split the work across subagents, report every step, and continue the four-phase tuning plan in `TuningModelLog.md` to the end.
+- **Files or components changed:**
+  - Data (read-only): pulled `face_checkin_attempts` from the TEST Supabase project with a scratch script (user ids replaced by pseudonyms before analysis; nothing written to the repo).
+  - Frontend (subagent B): `frontend/src/utils/liveness.ts` (move-closer 1.12-1.60 and hints; blink closure levels `lid_down`/`deep`, deepest-frame selection in `HybridActionMonitor`, single-frame shortcut removed, new prompts), new `frontend/src/utils/livenessTiming.ts` (mirrors every Backend timing rule with margin), new `frontend/src/utils/lightLevel.ts`, new `frontend/src/utils/inAppBrowser.ts`, new `frontend/src/components/InAppBrowserNotice.tsx`, `frontend/src/features/student/LivenessScanner.tsx` (gap/recovery guards, pre-upload timing check, kept action bitmap lifecycle, low-light and in-app notices, 20 s timeout now really stops), `frontend/scripts/test-blink-profiles.mts`, new `frontend/scripts/test-scan-guards.mts`, `frontend/package.json`, `scripts/verify_release.sh`.
+  - Backend (subagent C): `backend/services/liveness_service.py` (a code per failure, timing split into `_timing_order_problem`), `liveness_frame_service.py` (numbers capture, `blink_pose`/`frames_*` tags, 2d106det blink ratios in test mode; blink message now says "ให้สนิทสักครู่" instead of "ค้างไว้ราว 1 วินาที" — edited by me), `passive_pad_service.py` (per-frame PAD capture), new `attempt_diagnostics.py` (ContextVar collector, numbers-only sanitiser, 2000-byte cap), `insightface_service.py` (lazy, checksum-pinned 2d106det, test mode only), `test_mode_service.py` (diagnostics write with missing-column fallback; classifier markers), `main.py` (collector per attendance request), new `backend/models/insightface-buffalo-s-test-only.sha256`, `scripts/verify_face_models.sh` (optional model), new tests `backend/tests/test_attempt_diagnostics.py` (47), `test_blink_aperture_profiles.py` (prompt assertion).
+  - New `supabase/test-only/20261115090000_face_attempt_diagnostics.sql`; new `scripts/evaluate_pad_roc.py`.
+  - `.gitignore`: added `.env.*` (keeps `!.env.example`).
+  - Docs: `deployment/docker/README_TH.md` section 8.12, `TuningModelLog.md` entry 5.
+- **Implementation rationale:** Real data (39 attempts, 4 testers; latest session 19 attempts, 8 failures) showed blink as the main failure (Backend closed ratio 0.82-0.97 vs 0.78), two untagged timing failures the web never guarded, and a move-closer refusal at 1.07 with zero web margin. The investigation subagent showed the uploaded frame is the analysed frame; the causes are the insensitive Backend 68-point eye measure and the web uploading the first qualifying frame with a looser limit. Fixes keep the web stricter than the Backend and change no Backend decision. The 2d106det measure is recorded beside the 68-point one so the owner can decide a Backend rule change from data. Phase 2 threshold changes and all of phase 3 were not done: there is no consented attack set, and the current data does not meet phase 3's triggers (details in `TuningModelLog.md` 5.D).
+- **Security and privacy impact:** No security threshold changed (PAD 0.65, identity 0.45/0.35/0.30, blink 0.78/0.88/0.70, pose, fps, timing). The web refuses more, never less. Diagnostics hold numbers and short identifiers only (sanitiser drops text, arrays like embeddings, e-mails); written only in test mode; table RLS deny unchanged. Production never loads 2d106det. Found `backend/.env.old` (pre-existing, untracked, contains a production server key, never committed) and added `.env.*` to `.gitignore`; the file itself was not touched.
+- **Database or deployment impact:** Applied the test-only migration `face_attempt_diagnostics` to the TEST project only, after checking that its project ref matches the test URL and differs from the protected production ref; verified column, constraint and RLS afterwards. Production database untouched. Backend restart and web rebuild needed (the test launcher rebuilds). Test-mode scans are about 0.1 s slower.
+- **Verification performed:** backend `python -m unittest discover -s tests` → Ran 390 tests, OK (skipped=1). Frontend on Node 22: `npm run lint` exit 0, `npm run build` exit 0, all 15 `test:*` scripts exit 0. `scripts/verify_face_models.sh` OK including the optional model. `evaluate_pad_roc.py` ran on the pulled data and correctly refused to recommend (old rows have no per-frame scores). Blink simulation: instructed blinks 100% for 8 eye shapes at 30/20/17/12 fps; photo/wink/squint/nod 0%; natural/light blinks now mostly refused at low fps (deliberate). Not verified: any of this on a real phone.
+- **Remaining risks or handoff work:** Collect a second real-phone round and read `diagnostics`; if blink still fails with 106-point ratios low, propose B2 (106-point Backend rule) for owner approval. F2 (aspect-ratio-corrected web EAR) waits for camera-size readings. Luma 60 and all new margins are unmeasured. Phase 2 PAD needs >=200 genuine and >=100 consented attack attempts. Owner should move `backend/.env.old` out of the repository folder. Nothing committed.
+
+## 2026-11-15 11:08 - Claude (lead, with frontend, backend and independent-review subagents) - Round-two data analysis, Android "update your browser" error fix, PAD capture quality, test-course-only 106-point blink rule, review fixes
+
+- **Objective:** The owner collected a second round of tests on a laptop, iPhone and Android, asked for analysis of what to improve, asked why Android always shows "please update the browser / browser cannot send images", and asked for subagents with split roles plus a review for defects, then fixes.
+- **Files or components changed:**
+  - Frontend: `frontend/src/features/student/LivenessScanner.tsx` (per-frame error tolerance and accurate messages, fail() halts, camera warm-up, sharpness gate, passive JPEG 0.92, stricter recovery after move-closer, single delivery of success with copied evidence, client diagnostics), `frontend/src/services/faceLandmarkerRuntime.ts` (load-error classification, rebuild after error, Thai messages on rebuild failure), `frontend/src/workers/faceLandmarker.worker.ts` (worker-level error when the CPU fallback fails), `frontend/src/utils/liveness.ts` (passive pitch 0.05, restart 1200 ms, recovery 0.12 after move-closer, face centre), `frontend/src/utils/livenessTiming.ts` (time-limit message), new `frontend/src/utils/{faceScanErrors,captureQuality,clientDiagnostics}.ts`, `frontend/src/services/api.ts`, `frontend/src/features/student/StudentHome.tsx`, `frontend/src/features/student/StudentRegister.tsx` (test-mode load error and retry), tests `frontend/scripts/test-scan-robustness.mts` (new), `test-passive-gate.mts`, `test-scan-guards.mts`, `frontend/package.json`, `scripts/verify_release.sh`.
+  - Backend: `backend/services/liveness_frame_service.py` (test-course-only 2d106det blink rule, `blink_rule` diagnostics), `attempt_diagnostics.py` (test-course flag, `client` sanitiser, byte-based cap), `insightface_service.py` (2d106det only for listed test courses), `test_mode_service.py` (re-probe missing column every 600 s, retry on diagnostics CHECK violation), `main.py` (`client_diagnostics` form field, parsed only in test mode; test-course flag before verification), `scripts/verify_face_models.sh` (comment), new `scripts/analyze_attempts.py`, new `backend/tests/test_blink_106_and_client.py`, updated `backend/tests/test_attempt_diagnostics.py`.
+  - Docs: `TuningModelLog.md` entry 6.
+- **Implementation rationale:** Round-two data (21 attempts with diagnostics: 9 passed, 12 failed; PAD 7, blink 2) showed PAD failures driven by per-frame quality (scores swinging 0.07-0.91 inside one scan, worst with head-pitch movement and on ~9 fps phones), so the web now picks better frames instead of the threshold being lowered. Both blink failures read clearly closed on the 106-point measure, so a 106-point rule was added for listed test courses only, with a 68-point ceiling of 0.90 that keeps static photos out. The Android message came from a catch-all that treated any single-frame error as fatal and from a fail() that did not stop the loop, so a later "runtime not ready" message overwrote the real error. An independent reviewer found nine defects (one medium: the 106-point rule applied to real courses on a test-mode backend); all nine were fixed.
+- **Security and privacy impact:** No production threshold changed (reviewer compared against HEAD). The 106-point rule and the 2d106det model run only when test mode is on and the attempt is for a listed test course; enrollment and real courses keep the 68-point rule. `client_diagnostics` is parsed only in test mode, holds whitelisted enums and clamped numbers (no user-agent text, ids or e-mails), and is never used in a decision. Noted, unchanged by owner request: test-mode enrollment needs no student card, so test mode must never point at a database with real students.
+- **Database or deployment impact:** Read-only pull from the TEST project; no schema change this round. Backend restart and web rebuild needed (the test launcher rebuilds the web). Test-course scans run 2d106det (about 19 ms per frame on CPU).
+- **Verification performed:** backend `python -m unittest discover -s tests` → Ran 420 tests, OK (skipped=1). Frontend (Node 22): `npm run lint` exit 0, `npm run build` exit 0, test-mode `vite build` exit 0, all 16 `test:*` scripts exit 0. `scripts/verify_face_models.sh` OK. Independent review read the full diff and ran all suites. Not verified: any of this on a real phone, the first error that actually fires on the owner's Android device, fps cost of the sharpness readback.
+- **Remaining risks or handoff work:** Collect a third round and run `scripts/analyze_attempts.py` per device; the test-mode error box now names the real Android error if it still occurs. All new constants are unmeasured. The 106-point rule rests on 2 failures and 5 successes; production use needs owner approval and more data. PAD aggregation changes still need >=100 consented attack attempts. `backend/.env.old` should be moved out of the repository folder. Nothing committed.
+
+## 2026-11-15 11:36 - Claude (lead, with frontend, backend and independent-review subagents) - Plan closed without new data: F2 eye measure, production 106-point blink rule with kill switch, final review fixes
+
+- **Objective:** The owner said no more data collection and asked to finish the four-phase plan. Asked in chat, the owner chose to enable the 106-point blink rule in production and to keep the PAD rule unchanged.
+- **Files or components changed:**
+  - Frontend: `frontend/src/utils/liveness.ts` (eye aspect ratio in true geometric units using the frame aspect; roll uses the sanitised aspect — the last line edited by me), `frontend/scripts/test-scan-robustness.mts` (F2 tests).
+  - Backend: `backend/core/config.py` (`LIVENESS_BLINK_106_ENABLED`, default on, strict parser), `backend/services/liveness_frame_service.py` (106 rule for all courses and enrollment, fail-closed on non-finite values in both blink rules, blink pose and legacy path), `backend/services/insightface_service.py` (2d106det in production for blink frames only, pinned SHA-256, retry every 300 s, finite-value checks on observations), `backend/services/attempt_diagnostics.py` (test-course helpers removed), `backend/main.py` (startup load, `/health/ready` field `blink_106`), `backend/models/insightface-buffalo-s.sha256` (adds 2d106det), deleted untracked `backend/models/insightface-buffalo-s-test-only.sha256` created by the previous round and superseded, `scripts/verify_face_models.sh` (all manifest files required; trailing blank line removed by me), `scripts/production_preflight.py` (pins 2d106det, validates the switch, blank = on), tests `backend/tests/test_blink_106_and_client.py`, `backend/tests/test_attempt_diagnostics.py`.
+  - Docs: `deployment/backend.env.example`, `deployment/README.md`, `deployment/docker/README_TH.md` (models list, section 8.13), `docs/ai_tuning/AI_TUNING_TEST_GUIDE_TH.md` (2d106det now used), `TuningModelLog.md` entry 7.
+- **Implementation rationale:** F2 removes a measurement-unit mismatch (web EAR was scaled by width/height: 0.56x on portrait phones, up to 1.78x on laptops), so the shared constants 0.26/0.13 now mean the same thing on both sides. The production rule follows the owner's decision; the kill switch and 68-point fallback keep a safe exit. The final review found a NaN fail-open in the photo ceiling (hard to reach); all blink comparisons are now written to pass only inside the limit with finite values.
+- **Security and privacy impact:** Production blink acceptance widens only where the 68-point ratio is between the adaptive limit and 0.90 and the 106-point ratio is <= 0.50 on both eyes; static photos (68-point ~1.0), winks and eyes kept shut stay refused (tested), PAD 0.65 on every frame and identity rules unchanged. No consented attack data exists for this rule. Production failure messages stay plain Thai without numbers. No new data stored.
+- **Database or deployment impact:** No database change. Deployment now requires `2d106det.onnx` from buffalo_s next to the other three models, readable by the backend user; preflight and the systemd pre-start fail without it (intended). About 7 ms extra per blink frame (~36 ms per blink scan). Docker build not run.
+- **Verification performed:** `scripts/verify_release.sh` exit 0 ("Release verification completed successfully"): `git diff --check` clean, face models OK (4 files), backend Ran 442 tests OK (skipped=1), `pip check` clean, frontend lint, all test scripts, build and production audit with 0 vulnerabilities (npm also lists 4 pre-existing low-severity dev-dependency advisories in `vite-plugin-pwa`/`workbox-build`). Independent review of the production rule and F2 found no critical or high issue; its findings were fixed. Not verified: real phones, Docker image.
+- **Remaining risks or handoff work:** Provision `2d106det.onnx` before the next deploy and check `/health/ready` shows `blink_106: "ready"`. The 106 rule rests on 2 failures and 5 successes; watch blink and PAD pass rates after deploy and use `LIVENESS_BLINK_106_ENABLED=false` if needed. PAD rule change, pose percentiles, fps floor and phase 3 remain blocked on consented attack data or were rejected for security. `backend/.env.old` (production key, untracked, now git-ignored) should be moved out of the repository. Nothing committed.
+
+## 2026-11-15 16:08 - Claude (lead, with backend, frontend and independent-review subagents) - Median PAD rule, Realme 16 Pro+ fixes, blink ceiling from data, server-side move_closer fallback with retry challenge, PWA update flow
+
+- **Objective:** The owner asked to read failure_stage from the database, make PAD easier to pass with a more suitable rule, and fix the problems of one tester on a Realme 16 Pro+ (five screenshots: 6 fps stop, two blink failures, two PAD failures) using subagents with clear roles and a detailed report.
+- **Owner decisions (asked in chat):** PAD median >= 0.60 and min >= 0.30 in production with a kill switch; 106-point blink photo ceiling derived from data; switch to move_closer after two blink failures; make PAD, move-closer and return easier.
+- **Files or components changed:** Backend: `backend/core/config.py` (LIVENESS_PAD_RULE, LIVENESS_PAD_MEDIAN_THRESHOLD, LIVENESS_PAD_MIN_FRAME_FLOOR, strict LIVENESS_PAD_THRESHOLD), `backend/services/passive_pad_service.py` (pad_decision, actionable message, diagnostics), `backend/services/liveness_frame_service.py` (ceiling 0.94, 106 base guard 0.10, unrounded decisions, BlinkActionFailure, on_blink_passed, fail-closed framing/move-closer checks), new `backend/services/action_fallback.py`, `backend/services/liveness_service.py` (forced move_closer at challenge issue), `backend/main.py` (retry_challenge 422 body, stale blink token refusal, fallback bookkeeping for attendance and enrollment), `backend/services/attempt_diagnostics.py` (web_build, web_commit), `backend/services/test_mode_service.py` (action_fallback marker), `scripts/production_preflight.py`, `scripts/evaluate_pad_roc.py`, `scripts/analyze_attempts.py`, `deployment/backend.env.example`, `deployment/README.md`, new tests `backend/tests/test_pad_median_rule.py`, `test_action_fallback_and_ceiling.py`, `test_action_fallback_endpoints.py` and updates to existing tests. Frontend: `frontend/vite.config.ts` (injectRegister false, skipWaiting, clientsClaim, cleanupOutdatedCaches, build id), new `frontend/src/pwa/{registerServiceWorker,updateGate}.ts`, `frontend/src/config/buildInfo.ts`, `frontend/src/utils/{delegateTuner,engineSwitchGuard,padFailure}.ts`, `frontend/src/components/PadRetryChecklist.tsx`, `frontend/src/services/retryChallenge.ts` (TTL bound widened to 4 h by me for test-mode claims), `frontend/src/services/{api,faceLandmarkerRuntime}.ts`, `frontend/src/workers/faceLandmarker.worker.ts`, `frontend/src/utils/{liveness,captureQuality,clientDiagnostics}.ts`, `frontend/src/features/student/{LivenessScanner,StudentHome,StudentRegister}.tsx`, `frontend/src/main.tsx`, tests `frontend/scripts/test-scan-robustness.mts`, new `frontend/scripts/test-retry-challenge.mts`, `frontend/package.json`, `scripts/verify_release.sh`. Docs: `deployment/docker/README_TH.md` section 8.14, `TuningModelLog.md` entry 8.
+- **Implementation rationale:** Read-only database queries on the TEST project (pseudonymised) showed PAD as the top failure, mostly one slow device apparently on a stale cached build, and frame 1 often near zero. The scanner took passive frame 1 too early (0.13-0.45 s after the face appeared, before exposure settled and before the blur gate had history). The Realme blink failures were a 0.909 68-point ratio against a 0.90 ceiling and a 68-point measure that did not move on narrow eyes; the ceiling 0.94 is the midpoint between the genuine maximum (0.909, n=17) and the static-photo minimum (~0.96). The Realme GPU ran at ~160 ms per frame, so the web now measures GPU vs CPU and keeps the faster. Independent review round 3 found the fallback could not reach production students because retries reused the same blink QR challenge; the backend now returns a move_closer retry challenge for the same claim and expiry.
+- **Security and privacy impact:** Two production liveness rules were loosened at the owner's request without consented attack data: PAD aggregation (median 0.60 / floor 0.30) and the 106-point photo ceiling (0.94); both keep kill switches (LIVENESS_PAD_RULE=all_frames, LIVENESS_BLINK_106_ENABLED=false) and preflight refuses further loosening below 0.50/0.20. All new checks fail closed on non-finite values. The fallback action is decided server-side from the authenticated user id; the client cannot choose it; the retry challenge reuses the same QR claim and never extends its expiry. Fallback state is in memory (user id and counters only). No new personal data stored; localStorage holds only the engine choice.
+- **Database or deployment impact:** No schema change; read-only queries on the TEST project only. Backend restart and web rebuild needed. Production single-worker deployments keep consistent fallback state; a restart forgets it.
+- **Verification performed:** `scripts/verify_release.sh` exit 0 ("Release verification completed successfully"): git diff check, 4 face models OK, backend Ran 486 tests OK (skipped=1), pip check, frontend lint, all 17 test scripts, build, production audit 0 vulnerabilities. Independent review round 3 ran all suites and its findings were fixed. Not verified: real phones (including the Realme), Docker build, a deploy during a scan.
+- **Remaining risks or handoff work:** Retest the Realme on a fresh tab and confirm the new build id and `delegate` in `diagnostics.client`. Watch PAD frame-1 scores, `recovery_scale` after move_closer (0.15 is accepted owner risk), and blink_rule counts. Enrollment does not yet return retry challenges. PAD and blink-ceiling changes need consented attack data to confirm. `backend/.env.old` (production key, untracked, git-ignored) should still be moved out of the repository. Nothing committed.
+
+## 2026-11-15 18:30 - Claude - Pilot check-in log table (test project) and Phase B release guards
+
+- **Objective:** Before merging to main, the owner asked for Phase B and a new table that records every face check-in attempt with user uuid, e-mail, student id, similarity score and failure reason, to collect sample data from 30-50 people. Owner decisions in chat: TEST project only; every attempt including failures; e-mail and student id copied into the table; keep a single Backend worker instead of moving the fallback state to the database.
+- **Files or components changed:**
+  - New `supabase/test-only/20261115180000_pilot_checkin_log.sql`: table `public.pilot_checkin_log` (snapshot e-mail/student_code, course_code, attempt_no, outcome, scores, generated `face_match`, liveness action, failure stage/reason), AFTER INSERT trigger `face_checkin_attempts_copy_to_pilot_log` with security-definer function `copy_face_attempt_to_pilot_log()` (per-student advisory lock for attempt_no, own exception handler so a copy problem never blocks the attempt row or the check-in), switch `test_mode_flags.pilot_checkin_log` (on), view `public.pilot_checkin_summary` (security_invoker, one row per participant). RLS deny policy, all privileges revoked from anon/authenticated.
+  - `backend/.dockerignore`, `ocr-service/.dockerignore`: exclude `.env.*` (keep `.env.example`); backend also excludes `.pytest_cache`, `*.bak`.
+  - New `backend/tests/test_deploy_guards.py` (6 tests): `--workers 1` in Dockerfile and systemd unit, compose files do not override the command or set WEB_CONCURRENCY, both dockerignore files exclude env backups.
+  - `deployment/docker/README_TH.md` section 8.15 (how to read, switch off and delete the pilot data).
+- **Implementation rationale:** A trigger on the existing attempt table captures every attempt the Backend already records, without touching check-in code, so the pilot cannot break attendance. Copying e-mail/student id follows the owner's choice (easy CSV export); deletion follows the profile (cascade). Phase B review found that `backend/.dockerignore` excluded `.env` but not `.env.old`, so `COPY . /app` would have baked the local production key file into the image; fixed and guarded by a test. The fallback state lives in one process, so the single-worker launchers are now pinned by tests. Preflight already refuses every test-mode switch (covered by the existing test in `test_attendance_test_mode.py`) and pins the 2d106det checksum.
+- **Security and privacy impact:** The new table holds personal data (e-mail, student id) next to face scores, in the TEST project only; no images, embeddings, names or diagnostics. Browser roles have no access (verified: anon/authenticated have no select on table or view and no execute on the function). The owner should collect only from consenting participants and truncate the table after the pilot. Docker images no longer can include env backups.
+- **Database or deployment impact:** Migration applied to the TEST project `kmutnb-attendance-test` only (project URL checked against the test ref before applying). Production database untouched; this file must never be applied there. No Backend restart needed for the table. Docker images now exclude `.env.*`.
+- **Verification performed:** In a rolled-back transaction on the test project: a failed then a successful attempt produced attempt_no 1 and 2 with e-mail, student id and course code copied, face_match true for 0.71 vs 0.45, summary row attempts=2/ok=1/fail=1/first_try=false/until=2/common=pad; with the switch off no row was copied. Afterwards: 0 rows in the log, switch on, RLS on, no browser privileges. Supabase security advisor: no new findings (two pre-existing). `docker build` of backend and OCR images exit 0; backend image contains only `.env.example`, runs as non-root `attendance`, imports fastapi/onnxruntime 1.26.0/insightface/cv2. `scripts/verify_release.sh` exit 0: 4 face models OK, backend Ran 492 tests OK (skipped=1), frontend lint/tests/build, production audit 0 vulnerabilities (4 pre-existing low dev advisories).
+- **Remaining risks or handoff work:** Not verified: a live check-in writing a real pilot row (needs the test stack running), container start with real env and mounted models. The pilot log only covers attempts the Backend records (test courses in test mode). Consented attack testing (Phase B item 5) still needs participants. `backend/.env.old` should still be moved out of the repository and its key rotated if it was ever shared. Nothing committed.
+
+## 2026-11-15 18:43 - Claude - Consolidated tuning report ReportTuning.md
+
+- **Objective:** The owner asked for one detailed report of the whole face-model tuning work from the start: topics and details of each change, the errors found, and the results after each fix, written as `ReportTuning.md`.
+- **Files or components changed:** new `ReportTuning.md` (Thai): executive summary with measured before/after numbers, how the liveness checks work, timeline of every round (2026-11-13 to 2026-11-15), per-round problem/fix/result sections 4.1-4.10, before/after threshold tables for the Backend and the web, a list of 27 system defects and 4 of my own analysis mistakes, combined results and test-count history, security trade-offs with kill switches, remaining risks and a proposed next plan. No code changed.
+- **Implementation rationale:** Compiled only from `TuningModelLog.md` entries 1-8, earlier `log.md` entries from 2026-11-13 22:30 onward and `README_TH.md` 8.7-8.15, so every number has a source; places where only simulations or calibration photos back a number say so. The success criteria in the next-plan table are labelled as my proposals. The owner's satisfactory result after the Realme round is reported as their statement, not as measured data.
+- **Security and privacy impact:** none. The report has no names, e-mail addresses, student ids, URLs, keys or images (checked with a search for @, URLs and 13-digit numbers: no hits).
+- **Database or deployment impact:** none.
+- **Verification performed:** cross-checked key numbers against the source entries and corrected three statements before saving (the original web recovery limit, a recovery_scale failure in round two, and the proposed status of the success criteria). The file is git-ignored by the existing `*.md` rule like the other reports.
+- **Remaining risks or handoff work:** the report must be updated after the 30-50 person pilot and the consented attack test. Nothing committed.
+
+## 2026-11-15 20:30 - Claude - Diagnosis: face runtime "crashed" error in the Messenger in-app browser
+- **Objective:** Explain a tester screenshot showing "runtime status error" (face detector stopped mid-scan) on Android inside Messenger's in-app browser.
+- **Files changed:** `TuningModelLog.md` (appended entry 9: report and proposed plan). No code changed.
+- **Rationale / findings:** The message is the `crashed` class from `classifyRuntimeLoadError`. The debug panel showed GPU at 221 ms/frame (4 fps), above the tuner's 110 ms limit, so a mid-scan GPU→CPU rebuild is requested after 15 frames; a failed rebuild, a GPU fault or a killed worker all end in `rejectLoad` and this same message. The raw error goes only to `console.error`, so the exact branch is unconfirmed (hypothesis: WebView memory/GPU limits).
+- **Security & privacy:** None. No user data, URLs or images recorded.
+- **Database / deployment:** None.
+- **Verification:** Code reading only; not reproduced on a device.
+- **Remaining risks / handoff:** Proposed (not done): show a truncated raw error in the test panel; on a GPU/switch crash retry on CPU and remember it; avoid mid-scan delegate switches in in-app browsers; stronger "open in Chrome" prompt.
+
+## 2026-11-15 21:00 - Claude - Action timing inventory and laptop PAD 0.00 diagnosis
+- **Objective:** (1) List every timing limit that governs the blink / move_closer challenge, so the owner can choose longer values before any change. (2) Diagnose a Lenovo Yoga 6 13ABR8 tester failing face enrollment with PAD live scores 0.00 on all three frames.
+- **Files changed:** `TuningModelLog.md` (appended entry 10). No code or database changes.
+- **Rationale / findings:** There is no dedicated clock for performing the action; the user-felt limits are action→recovery (Backend 3,000 ms, web 2,700 ms) and the 20 s whole-attempt budget (both sides). The PAD crop box is computed server-side, so a coordinate mismatch is unlikely; scores below 0.005 on every frame point to camera-side processing (Lenovo/Windows camera effects), a wrong camera (IR/virtual) or harsh laptop lighting. Hypotheses only.
+- **Security & privacy:** Read-only SELECT on the TEST project's `face_checkin_attempts` (scores and client fields only; no identities recorded here). No thresholds were lowered.
+- **Database / deployment:** None.
+- **Verification:** Code reading plus one read-only TEST query; laptop issue not reproduced.
+- **Remaining risks / handoff:** Owner to pick new timing values (both Backend and web constants must move together). Proposed: log failed enrollments to a test table, show the active camera label in the test panel, and collect tester feedback after disabling camera effects.
+
+## 2026-11-15 21:20 - Claude - Longer liveness action window (5 s) and attempt budget (30 s)
+- **Objective:** Owner chose 5 s for action→recovery and 30 s for the whole scan after testers reported running out of time.
+- **Files changed:** `backend/services/liveness_service.py` (MAX_ACTION_SPAN_MS 3000→5000, MAX_ATTEMPT_DURATION_MS 20000→30000; the owner's own inline comment kept), `backend/main.py` (RETRY_CHALLENGE_MIN_SECONDS 15→35 and its comment), `frontend/src/utils/livenessTiming.ts` (maxActionToRecoveryMs 2700→4700, maxAttemptMs 19500→29500, comments), `frontend/src/features/student/LivenessScanner.tsx` (ATTEMPT_TIMEOUT_MS 30000), `frontend/src/features/student/StudentHome.tsx` (text "30 วินาที"), `frontend/src/utils/liveness.ts` (comment), tests: `backend/tests/test_attempt_diagnostics.py`, `test_failure_diagnostics.py`, `test_liveness_security.py`, `frontend/scripts/test-scan-guards.mts`, `test-scan-robustness.mts`; `TuningModelLog.md` entry 10.D.
+- **Rationale:** Both sides must move together; the web keeps the same safety margins below the Backend (300 ms and 500 ms) so a too-slow scan is retried locally before any upload. The retry challenge minimum was raised so a replacement challenge is never issued with less time than one full scan.
+- **Security & privacy:** Slightly longer window for frame substitution between action and recovery (+2 s); PAD, continuity and randomized prompt delay unchanged. No data handling change.
+- **Database / deployment:** None. Backend and frontend must be deployed together (an old web build against the new Backend is harmless; a new web build against an old Backend would send 20-30 s scans that the old Backend refuses).
+- **Verification:** Backend `.venv/bin/python -m unittest discover -s tests`: Ran 492 tests, OK (skipped=1). Frontend on Node 22.23.2: all 17 `test:*` scripts exit 0, `npm run lint` exit 0, `npm run build` exit 0, `tsc -b` exit 0. Not verified on a real phone.
+- **Remaining risks / handoff:** Unrelated uncommitted change present in `backend/main.py` (FACE_THRESHOLD 0.45→0.50, made by the owner, left untouched). Measure `timing_action_span`/`duration` failure rates in `pilot_checkin_log` after the change.
+
+## 2026-11-15 21:45 - Claude - Liveness scanner layout: instruction card on top, face guide lower
+- **Objective:** Owner asked to move the liveness instruction box to the top of the scanner and shift the white face oval down a little.
+- **Files changed:** `frontend/src/features/student/LivenessScanner.tsx` only: the instruction card (progress bar, instruction text, move-closer size guide) now sits right under the header; the oval moved from top 46% to 54% and was made slightly smaller (h min(55dvh,34rem)→min(48dvh,31rem), w min(72vw,24rem)→min(68vw,23rem)) so it never sits under the card; the in-app/low-light hints and the small explanatory line stay at the bottom; the test-mode stats panel moved to the lower left so it no longer covers the card.
+- **Rationale:** Instructions near the top are closer to the camera, so people read them without looking away from the lens. No scan logic, thresholds or face-position checks changed (the quality gate measures the face against the camera frame, not the drawn oval; 54% is about as close to the frame centre as the old 46%).
+- **Security & privacy:** None. **Database / deployment:** None (frontend only).
+- **Verification:** Node 22.23.2: all 17 `test:*` scripts exit 0, `npm run lint` exit 0, `npm run build` exit 0. Layout checked with a static mock of the same classes at 375×667 and 390×844 using the longest instruction plus the size guide: card and oval do not overlap. Not checked on a real phone with the live camera.
+- **Remaining risks / handoff:** Very short screens (<640 px tall) or a two-line notice from the browser could bring the card close to the oval top; check on the testers' phones.
+
+## [2026-11-15 22:10] Claude: Update ReportTuning.md with the evening tester-feedback rounds
+- **Objective:** Owner asked for a detailed, plain-language update of the tuning report.
+- **Files changed:**
+  - `ReportTuning.md` (modified) and `docs/ReportTuning.md` (kept as an identical copy).
+    - Header now cites TuningModelLog entries 1–10.
+    - Executive summary gained a bullet on the tester-feedback round and a note about the uncommitted `FACE_THRESHOLD = 0.50`.
+    - Timeline gained four rows.
+    - New sections 4.11–4.14:
+      - 4.11: Messenger in-app browser crash.
+      - 4.12: Lenovo Yoga 6 PAD 0.00.
+      - 4.13: 5 s / 30 s timing change.
+      - 4.14: scanner layout change, plus the 0.45 vs 0.50 note.
+    - Updated the threshold tables in sections 5.1 and 5.2.
+    - Added bug rows 28–32 to section 6.1.
+    - Added the price of the longer timing to 7.3 and a timing row to section 8.
+    - Added risks 8–11 to section 9.1 and plan items 9–12 to section 9.2.
+- **Rationale:** The report stopped at round 4.10 (18:30). Everything added comes from TuningModelLog entries 9–10 and the log.md entries of 20:30–21:45. No new measurements.
+- **Security/privacy:** The report contains no names, emails, student codes, images, keys or private URLs. Device model names only.
+- **DB/deploy:** none.
+- **Verification:**
+  - Every replacement anchor was asserted to match exactly once.
+  - Confirmed sections 4.11–4.14 are present (665 lines).
+  - The `docs/` copy was synced with `cp`.
+  - No code changed, so no tests were run.
+- **Remaining risks/handoff:**
+  - The `FACE_THRESHOLD` 0.50 decision is still the owner's to make.
+  - The entry 9 and 10 code proposals are not implemented.
+  - Nothing is committed.
+
+## [2026-11-16] Claude: Adopt face-match threshold 0.50 (owner decision)
+- **Objective:** The owner chose `FACE_THRESHOLD = 0.50` instead of 0.45. The value was already in the working tree but uncommitted. The task was to make the docs agree with it and check its impact.
+- **Files changed:**
+  - `backend/main.py`: no new edit; the 0.50 value is kept as the owner made it.
+  - `deployment/docker/README_TH.md`: the `identity` row now says 0.50. Added a note under the forehead-occlusion table that the 125% case (minimum 0.50) sits exactly on the new line.
+  - `ReportTuning.md` and `docs/ReportTuning.md`:
+    - New section 4.15 covering the decision, the trade-off and a back-test.
+    - Updated the summary, timeline, tables 5.1 and 8, risk 11 and plan item 9.
+  - `TuningModelLog.md`: entry 11.
+- **Rationale:**
+  - The constant is the single source for the decision, the test-mode message and the stored `threshold_used`.
+  - Test fixtures that pass `threshold_used=0.45` are only stored-value examples, so they were left alone.
+  - `test_mode_service.THRESHOLD_KEY` is unused.
+- **Security/privacy:**
+  - Stricter identity matching means fewer impostor and look-alike accepts, and more false rejects for genuine users.
+  - The back-test was a read-only aggregate on the TEST project. No identifiers were read or recorded.
+- **DB/deploy:**
+  - No schema change.
+  - Rollback: set the constant back to 0.45 and restart the Backend. There is no env switch.
+- **Verification:**
+  - Backend unittest: `Ran 492 tests`, `OK (skipped=1)`.
+  - Back-test on 77 scored attempts from 14 testers: 0 below 0.50; 6 in the 0.50–0.60 range; min 0.553; p05 0.581; median 0.727.
+- **Remaining risks/handoff:**
+  - The margin is only about 0.05 above the lowest genuine score, and the sample is small.
+  - Monitor `identity` failures in `pilot_checkin_log`.
+  - Nothing is committed.
+
+## [2026-11-16] Claude: CompareFaceExplain.pdf (face embedding storage and matching explainer)
+- **Objective:** Owner asked for the face-embedding explanation as a PDF.
+- **Files changed:** `CompareFaceExplain.pdf` (created, project root, 3 pages, Thai). No code changed.
+- **Content:**
+  - How enrollment stores one 512-d embedding per account in `profiles.face_embedding` (`vector(512)`), written by `finalize_face_enrollment` with no overwrite.
+  - How check-in compares only against the logged-in account's own embedding (1:1, threshold 0.50).
+  - The three ways another user's name could appear.
+  - How 1:N systems store and decide: a templates table, an HNSW index, a stricter threshold, a top-1/top-2 margin, a duplicate check at enrollment, and audit logging.
+  - A recommendation: a duplicate-face check at enrollment.
+- **Rationale:** The PDF was rendered with WeasyPrint from HTML in a scratch venv; nothing was added to the project dependencies. LibreOffice was tried first and rejected because its Thai layout was poor.
+- **Security/privacy:** The PDF contains no PII, images, embeddings or keys.
+- **DB/deploy:** none.
+- **Verification:**
+  - 3 pages.
+  - Checked the rendered pages visually: Thai text and digits are correct, and tables are not split badly.
+- **Remaining risks/handoff:**
+  - The duplicate-face check is only a proposal.
+  - Nothing is committed.
+
+## [2026-11-16] Claude: Read-only usage summary of the TEST database
+- **Objective:** Owner asked which accounts have used check-in and how many there are. Answer in chat only; no document.
+- **Files changed:** none (this log entry only).
+- **Method:**
+  - Read-only SELECTs on TEST project `kmutnb-attendance-test`.
+  - Tables read: `profiles`, `auth.users` (`last_sign_in_at` only), `face_checkin_attempts`, `attendance_records`, `pilot_checkin_log`.
+  - `face_embedding` was not selected.
+  - Production was not touched.
+- **Aggregate results (no PII):**
+  - 25 accounts: 24 students and 1 teacher. 15 students use the university domain and 9 use external domains.
+  - 18 students are face-registered.
+  - 20 students tried a face check-in; 17 of them succeeded at least once.
+  - 154 attempts in total (87 success, 67 failed), between 2026-11-13 and 2026-11-16. One account alone made 87 of them.
+  - Top failure stages: pad 26, blink 16, not_enrolled 7, move_closer 6.
+  - `attendance_records` has 0 rows. `pilot_checkin_log` has 48 rows.
+- **Security/privacy:** Names and emails were shown to the owner in chat only and are not recorded here.
+- **DB/deploy:** none.
+- **Verification:** Per-account sums match the totals (154 = 87 + 67, and the failure stages sum to 67).
+- **Remaining risks/handoff:** none.
+
+## [2026-11-16 17:55] Claude: reportResultFaceCheckin.pdf (face check-in usage report, TEST data)
+- **Objective:** Owner asked which tables the usage numbers came from, with an explanation, as a PDF.
+- **Files changed:** `reportResultFaceCheckin.pdf` (created, project root). No code changed.
+- **Content:**
+  - Summary KPIs.
+  - The five source tables with the columns used: `profiles`, `auth.users` (`last_sign_in_at` only), `face_checkin_attempts` (main source), `attendance_records` (0 rows), `pilot_checkin_log` (48 rows, count only).
+  - Join keys, the SQL, definitions and consistency checks.
+  - Per-tester table, logged-in-but-never-scanned list, failure stages and attempts per day.
+- **Security/privacy:**
+  - **The PDF contains tester names (PII). It is marked internal on every page and must not be committed or shared.**
+  - Emails appear only as a type (university or external). No student codes, embeddings, images or tokens.
+  - `*.pdf` is not git-ignored, so the owner must keep it out of commits.
+- **DB/deploy:** none. Read-only TEST queries; production was not touched.
+- **Verification:** 4 pages, rendered with WeasyPrint. Checked the pages visually: Thai text, tables and page breaks are fine, and the totals match (154 = 87 + 67).
+- **Remaining risks/handoff:** Consider adding these reports to `.gitignore`. Nothing is committed.
+
+## [2026-11-16 18:40] Claude: Fix "runtime status error" after the GPU→CPU switch (vivo V23e, Chrome)
+- **Objective:** A tester screenshot from a vivo V23e in Chrome showed "ระบบตรวจจับใบหน้าหยุดทำงานกลางคัน / runtime status error", with GPU at 155 ms per frame and 5.8 fps. Explain the cause and fix it.
+- **Root cause:** Same mechanism as TuningModelLog entry 9, but in a normal browser.
+  - The tuner asked for the CPU. The worker closed its GPU graph and rebuilt a CPU graph in the same WASM heap; that rebuild failed and the whole runtime became `error`.
+  - No CPU choice was saved, so "try again" started on the GPU again and crashed again.
+  - The raw error text went only to the console.
+- **Files changed:**
+  - `frontend/src/services/faceLandmarkerRuntime.ts`:
+    - `requestDelegateSwitch` now calls a new `restartWorker(target)`. It terminates the worker and starts a fresh one on the target engine (`initializeWorker` takes an optional `forcedDelegate`). The runtime stays `loading` until the new worker is ready, the tuner is kept, and the scanner gets 'switching' then 'switched'.
+    - A worker that dies while on the GPU or mid-switch is replaced once by a fresh CPU worker (`shouldRecoverOnCpu` / `recoverOnCpu`, guarded by `crashRecoveryUsed`). The CPU choice is saved, and the raw text is kept in `getLastRuntimeRecovery()`.
+    - `rejectLoad` puts the raw text, cut to 160 characters, in the new optional `snapshot.detail`.
+    - Old workers' late failures are ignored by a generation check.
+  - `frontend/src/features/student/LivenessScanner.tsx`:
+    - The test-mode error detail now shows `runtime status error: <raw>`.
+    - The test panel shows a "กู้ระบบ→CPU" line after a recovery.
+    - `restartAfterEngineSwitch` resets `processing`, because the in-flight frame of the old worker never answers.
+  - `frontend/scripts/test-runtime-recovery.mjs` (new): a behaviour test that loads the real runtime through Vite SSR with a fake Worker. Wired into `package.json` as `test:runtime-recovery` and into `scripts/verify_release.sh`.
+  - `frontend/scripts/test-scan-robustness.mts`: wiring assertions for the new paths.
+  - `TuningModelLog.md`: entry 12.
+- **Rationale:**
+  - A new worker starts with an empty WASM heap and no WebGL context, which is the path already proven on CPU-start phones.
+  - Recovery is limited to one attempt per runtime to avoid restart loops.
+  - Backend thresholds are unchanged.
+- **Security/privacy:**
+  - No security gate changed; the Backend still decides everything.
+  - The raw error text is shown only in test builds and is not sent or stored. It is MediaPipe or browser text, which may contain asset URLs but no personal data.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - `test:runtime-recovery` passes. Run against the old runtime it fails at "the GPU worker is terminated instead of rebuilding inside it", so it detects the bug.
+  - All 18 frontend `test:*` scripts pass.
+  - `npm run lint`, `tsc -b` and `npm run build` pass.
+- **Remaining risks/handoff:**
+  - Not tried on a real vivo V23e. If its CPU is also below 8 fps, the scan now stops with the slow-device message instead of crashing.
+  - The in-worker 'switch' message handler is kept but unused.
+  - Nothing is committed.
+
+## [2026-11-16 21:45] Claude (lead, with 3 subagents): Scan UX from real-user feedback
+- **Objective:** Five owner requests from tester feedback:
+  1. Instructions in the scan frame change too fast; each should stay until the user has done it.
+  2. Show a preparation modal with a "เข้าใจแล้ว" button before the camera opens, every time.
+  3. Make the blink step clearly mean "close eyes for about 1 second, then open".
+  4. Make the instruction more visible.
+  5. Delay the final still capture until the eyes are fully open, and slow other steps a little.
+- **Work split (no file overlap):**
+  - Agent 1: `utils/liveness.ts` and `test-blink-profiles.mts`.
+  - Agent 2: `LivenessScanner.tsx`, new `utils/instructionPacer.ts`, new `test-instruction-pacer.mts` and `test-scan-robustness.mts`.
+  - Agent 3: new `FaceScanPrepGate.tsx`, `StudentHome.tsx`, `StudentRegister.tsx` and new `test-scan-prep-gate.mts`.
+  - Lead: `package.json`, `verify_release.sh`, `test-passive-gate.mts`, the logs and the final checks.
+- **Files changed:**
+  - `frontend/src/utils/liveness.ts`:
+    - `maxHoldMs` 600→1000.
+    - New `HYBRID_RECOVERY_LIMITS`: fullOpenRatio 0.85, recoveryHoldMs 500, recoveryHoldFrames 3, minRecoveryAfterActionMs 700, recoveryFallbackAfterMs 2000, settleFloorRatio 0.55.
+    - The `HybridActionMonitor` recovery phase now waits for a settled run, using a median over the hold window, with a 0.70 fallback after 2 s.
+    - New getter `shortClosureDropped`.
+    - New texts: `BLINK_PROMPT`, `BLINK_RETRY_PROMPT`, `BLINK_TOO_SHORT_MESSAGE`, `BLINK_OPEN_MESSAGE`.
+    - `hybridRecoveryDetected` is unchanged.
+  - `frontend/src/utils/instructionPacer.ts` (new): pure dwell scheduler. A hint is held at least 1500 ms, the latest hint wins, and a step message shows at once.
+  - `frontend/src/features/student/LivenessScanner.tsx`:
+    - All frame-loop instructions go through the pacer, with a 250 ms flush.
+    - The get-ready text shows for max(promptDelayMs, 1500); `promptAt` is the time the prompt is really shown.
+    - `SAMPLE_INTERVAL_MS` 450→550.
+    - Uses the blink too-short and open texts.
+    - The instruction card is solid and larger, with an icon and a "ขั้นที่ N/3" pill.
+  - `frontend/src/features/student/FaceScanPrepGate.tsx` (new): an accessible modal that does not mount the scanner, and so starts no camera, worker or 30 s timer, until "เข้าใจแล้ว" is pressed. It is shown on every mount.
+  - `StudentHome.tsx`, `StudentRegister.tsx`: wrap `LivenessScanner` in the gate. The Register helper text no longer says "กะพริบ".
+  - Tests: new `test-instruction-pacer.mts` and `test-scan-prep-gate.mts`, both registered in `package.json` and `scripts/verify_release.sh`. `test-blink-profiles.mts` and `test-scan-robustness.mts` were updated.
+  - `test-passive-gate.mts`: the slow-camera assertion now also accepts the current wording "เปลี่ยนอุปกรณ์". An earlier unlogged edit to `slowCameraMessage` had made it fail; that wording was kept.
+  - `TuningModelLog.md`: entry 13.
+- **Rationale:**
+  - Hints were set on every frame, so they flickered. Step changes are already event-driven and stay immediate.
+  - The final frame is also the face-match image, so eyes fully open helps both liveness and matching.
+  - Showing the prompt later than the signed delay is allowed by the Backend (`prompt_at >= last_sample + delay`).
+  - 550 rather than 600 ms keeps the pose restart (550 + 1200 = 1750) before the 1800 ms gap guard.
+- **Security/privacy:**
+  - No gate is loosened. The final frame still has to pass `hybridRecoveryDetected`, and spoof styles (photo, wink, squint, nod) are still 0% in the simulation.
+  - Backend unchanged. No data is stored by the modal.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - All 20 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+  - Simulated longest action→recovery span: 2.6–3.6 s at 8–30 fps, against a 4.7 s limit.
+  - The prep-gate test fails when the gate renders its children early.
+- **Remaining risks/handoff:**
+  - Not tried on a real phone or browser. All new values are UX values, unmeasured.
+  - About 500 ms less slack before the 4.7 s recovery limit at 8 fps.
+  - Modal distance ("arm's length") vs `PAD_RETRY_CHECKLIST` (30–40 cm) needs an owner decision.
+  - Backend messages still say "กะพริบ/กระพริบ".
+  - A 3-line instruction card may sit close to the face guide at 360×640.
+  - Stale "450" comments remain in `livenessTiming.ts` and `captureQuality.ts`.
+  - Nothing is committed.
+
+## [2026-11-16 22:05] Claude: Prep modal: 30–40 cm distance and top-right X cancel button
+- **Objective:** The owner chose "30–40 ซม." for the phone distance and asked for an X cancel button in the top-right corner of the prep modal, so a person who is not ready can leave the scan step.
+- **Files changed:**
+  - `frontend/src/features/student/FaceScanPrepGate.tsx`:
+    - The tip text is now "ห่างจากใบหน้าประมาณ 30–40 ซม.", which matches `PAD_RETRY_CHECKLIST`.
+    - New X button (lucide `X`, 44 px, `absolute right-2 top-2`, `aria-label` "ยกเลิกการสแกนใบหน้า"). It is rendered when `onCancel` is given and calls `onCancel` only.
+    - Tab and Shift+Tab now cycle between the X and the "เข้าใจแล้ว" button. Initial focus stays on "เข้าใจแล้ว".
+    - The title has right padding so it is not covered.
+  - `frontend/scripts/test-scan-prep-gate.mts`: now expects 2 buttons (the X with its label and position, and "เข้าใจแล้ว"), checks that the X is wired only to `onCancel`, and checks the distance text.
+  - `TuningModelLog.md`: section 13.E.
+- **Rationale:** Both parents already pass `onCancel`: StudentHome closes the scanner, and StudentRegister calls `cancelLiveness`, the same handler as the scanner's own close. Cancelling never mounts the scanner, so no camera starts and no challenge is used.
+- **Security/privacy:** none. No data is stored.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - `test:scan-prep-gate` passes. It fails when the X button is removed (checked, then the file was restored).
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+- **Remaining risks/handoff:**
+  - Not tried in a real browser or phone.
+  - Nothing is committed.
+
+## [2026-11-16 22:30] Claude: Reminder for students without a registered face, with profile-row highlight
+- **Objective:** On first login, or whenever the account has no registered face, show a clear, human-sounding reminder. It needs a button that goes to the profile page, where the face-scan row blinks so it is easy to find, and an X button that closes the reminder.
+- **Files changed:**
+  - `frontend/src/features/student/FaceRegistrationReminder.tsx` (new):
+    - Loads `/api/v1/students/me/profile` and shows only when `face_registered === false`. Nothing is shown while loading or on a failed load.
+    - Hidden on `/student/profile` and `/student/register`. While unregistered it asks again on each page change, so it disappears right after enrolment.
+    - Text: title "คุณยังไม่ได้ลงทะเบียนใบหน้า" and a gender-neutral explanation that tells the person to open the profile and press "ลงทะเบียนใบหน้า" in the face-scan row.
+    - Button "ไปที่หน้าโปรไฟล์" navigates with router state `{ highlightFaceRow: true }`.
+    - Top-right 44 px X button (`aria-label` "ปิดการแจ้งเตือน"). It hides the reminder for the browser session only (sessionStorage, wrapped in try/catch), so the next login reminds again.
+    - `role="alert"`.
+  - `frontend/src/components/layout/StudentLayout.tsx`: renders the reminder above `<Outlet />`, so it appears on every student page.
+  - `frontend/src/features/student/StudentProfile.tsx`: when it arrives with that state, the face-scan row (`ProfileRow` gained `rowRef` and `highlight`) is scrolled into view and blinks for 6 s. The router state is then cleared so Back/refresh does not repeat it. The highlight starts only once and only while the face is unregistered.
+  - `frontend/src/index.css`: `.attention-blink` (orange ring and background pulse, 6 × 1 s). With `prefers-reduced-motion` it becomes a still ring.
+  - `frontend/scripts/test-face-reminder.mts` (new): registered as `test:face-reminder` in `package.json` and `scripts/verify_release.sh`.
+- **Rationale:** The layout is the one place every student page passes through. sessionStorage gives "close for now" without permanently hiding a required step.
+- **Security/privacy:** reads the student's own existing profile endpoint, with no new data. sessionStorage holds only the flag "1".
+- **DB/deploy:** none. Frontend only; one extra profile GET per student page change while unregistered.
+- **Verification (Node 22):**
+  - All 21 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+- **Remaining risks/handoff:**
+  - Not viewed in a browser or phone; the reminder and blink are checked only by source tests.
+  - Nothing is committed.
+
+## [2026-11-16 23:00] Claude: Five layout proposals for the student "รายวิชา" tab (mockup only)
+- **Objective:** The owner asked for 5 redesign options for the student courses tab, with grouped, orderly sections instead of scattered cards.
+- **Files changed:** `docs/design/courses-tab-variants.html` (new). It is a static mockup of 5 phone screens on the same sample data, using the app's palette, shell and type. The courses are fictional sample data with no real people.
+  - **A:** two tabs plus a floating join button.
+  - **B:** grouped list (studying / pending / closed) with a one-line join bar.
+  - **C:** status counters as filters.
+  - **D:** courses grouped by semester, with the pending request pinned at the top.
+  - **E:** join panel, then "ต้องติดตาม", then current courses.
+- **Rationale:** The current tab repeats the page title in a dark header card, gives the join form a large block, and splits courses and requests into separate stacks of cards.
+- **Security/privacy:** none. No real data. The page loads the Noto Sans Thai font from Google Fonts for the mockup only.
+- **DB/deploy:** none. `StudentCourses.tsx` is unchanged.
+- **Verification:**
+  - Rendered in the browser pane at 1280 px with 360 px phone frames.
+  - Fixed the design-hook contrast and tiny-text findings: placeholder, nav and count colours, 12 px minimum text, the E button colour, the B button wrap and the C chip scrollbar.
+- **Remaining risks/handoff:**
+  - The owner must pick a direction before `StudentCourses.tsx` is implemented.
+  - D needs past-semester courses from the API, which it does not return today.
+  - Nothing is committed.
+
+## [2026-11-16 23:30] Claude: Student "รายวิชา" tab rebuilt as layout A (tabs + join sheet)
+- **Objective:** The owner chose layout A from `docs/design/courses-tab-variants.html`: two tabs, "วิชาของฉัน" and "คำขอ", plus a "เข้าร่วมวิชา" button that opens the class-code form.
+- **Files changed:**
+  - `frontend/src/features/student/StudentCourses.tsx`:
+    - Removed the dark header card that repeated the page title.
+    - Added a segmented tablist (WAI-ARIA tabs: roving tabindex, arrow and Home/End keys, labelled panels). The course count shows on the courses tab, and an amber pending count on the requests tab (announced as "รออนุมัติ N รายการ").
+    - On the first load, if there are no courses but there is a pending request, the requests tab opens first.
+    - Courses are rows in one list, each linking to `/student/history/{id}`.
+    - Requests are one list with status icon and text, the teacher's note, and a cancel button for pending requests.
+    - The "เข้าร่วมวิชา" button is sticky inside the page scroller, so it never covers the bottom nav.
+    - It opens a `JoinSheet` bottom sheet: a portal dialog with `useModalIsolation`, a focus trap, and Escape/X/backdrop to close (but not while sending). Focus returns to the button, and the sheet respects the bottom safe area.
+    - After sending, the sheet closes and the requests tab opens.
+    - The failed-load state now has a "ลองโหลดใหม่" button.
+    - The join and cancel API calls, the validation text and `ConfirmDialog` are unchanged.
+  - `frontend/scripts/test-student-courses.mts` (new): registered as `test:student-courses` in `package.json` and `scripts/verify_release.sh`.
+- **Security/privacy:** none. Same endpoints, no new data.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - All 22 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+  - Viewed in the browser pane through a temporary Vite harness (MemoryRouter, mocked axios, fictional data; deleted afterwards), at 375×812 and 320×640:
+    - the tabs, rows, badges and sticky button render correctly;
+    - the sheet opens with focus on the input, the code formats as `ABCD-23`, and the app root is inert;
+    - Escape closes the sheet and focus returns to "เข้าร่วมวิชา";
+    - with no courses and a pending request, the requests tab opens first.
+- **Remaining risks/handoff:**
+  - Not tried against the real API or on a phone.
+  - `/student/history/{id}` assumes `course.id` equals the history page's `course_id`, as AttendanceHistory reads it.
+  - Nothing is committed.
+
+## [2026-11-16 23:55] Claude: Five proposals for the course detail page in the student history tab (mockup only)
+- **Objective:** The owner asked for 5 design options for `/student/history/:courseId` that show the details more clearly.
+- **Files changed:** `docs/design/course-history-detail-variants.html` (new). A static mockup of 5 phone screens on the same fictional sample data (15 planned sessions, 20% absence limit; 11 checked: 8 present, 2 late, 1 absent).
+  - **A:** "ขาดได้อีก N ครั้ง" summary with a limit bar, then sessions by month.
+  - **B:** a 15-cell strip for the whole term, with a tapped-cell detail.
+  - **C:** per-session timeline with large dates.
+  - **D:** counter strip, absence verdict line and a filterable table.
+  - **E:** plain-language verdict banner, a proportion bar and month sections that collapse.
+- **Rationale:** The current page does not say how many absences are left, does not show the Normal/Fa evaluation, and lists each check-in without session number or weekday. Every number in the proposals comes from fields the student endpoint already returns (`total_sessions`, `max_absence_percent`, counts, `evaluation`, history rows), so no Backend change is needed.
+- **Security/privacy:** none. No real data. Google Fonts is loaded for the mockup only.
+- **DB/deploy:** none. `AttendanceHistory.tsx` is unchanged.
+- **Verification:** All 5 rendered in the browser pane at 1280 px with 360 px phone frames. The design hook reported no issues.
+- **Remaining risks/handoff:**
+  - The owner must pick a direction.
+  - The frontend `CourseSummary` type does not yet declare `max_absence_percent`, although the API sends it.
+  - "Sessions remaining" assumes `total_sessions` is the planned count.
+  - Nothing is committed.
+
+## [2026-11-17 00:20] Claude: Interactive prototype of the course detail page (timeline C + detail card B)
+- **Objective:** The owner chose to combine layout C (timeline) with B's detail card. Tapping a date number should open the full detail of that session. A working prototype was requested before the real build.
+- **Files changed:** `docs/design/course-history-detail-prototype.html` (new). A self-contained interactive prototype on fictional data.
+  - **Summary:** counts, sessions left, and "ขาดได้อีก N ครั้ง" from `total_sessions` and `max_absence_percent`.
+  - **Timeline:** each date is a button. The detail card shows session N of 15, the full Thai date, the check-in time, the method, a status note, a petition link for late/absent sessions, and previous/next buttons.
+  - **Two presentation modes,** switched from a side panel:
+    - bottom sheet: scrim, X, Escape, focus trap, focus return;
+    - inline expand: under the tapped date, with `aria-expanded`.
+  - On a phone the page fills the screen and uses the sheet. Reduced motion turns the transitions off.
+- **Verification (browser pane):**
+  - Opening session 5 showed the sheet. "ครั้งถัดไป" moved to session 6, and Escape closed the sheet and returned focus to that date button.
+  - Inline mode opened session 8 under its date.
+  - At 375×812 there is no horizontal overflow.
+  - Fixed during the check: focus was lost after closing because the list re-renders; the selected date stretched to the full row height in inline mode; the sheet header ran under the X; the active nav colour was raised for contrast.
+- **Security/privacy/DB/deploy:** none. No real data; `AttendanceHistory.tsx` is unchanged.
+- **Remaining risks/handoff:**
+  - The owner picks sheet or inline before implementation.
+  - The real build needs `max_absence_percent` added to the frontend `CourseSummary` type.
+  - Nothing is committed.
+
+## [2026-11-17 00:50] Claude: Course detail page in the history tab rebuilt (timeline + bottom-sheet detail)
+- **Objective:** Owner's choice after the prototype: layout C's timeline with layout B's full-detail card in a bottom sheet. The detail text beside the date must also open it, and the viewed date must be highlighted.
+- **Files changed:**
+  - `frontend/src/features/student/CourseHistoryDetail.tsx` (new). It owns the `CourseSummary`/`HistoryItem` types; `CourseSummary` gains `max_absence_percent`, which the API already sends.
+    - **Summary card:** counts, sessions left, and "ขาดได้อีก N ครั้ง ก่อนถึงเกณฑ์ X%". This uses the Backend rule (Fa when absent > total × percent / 100) and is hidden when no limit or total is set. A red line appears when the evaluation is Fa.
+    - **Timeline:** newest first, with session numbers in date order. Each row is ONE button covering the date, dot and details text, labelled with session number, date and status.
+    - **Highlight:** the viewed row gets an orange ring and background and a dark date block, with `aria-current`.
+    - **`SessionSheet`:** a portal dialog with `useModalIsolation`, a focus trap, and Escape/scrim/X to close. Focus returns to the row, the bottom safe area is respected, and the slide-up animation is motion-safe only.
+    - **Sheet content:** session N of total, the full Thai date, check-in time, method, a status note, a "ยื่นคำร้องถึงอาจารย์" link to `/student/requests` for non-present sessions, and previous/next buttons. Stepping moves the highlight and scrolls that row into view.
+  - `frontend/src/features/student/AttendanceHistory.tsx`: the `courseId` branch now renders `CourseHistoryDetail`; helpers that moved there were removed. The course list view is unchanged.
+  - `frontend/src/index.css`: `sheet-up` and `sheet-fade` keyframes.
+  - `frontend/scripts/test-course-history-detail.mts` (new): registered as `test:course-history-detail` in `package.json` and `scripts/verify_release.sh`.
+- **Security/privacy:** none. Same endpoint and data; the petition link goes to an existing page.
+- **DB/deploy:** none. Frontend only.
+- **Verification (Node 22):**
+  - All 23 `test:*` scripts pass.
+  - `npm run lint`, `npx tsc -b` and `npm run build` pass.
+  - Browser pane at 375×812 through a temporary harness (fictional data; deleted afterwards):
+    - tapping the details text of a row opens the sheet and highlights that row in the middle of the screen;
+    - "ครั้งถัดไป" moves from session 7 to 8 and the highlight follows;
+    - Escape closes the sheet, focus returns to session 8's row, and the app root is no longer inert;
+    - there is no horizontal overflow.
+- **Remaining risks/handoff:**
+  - Not tried against the real API or on a phone.
+  - "Sessions left" relies on the teacher's planned `total_sessions`.
+  - Nothing is committed.
+
+## [2026-11-17 00:59] Claude: Release branch `release/tuning-merge` — all test-only code stripped before merging into main
+- **Objective:** The owner chose to merge the tuningModel work into `main` without the test scaffolding, and to restore every security control that test mode relaxed.
+- **Branch:** `release/tuning-merge`, created from `tuningModel` (06bfeb2). `main` has no commits since the branch point. Nothing is committed yet.
+- **Removed (security relaxations and test scaffolding):**
+  - Backend:
+    - `core/test_mode.py`, `routers/test_mode.py`, `services/test_mode_service.py` and `services/attempt_diagnostics.py` are deleted.
+    - Removed from `config.py`: the `ATTENDANCE_TEST_*` settings.
+    - Removed from `security.py`: external e-mail sign-in. `is_allowed_login_email` is again KMUTNB-only.
+    - Removed from `main.py`:
+      - the test router and course keeper;
+      - auto-join of the Test course at login and after enrollment;
+      - the optional card image: `student_card_image` is required again, exactly as on `main`;
+      - unlimited test check-ins and the attempt-table writes;
+      - the `client_diagnostics` form field;
+      - the `test_mode` and `test_external_email` keys in `/system/config`.
+    - The diagnostics collector calls were removed from `liveness_service`, `liveness_frame_service` and `passive_pad_service`. They were observational only; no decision logic changed.
+    - `failure_diagnostics.diagnostic()` is now gated by a code constant, `SHOW_MEASUREMENTS = False`, instead of an env switch, so no deployment can show measured values.
+  - Frontend:
+    - Deleted: `config/testMode.ts`, `TestModeBanner`, `TestModePanel`, `services/testMode.ts`, `utils/clientDiagnostics.ts`, `config/buildInfo.ts`, `vite.hosting.config.mts`, and the `__APP_BUILD__` define in `vite.config.ts`.
+    - Back to the `main` behaviour: the OCR/card step in `StudentRegister`, the QR flow in `StudentHome`, `LiveAttendance` and `TeacherAttendanceProvider` (auto-close again), and the KMUTNB-only hint in `Login`. These three teacher/auth files are now identical to `main`.
+    - Removed: the test overlay and raw error detail from `LivenessScanner`, the `?delegate=` and `?blendshapes=` URL overrides, and the test-only 60 s PWA update interval.
+    - `MAX_RETRY_TTL_SECONDS` lowered from 4 h to 10 min, matching `QR_CHALLENGE_SECONDS` ≤ 600.
+  - Repository:
+    - Deleted: `supabase/test-only/*` (4 SQL files), `scripts/start_backend_ngrok.sh`, `scripts/analyze_attempts.py`, `scripts/evaluate_pad_roc.py`, `frontend/scripts/test-test-mode.mts`.
+    - Deleted tests: `backend/tests/test_attendance_test_mode.py`, `test_external_email_and_attempts.py`, `test_local_hosting.py`.
+    - `test:test-mode` was removed from `package.json` and `verify_release.sh`.
+- **Kept on purpose:**
+  - All AI/liveness tuning: face threshold 0.50, PAD median rule with its kill switch, 106-point blink rule with its kill switch, move_closer fallback with retry challenge, 5 s / 30 s timing.
+  - The scanner, runtime-recovery and UX work, and the PWA update gate.
+  - The teacher-domain migration and the release guards: `production_preflight.py` and `build_release_bundle.sh` still refuse `ATTENDANCE_TEST_*` and `VITE_TEST_MODE`.
+  - The `ngrok-skip-browser-warning` CORS header. It already existed on `main` (documented ngrok staging flow, README_TH section 5); it was briefly removed during this work and then restored.
+- **Docs:**
+  - `deployment/docker/README_TH.md` section 8 (the test-script runbook) is replaced by a production summary: thresholds and switches, pre-deploy steps, and web behaviour.
+  - `frontend/.env.staging.example` no longer mentions the test script or `VITE_TEST_MODE`.
+- **Tests adapted:**
+  - Removed: collector, attempt-writer, client-diagnostics, analysis-script and test-mode-path tests.
+  - Test-mode patches now patch `failure_diagnostics.SHOW_MEASUREMENTS`.
+  - Plain-text messages are asserted to carry no measurement code.
+- **Security/privacy:**
+  - Restored: KMUTNB-only login, mandatory card/OCR at enrollment, dynamic QR with timers, one check-in per session, and no test-table writes.
+  - No device diagnostics are sent.
+- **DB/deploy:** none applied. The test-only SQL was never in `supabase/migrations`.
+  - Before production, confirm read-only that the teacher-domain migration `20261106120000` is applied.
+  - Deploy with env files that contain no test variables, and build without `VITE_TEST_MODE`.
+- **Verification (Node 22):**
+  - `scripts/verify_release.sh` exits 0: git diff check, face model hashes, backend 344 tests OK (1 skipped), pip check, lint, every frontend test script, type check, build and the audit.
+  - In the built bundle: no "โหมดทดสอบ", `client_diagnostics` or `face_checkin_attempts` strings, and the card upload field and QR code are present.
+- **Remaining risks/handoff:**
+  - Not exercised in a real browser against the real API.
+  - Backend test count fell from 492 to 344 because test-mode-only tests were removed.
+  - Some test helpers are still named `test_mode` (they now toggle `SHOW_MEASUREMENTS`).
+  - The owner must review, commit, open a PR into `main` and push.
+
+## [2026-11-17 01:05] Claude (subagent, logged by lead): Consolidated report ReportSummary.md / ReportSummary.pdf
+- **Objective:** The owner asked for the earlier reports to be brought up to date, or merged into one current report.
+- **Files created:**
+  - `ReportSummary.md` (git-ignored by the `*.md` rule).
+  - `ReportSummary.pdf`: 13 pages A4, rendered with WeasyPrint and the "Noto Sans", "Noto Sans Thai" font stack. **NOT git-ignored: keep it out of commits.**
+  - The old reports are unchanged. `docs/CompareFaceExplain.pdf` and `docs/reportResultFaceCheckin.pdf` are under the ignored `docs/` folder.
+- **Contents:**
+  - purpose and scope; how face matching works (1:1 embedding);
+  - aggregate usage and test results only;
+  - 19 real-phone problems, each with cause, fix and status;
+  - current thresholds with file locations; UX improvements;
+  - 17 unverified items and risks; a 12-item next-step plan; the status of the merge into main.
+  - Each fact is tagged "ยืนยันในโค้ด" (read from the release branch working tree) or "จากรายงาน" (the older report it came from).
+- **Security/privacy:** totals only. A search of the PDF text found no names, e-mails, student ids, URLs or keys. Usage numbers come from the earlier report; no database query was made.
+- **DB/deploy:** none.
+- **Verification:**
+  - Subagent: checked the page images for Thai text, digits and table breaks.
+  - Lead: checked the page count, the git-ignore status and the PII pattern search.
+- **Remaining risks:**
+  - Code values are a snapshot of `release/tuning-merge` before commit.
+  - Two minor layout breaks: the end of page 5, and section 6 starting at the bottom of page 9.
+  - `ReportSummary.pdf` must not be committed.

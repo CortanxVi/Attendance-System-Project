@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { apiErrorMessage } from './apiError';
 import type { HybridLivenessAction, HybridLivenessEvidence } from '../utils/liveness';
+import { AttendanceVerifyError, retryChallengeFromBody } from './retryChallenge';
 
 // ใช้ relative path เพื่อให้ Vite Dev Proxy ส่งต่อไปยัง FastAPI (localhost:8000) ให้อัตโนมัติ
 const API_BASE_URL = '/api/v1';
@@ -137,8 +138,13 @@ export const faceService = {
       );
       return response.data;
     } catch (error: unknown) {
-      throw new Error(
+      // `detail` stays the message; a 422 may also carry a retry challenge (validated by the page).
+      const retryChallenge = axios.isAxiosError(error)
+        ? retryChallengeFromBody(error.response?.status, error.response?.data)
+        : null;
+      throw new AttendanceVerifyError(
         apiErrorMessage(error, 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบว่าระบบหลังบ้านทำงานอยู่'),
+        retryChallenge,
         { cause: error },
       );
     }

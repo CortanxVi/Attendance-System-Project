@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRScanner, { type VerifiedSessionInfo } from './QRScanner'; 
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
+import FaceScanPrepGate from './FaceScanPrepGate';
 import { faceService } from '../../services/api';
 import { base64ToFile } from '../../utils/imageUtils';
 // นำเข้า Icon เพิ่มเติมจาก lucide-react
 import { ArrowRight, Camera, CheckCircle, Loader2, QrCode, RotateCw, ScanFace, ShieldCheck, UserCheck, XCircle } from 'lucide-react';
 import { useNotification } from '../../components/notifications/notificationContext';
 import type { HybridLivenessAction, HybridLivenessEvidence } from '../../utils/liveness';
+import { holdAppUpdates } from '../../pwa/registerServiceWorker';
+import { attendanceHoldsPage } from '../../pwa/updateGate';
+import { isPadFailureMessage } from '../../utils/padFailure';
+import PadRetryChecklist from '../../components/PadRetryChecklist';
+import { AttendanceVerifyError, applyRetryChallenge, parseRetryChallenge, retryStillValid } from '../../services/retryChallenge';
 import {
   getFaceLandmarkerRuntimeSnapshot,
   preloadFaceLandmarker,
@@ -24,6 +30,10 @@ export default function StudentHome() {
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
   const [challengeTtlSeconds, setChallengeTtlSeconds] = useState(0);
+  // The session of the current claim (a retry challenge must belong to it).
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  // Set when the Backend handed a new single-use token for the same claim after a failure.
+  const [retryNote, setRetryNote] = useState('');
   const [livenessToken, setLivenessToken] = useState<string | null>(null);
   const [livenessAction, setLivenessAction] = useState<HybridLivenessAction | null>(null);
   const [livenessPromptDelayMs, setLivenessPromptDelayMs] = useState<number | null>(null);
@@ -51,6 +61,16 @@ export default function StudentHome() {
       : undefined
   ), [livenessAction, livenessPromptDelayMs]);
 
+  // A new web build waits while a capture is pending or being sent (the challenge is single-use).
+  const holdsPage = attendanceHoldsPage({
+    livenessActive: isLivenessActive,
+    submitting: isSubmitting,
+    hasCapture: capturedFaceData !== null,
+    // A received but not yet used challenge: a reload would waste it (a fresh QR may hit 429).
+    hasChallengeToken: livenessToken !== null,
+  });
+  useEffect(() => (holdsPage ? holdAppUpdates() : undefined), [holdsPage]);
+
   useEffect(() => {
     const unsubscribe = subscribeFaceLandmarkerRuntime(setFaceRuntime);
     void preloadFaceLandmarker().catch(() => {
@@ -65,9 +85,36 @@ export default function StudentHome() {
     setChallengeId(info.challengeId);
     setChallengeExpiresAt(info.challengeExpiresAt);
     setChallengeTtlSeconds(info.challengeTtlSeconds);
+    setSessionId(info.sessionId);
+    setRetryNote('');
     setLivenessToken(info.livenessToken);
     setLivenessAction(info.livenessAction);
     setLivenessPromptDelayMs(info.livenessPromptDelayMs);
+  };
+
+  // Forget the previous attempt so the next press uses a fresh liveness challenge.
+  const clearCapture = () => {
+    setCapturedFaceData(null);
+    setCapturedPassiveData(null);
+    setCapturedActionData(null);
+    setCapturedRecoveryData(null);
+    setLivenessEvidence(null);
+  };
+
+  const resetAttempt = () => {
+    setVerifiedCourse(null);
+    setChallengeId(null);
+    setChallengeExpiresAt(null);
+    setLivenessToken(null);
+    setLivenessAction(null);
+    setLivenessPromptDelayMs(null);
+    setSessionId(null);
+    setRetryNote('');
+    setCapturedFaceData(null);
+    setCapturedPassiveData(null);
+    setCapturedActionData(null);
+    setCapturedRecoveryData(null);
+    setLivenessEvidence(null);
   };
 
   const closeQrScanner = useCallback(() => {
@@ -87,6 +134,7 @@ export default function StudentHome() {
     setCapturedActionData(capture.actionImageSrc);
     setCapturedRecoveryData(capture.recoveryImageSrc);
     setLivenessEvidence(capture.evidence);
+    // Test builds always send the field: a capture without it gets the enum-only fallback.
     setIsLivenessActive(false);
   };
 
@@ -131,6 +179,22 @@ export default function StudentHome() {
     } catch (error: unknown) {
       console.error(error);
       setResultMessage(error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ');
+      // The Backend may hand a fresh token for the same claim (e.g. move_closer after a failed
+      // blink). Only a fully valid one for the session and claim on screen replaces the challenge.
+      const retry = error instanceof AttendanceVerifyError
+        ? parseRetryChallenge(error.retryChallenge, { sessionId, challengeId })
+        : null;
+      if (retry) {
+        const next = applyRetryChallenge(retry, Date.now());
+        setLivenessToken(next.livenessToken);
+        setLivenessAction(next.livenessAction);
+        setLivenessPromptDelayMs(next.livenessPromptDelayMs);
+        setChallengeTtlSeconds(next.challengeTtlSeconds);
+        setChallengeExpiresAt(next.challengeExpiresAt);
+        setRetryNote(next.note);
+      } else {
+        setRetryNote('');
+      }
       setFinalResult('failed');
     } finally {
       setIsSubmitting(false);
@@ -166,7 +230,25 @@ export default function StudentHome() {
            <XCircle size={64} className="mx-auto text-red-500 mb-4" />
            <h2 className="text-2xl font-bold text-red-700 mb-2">เช็คชื่อไม่สำเร็จ</h2>
            <p className="text-gray-600 mb-4">{resultMessage}</p>
-           <button onClick={() => { setFinalResult(null); setResultMessage(''); }} className="bg-red-600 text-white px-6 py-2 rounded-lg font-bold">ลองใหม่อีกครั้ง</button>
+           {isPadFailureMessage(resultMessage) && <PadRetryChecklist />}
+           {retryNote && <p className="mx-auto mb-4 max-w-sm rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-semibold text-blue-900">{retryNote}</p>}
+           <button
+             onClick={() => {
+               setFinalResult(null);
+               setResultMessage('');
+               if (retryNote && retryStillValid(challengeExpiresAt, Date.now())) {
+                 // Same claim, new token: back to "start face scan" without the used capture.
+                 clearCapture();
+                 setIsLivenessActive(true);
+               } else if (retryNote) {
+                 // The claim ran out meanwhile: a new QR scan is needed.
+                 resetAttempt();
+               }
+             }}
+             className="bg-red-600 text-white px-6 py-2 rounded-lg font-bold"
+           >
+             ลองใหม่อีกครั้ง
+           </button>
         </div>
       ) : capturedFaceData ? (
         /* ด่านที่ 3: ถ่ายหน้าเสร็จแล้ว กดยืนยัน */
@@ -197,13 +279,15 @@ export default function StudentHome() {
            </button>
         </div>
       ) : isLivenessActive ? (
-        /* ด่านที่ 2: หน้าจอ Liveness Detection */
-        <LivenessScanner
-          title="ยืนยันใบหน้าเพื่อเช็คชื่อ"
-          onClose={() => setIsLivenessActive(false)}
-          onCaptureSuccess={handleFaceCapture}
-          challenge={livenessChallenge!}
-        />
+        /* ด่านที่ 2: หน้าจอ Liveness Detection (คำแนะนำก่อนเปิดกล้องทุกครั้ง) */
+        <FaceScanPrepGate onCancel={() => setIsLivenessActive(false)}>
+          <LivenessScanner
+            title="ยืนยันใบหน้าเพื่อเช็คชื่อ"
+            onClose={() => setIsLivenessActive(false)}
+            onCaptureSuccess={handleFaceCapture}
+            challenge={livenessChallenge!}
+          />
+        </FaceScanPrepGate>
       ) : verifiedCourse ? (
         <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
           <h2 className="text-xl font-bold text-green-700 mb-2">เข้าสู่ห้องเรียน {verifiedCourse} แล้ว</h2>
@@ -212,7 +296,7 @@ export default function StudentHome() {
           {challengeExpiresAt && (
             <p className="mb-3 text-xs text-gray-500">
               สิทธิ์จาก QR ใช้ลองสแกนซ้ำได้ {Math.round(challengeTtlSeconds / 60)} นาที ถึงเวลา{' '}
-              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 20 วินาที
+              {new Date(challengeExpiresAt).toLocaleTimeString('th-TH')} · แต่ละรอบไม่เกิน 30 วินาที
             </p>
           )}
           <button 

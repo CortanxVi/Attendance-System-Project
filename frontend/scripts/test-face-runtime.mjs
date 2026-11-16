@@ -35,4 +35,16 @@ assert.match(
   'QR scanning must stay disabled until the face runtime is ready.',
 );
 
+// GPU on Android with an automatic CPU fallback; iOS stays on the CPU main-thread path.
+assert.match(runtime, /\/Android\/i\.test\(navigator\.userAgent\) \? 'GPU' : 'CPU'/);
+assert.match(worker, /delegate: wanted/);
+assert.match(worker, /await buildLandmarker\('CPU'\)/, 'a GPU failure on a real frame must fall back to the CPU.');
+assert.match(worker, /GPU_INIT_TIMEOUT_MS = 20_000/, 'a stuck GPU start must fall back to the CPU quickly.');
+assert.match(worker, /let blendshapesOn = false/, 'blend shapes must start switched off.');
+assert.match(worker, /message\.type === 'options'/);
+assert.match(runtime, /setBlendshapes/);
+const scanner = await readFile(new URL('../src/features/student/LivenessScanner.tsx', import.meta.url), 'utf8');
+assert.match(scanner, /challenge\.action === 'blink'\) client\?\.setBlendshapes\(true\)/);
+assert.match(scanner, /useDeviceSupport\(\)/, 'the scanner must check the device before opening the camera.');
+
 console.log('Face runtime contract: module WASM, singleton preload, and QR readiness gate pass.');

@@ -45,6 +45,11 @@ if rg -n '(^|_)(SERVICE_ROLE|SECRET_KEY|SUPABASE_KEY|OCR_SERVICE_TOKEN|LIVENESS_
   echo "Frontend environment contains a server-only credential name." >&2
   exit 1
 fi
+# The QR-free test UI is for Preview builds of a test branch only.
+if rg -n '^[[:space:]]*VITE_TEST_MODE[[:space:]]*=' "$frontend_env" >/dev/null; then
+  echo "Frontend environment sets VITE_TEST_MODE; remove it from release builds." >&2
+  exit 1
+fi
 if [[ "$allow_dirty" != "true" && -n "$(git -C "$project_root" status --porcelain)" ]]; then
   echo "Production release bundles require a clean Git worktree. Use --allow-dirty only for staging QA." >&2
   exit 1

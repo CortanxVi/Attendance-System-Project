@@ -47,6 +47,11 @@ def is_allowed_kmutnb_email(email: str | None) -> bool:
     return bool(email and KMUTNB_EMAIL_PATTERN.fullmatch(email.strip()))
 
 
+def is_allowed_login_email(email: str | None) -> bool:
+    """Only KMUTNB Google accounts may sign in."""
+    return is_allowed_kmutnb_email(email)
+
+
 def trusted_google_avatar_url(user_metadata: object) -> str | None:
     """Return a Google-hosted avatar URL for display only, never authorization."""
     if not isinstance(user_metadata, dict):
@@ -102,7 +107,7 @@ async def get_current_user(
     user_id = str(auth_user.id)
     auth_email = getattr(auth_user, "email", None)
     avatar_url = trusted_google_avatar_url(getattr(auth_user, "user_metadata", None))
-    if not is_allowed_kmutnb_email(auth_email):
+    if not is_allowed_login_email(auth_email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="อนุญาตให้ใช้งานเฉพาะบัญชี KMUTNB เท่านั้น",

@@ -18,11 +18,11 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    // 🌟 ทำให้เว็บแอปนี้ติดตั้งเป็น PWA ได้จริง (ตาม requirement 4.1.1)
-    // - สร้างไฟล์ manifest ให้ Android/iOS เพิ่มไอคอนไปหน้า Home ได้
-    // - สร้าง Service Worker (ผ่าน Workbox) ให้เปิดแอปซ้ำได้เร็วขึ้นและมี fallback แบบพื้นฐานตอนเน็ตหลุด
     VitePWA({
       registerType: 'autoUpdate', // อัปเดตเวอร์ชันใหม่ให้อัตโนมัติ ไม่ต้องรอผู้ใช้กดยืนยัน
+      // src/pwa/registerServiceWorker.ts registers the worker itself (periodic update checks and a
+      // reload that waits until no scan / check-in upload is on screen).
+      injectRegister: false,
       includeAssets: ['favicon.svg', 'icons.svg'],
       manifest: {
         name: 'ระบบบันทึกเวลาเข้าเรียน มจพ.',
@@ -47,8 +47,10 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // ⚠️ ตั้งใจไม่ทำ runtime caching ให้ path /api/** เด็ดขาด
-        // เพราะข้อมูลเช็คชื่อ/สถานะห้องเรียนต้องเป็นข้อมูลล่าสุดเสมอ ห้ามใช้ค่าที่แคชไว้เก่า
+        // A new build takes over at once (also from pages of older builds) and stale precaches go.
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         // Excel/PDF engines are large and only needed after an explicit export action.
         // Keeping them out of the install-time precache makes first launch faster;

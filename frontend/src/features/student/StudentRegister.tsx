@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Camera, CheckCircle, ImageUp, Loader2, RotateCw, ShieldCheck } from 'lucide-react';
 import LivenessScanner, { type LivenessCapture } from './LivenessScanner';
+import FaceScanPrepGate from './FaceScanPrepGate';
 import { base64ToFile, prepareStudentCardImage } from '../../utils/imageUtils';
 import { faceService, type EnrollmentLivenessChallenge } from '../../services/api';
 import {
@@ -11,12 +12,19 @@ import {
   subscribeFaceLandmarkerRuntime,
 } from '../../services/faceLandmarkerRuntime';
 import { useNotification } from '../../components/notifications/notificationContext';
+import { useDeviceSupport } from '../../hooks/useDeviceSupport';
+import UnsupportedDeviceNotice from '../../components/UnsupportedDeviceNotice';
+import PadRetryChecklist from '../../components/PadRetryChecklist';
+import { isPadFailureMessage } from '../../utils/padFailure';
+import { holdAppUpdates } from '../../pwa/registerServiceWorker';
+import { enrollmentHoldsPage } from '../../pwa/updateGate';
 
 type RegistrationPhase = 'card' | 'challenge' | 'liveness' | 'saving' | 'retry';
 
 export default function StudentRegister() {
   const { notify } = useNotification();
   const navigate = useNavigate();
+  const deviceSupport = useDeviceSupport();
   const [phase, setPhase] = useState<RegistrationPhase>('card');
   const [studentId, setStudentId] = useState('');
   const [challenge, setChallenge] = useState<EnrollmentLivenessChallenge | null>(null);
@@ -108,6 +116,10 @@ export default function StudentRegister() {
   };
 
   const runtimeReady = faceRuntime.status === 'ready';
+  // A new web build never reloads the page while an enrollment challenge is unused, the scan runs,
+  // or the evidence is being saved.
+  const holdsPage = enrollmentHoldsPage({ hasChallenge: challenge !== null, phase });
+  useEffect(() => (holdsPage ? holdAppUpdates() : undefined), [holdsPage]);
   const livenessChallenge = useMemo(() => challenge ? {
     action: challenge.liveness_action,
     promptDelayMs: challenge.liveness_prompt_delay_ms,
@@ -124,17 +136,23 @@ export default function StudentRegister() {
       <div className="rounded-2xl border border-gray-100 bg-white p-[clamp(1rem,4vw,1.25rem)] shadow-sm">
       <header className="mb-6 text-center">
         <h1 className="text-2xl font-bold text-gray-800">ลงทะเบียนใบหน้า</h1>
-        <p className="mt-2 text-sm leading-6 text-gray-500">ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าด้วย Hybrid Liveness ชุดเดียวกับการเช็คชื่อ</p>
+        <p className="mt-2 text-sm leading-6 text-gray-500">{'ยืนยันบัตรนักศึกษา แล้วสแกนใบหน้าด้วย Hybrid Liveness ชุดเดียวกับการเช็คชื่อ'}</p>
       </header>
 
-      {errorMsg && (
+      {deviceSupport.status === 'unsupported' && (
+        <div className="flex justify-center">
+          <UnsupportedDeviceNotice androidMajor={deviceSupport.androidMajor} />
+        </div>
+      )}
+
+      {errorMsg && deviceSupport.status !== 'unsupported' && (
         <div id="registration-error" role="alert" className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <AlertCircle className="mt-0.5 shrink-0" size={20} aria-hidden="true" />
           <span>{errorMsg}</span>
         </div>
       )}
 
-      {phase === 'card' && (
+      {deviceSupport.status !== 'unsupported' && phase === 'card' && (
         <section className="space-y-5">
           <div
             role={faceRuntime.status === 'error' ? 'alert' : 'status'}
@@ -175,17 +193,19 @@ export default function StudentRegister() {
       {phase === 'liveness' && challenge && livenessChallenge && (
         <section className="space-y-4">
           <div className="flex items-center justify-between gap-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-            <span className="flex items-center gap-2 font-semibold"><CheckCircle size={18} aria-hidden="true" />ยืนยันรหัส {studentId} แล้ว</span>
+            <span className="flex items-center gap-2 font-semibold"><CheckCircle size={18} aria-hidden="true" />{`ยืนยันรหัส ${studentId} แล้ว`}</span>
             <span className="text-xs">สิทธิ์ถึง {new Date(challenge.challenge_expires_at).toLocaleTimeString('th-TH')}</span>
           </div>
           <h2 className="text-center text-lg font-bold text-gray-800">2. สแกนใบหน้าและทำคำสั่งยืนยัน 1 ครั้ง</h2>
-          <p className="text-center text-sm leading-6 text-gray-500">ระบบเก็บภาพต่อเนื่อง 3 เฟรม จากนั้นสุ่มให้กะพริบตาหรือขยับเข้าใกล้กล้องเล็กน้อย</p>
-          <LivenessScanner
-            title="ลงทะเบียนใบหน้า"
-            challenge={livenessChallenge}
-            onClose={cancelLiveness}
-            onCaptureSuccess={(capture) => void handleLivenessCapture(capture)}
-          />
+          <p className="text-center text-sm leading-6 text-gray-500">ระบบเก็บภาพต่อเนื่อง 3 เฟรม จากนั้นสุ่มให้หลับตา 1 วินาทีแล้วลืมตา หรือขยับเข้าใกล้กล้องเล็กน้อย</p>
+          <FaceScanPrepGate onCancel={cancelLiveness}>
+            <LivenessScanner
+              title="ลงทะเบียนใบหน้า"
+              challenge={livenessChallenge}
+              onClose={cancelLiveness}
+              onCaptureSuccess={(capture) => void handleLivenessCapture(capture)}
+            />
+          </FaceScanPrepGate>
         </section>
       )}
 
@@ -199,8 +219,9 @@ export default function StudentRegister() {
 
       {phase === 'retry' && (
         <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
-          <p className="font-semibold text-amber-900">รหัสนักศึกษา {studentId || 'ยังไม่พร้อม'} ผ่านการตรวจบัตรแล้ว</p>
-          <p className="mt-2 text-sm text-amber-800">สร้างสิทธิ์ใหม่แล้วสแกนใบหน้าอีกครั้ง โดยไม่ต้องอัปโหลดบัตรซ้ำ</p>
+          <p className="font-semibold text-amber-900">{`รหัสนักศึกษา ${studentId || 'ยังไม่พร้อม'} ผ่านการตรวจบัตรแล้ว`}</p>
+          <p className="mt-2 text-sm text-amber-800">{'สร้างสิทธิ์ใหม่แล้วสแกนใบหน้าอีกครั้ง โดยไม่ต้องอัปโหลดบัตรซ้ำ'}</p>
+          {isPadFailureMessage(errorMsg) && <div className="mt-3"><PadRetryChecklist /></div>}
           <button type="button" onClick={() => void requestLivenessChallenge()} disabled={!verifiedCard || !runtimeReady} className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 focus-visible:ring-offset-2">
             <RotateCw size={18} aria-hidden="true" />เริ่มสแกนใบหน้าใหม่
           </button>

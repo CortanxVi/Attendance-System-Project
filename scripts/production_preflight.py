@@ -3,12 +3,20 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 from pathlib import Path
 import re
 import sys
 from urllib.parse import urlparse
 
 from dotenv import dotenv_values
+
+
+# Release bounds for the passive PAD rule (stricter than the Backend's own startup check).
+PAD_MEDIAN_MIN = 0.50
+PAD_MEDIAN_MAX = 0.95
+PAD_FLOOR_MIN = 0.20
+PAD_FLOOR_MAX = 0.95
 
 
 def configured(value: str | None) -> bool:
@@ -146,6 +154,21 @@ def main() -> int:
     }
     if forbidden_frontend_names.intersection(frontend):
         failures.append("frontend environment contains a forbidden server credential name")
+    # The QR/timer-free test mode must never ship: it is for listed test courses only.
+    falsy_values = {"", "0", "false", "no", "off"}
+    for label, values, names in (
+        ("backend", backend, (
+            "ATTENDANCE_TEST_MODE",
+            "ATTENDANCE_TEST_MODE_ACK",
+            "ATTENDANCE_TEST_COURSE_IDS",
+            "ATTENDANCE_TEST_ALL_COURSES_ACK",
+            "ATTENDANCE_TEST_EXTERNAL_EMAIL_ACK",
+        )),
+        ("frontend", frontend, ("VITE_TEST_MODE",)),
+    ):
+        for name in names:
+            if (values.get(name) or "").strip().lower() not in falsy_values:
+                failures.append(f"{label} {name} enables the test mode and is forbidden in a release")
     if frontend.get("VITE_SUPABASE_ANON_KEY") in {
         backend.get("SUPABASE_KEY"),
         backend.get("OCR_SERVICE_TOKEN"),
@@ -159,12 +182,54 @@ def main() -> int:
             if path.stat().st_mode & 0o007:
                 failures.append(f"secret environment file is accessible by other users: {path}")
 
+    # Passive PAD rule (backend/core/config.py). Production may not weaken it below these floors
+    # without a code change: there is no consented attack data behind any lower value.
+    pad_rule = (backend.get("LIVENESS_PAD_RULE") or "").strip().lower() or "median"
+    if pad_rule not in {"median", "all_frames"}:
+        failures.append("backend LIVENESS_PAD_RULE must be median or all_frames")
+
+    def pad_number(name: str, default: str) -> float | None:
+        raw = (backend.get(name) or "").strip() or default
+        try:
+            value = float(raw)
+        except ValueError:
+            failures.append(f"backend {name} must be a number")
+            return None
+        if not math.isfinite(value):
+            failures.append(f"backend {name} must be a finite number")
+            return None
+        return value
+
+    pad_median = pad_number("LIVENESS_PAD_MEDIAN_THRESHOLD", "0.60")
+    pad_floor = pad_number("LIVENESS_PAD_MIN_FRAME_FLOOR", "0.30")
+    pad_all_frames = pad_number("LIVENESS_PAD_THRESHOLD", "0.65")
+    if pad_median is not None and not PAD_MEDIAN_MIN <= pad_median <= PAD_MEDIAN_MAX:
+        failures.append(
+            f"backend LIVENESS_PAD_MEDIAN_THRESHOLD must be between {PAD_MEDIAN_MIN:.2f} and {PAD_MEDIAN_MAX:.2f}"
+        )
+    if pad_floor is not None and not PAD_FLOOR_MIN <= pad_floor <= PAD_FLOOR_MAX:
+        failures.append(
+            f"backend LIVENESS_PAD_MIN_FRAME_FLOOR must be between {PAD_FLOOR_MIN:.2f} and {PAD_FLOOR_MAX:.2f}"
+        )
+    if pad_median is not None and pad_floor is not None and pad_floor > pad_median:
+        failures.append("backend LIVENESS_PAD_MIN_FRAME_FLOOR must not exceed LIVENESS_PAD_MEDIAN_THRESHOLD")
+    if pad_all_frames is not None and not 0.50 <= pad_all_frames <= 0.95:
+        failures.append("backend LIVENESS_PAD_THRESHOLD must be between 0.50 and 0.95")
+
+    # Same parsing as backend/core/config.py: unset or blank means the default (on).
+    blink_106 = (backend.get("LIVENESS_BLINK_106_ENABLED") or "").strip().lower() or "true"
+    if blink_106 not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+        failures.append("backend LIVENESS_BLINK_106_ENABLED must be true or false")
+
     model_root = (args.model_root or Path(backend.get("INSIGHTFACE_MODEL_ROOT") or "~/.insightface")).expanduser()
     model_dir = model_root / "models" / "buffalo_s"
     expected = {
         "1k3d68.onnx": "df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
         "det_500m.onnx": "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a",
         "w600k_mbf.onnx": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
+        # Second blink rule (LIVENESS_BLINK_106_ENABLED). Required even when the switch is off,
+        # so turning the rule back on never needs a new model copy.
+        "2d106det.onnx": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
     }
     for filename, expected_digest in expected.items():
         path = model_dir / filename
