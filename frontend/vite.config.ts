@@ -23,7 +23,7 @@ export default defineConfig({
       // src/pwa/registerServiceWorker.ts registers the worker itself (periodic update checks and a
       // reload that waits until no scan / check-in upload is on screen).
       injectRegister: false,
-      includeAssets: ['favicon.svg', 'icons.svg'],
+      includeAssets: ['favicon.svg', 'icons.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'ระบบบันทึกเวลาเข้าเรียน มจพ.',
         short_name: 'เช็คชื่อ มจพ.',
@@ -43,6 +43,14 @@ export default defineConfig({
             src: 'pwa-512x512.png',
             sizes: '512x512',
             type: 'image/png',
+          },
+          // Android adaptive icons: full-bleed art kept inside the 80% safe circle
+          // (source: brand/app-icon-maskable.svg).
+          {
+            src: 'pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
           },
         ],
       },

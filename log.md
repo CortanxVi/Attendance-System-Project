@@ -2774,3 +2774,139 @@ This is the append-only engineering record for the project's two-agent hybrid wo
   - Code values are a snapshot of `release/tuning-merge` before commit.
   - Two minor layout breaks: the end of page 5, and section 6 starting at the bottom of page 9.
   - `ReportSummary.pdf` must not be committed.
+
+## [2026-11-17 01:30] Claude: Mini PC + Cloudflare Tunnel deployment guide brought up to date
+- **Objective:** Update the owner's deployment guide (`Source/markdown/DEPLOYMENT_MINIPC_CLOUDFLARE_TUNNEL2_TH.md`, outside this repository, last written 2026-11-05) to match `main` after the tuning merge (`7d5e1af`).
+- **Changes in the guide:**
+  - Update note at the top, plus a new "changes since 5 Nov" table in 0.3.
+  - Migrations: 22 files; explains `20261106120000_auto_teacher_for_department_domains.sql`.
+  - New read-only SQL check that the production project has no test-mode tables (`face_checkin_attempts`, `test_mode_flags`, `pilot_checkin_log`).
+  - `backend.env`:
+    - new PAD and 106-point settings table (`LIVENESS_PAD_RULE`, `LIVENESS_PAD_MEDIAN_THRESHOLD`, `LIVENESS_PAD_MIN_FRAME_FLOOR`, `LIVENESS_PAD_THRESHOLD`, `LIVENESS_BLINK_106_ENABLED`) with the preflight bounds;
+    - face threshold 0.50 and the 5 s / 30 s timing are code values;
+    - never add `ATTENDANCE_TEST_*`.
+  - Models: 4 files including `2d106det.onnx`, with updated `scp`, folder tree and checksum count, and the runtime fallback behaviour.
+  - `--workers 1` requirement; the `blink_106` field in `/health/ready`; new log messages in the troubleshooting table.
+  - Vercel: never set `VITE_TEST_MODE`; PWA auto-update behaviour.
+  - Acceptance checklist additions:
+    - domain-based login and rejection of outside e-mail;
+    - registration reminder and prep modal (X / "เข้าใจแล้ว");
+    - the 1-second eye-close prompt and the move_closer fallback;
+    - one check-in per session;
+    - in-app browser and Android 11+ notices;
+    - the new courses and history screens.
+  - New upgrade steps from builds before 17 Nov.
+  - Section 15: what was re-checked against `main`, plus new unverified items (106-point cost on the Mini PC, PAD false-accept rate unknown).
+- **Rationale:** Every new statement was checked against the files on `main`: migrations, the sha256 manifest, `verify_face_models.sh`, `backend.env.example`, `production_preflight.py`, the Dockerfile, the `/health/ready` code and the insightface warning text. The 7 ms and 42-scan figures come from earlier logs.
+- **Security/privacy:** placeholders only; no secrets, URLs or personal data added.
+- **DB/deploy:** none (documentation only). A pre-edit copy is kept in this session's scratchpad.
+- **Verification:** reviewed the text diff (96 changed lines). The steps were not run on a real Mini PC.
+- **Remaining risks:** Dashboard menus of Cloudflare, Vercel and Supabase may have changed since 5 Nov; those parts were not re-checked online.
+
+## [2026-11-17 01:50] Claude: Five app icon concepts (mockup only)
+- **Objective:** The owner asked for 5 new logo/app icon designs.
+- **Finding:** The current PWA icons are a plain "KM" on orange. `frontend/public/favicon.svg` is still the purple Vite template logo, not this product's mark.
+- **Files changed:** `docs/design/app-icon-variants.html` (new; `docs/` is git-ignored). Five SVG concepts on a 512 grid, each previewed as an iPhone 60 tile, an Android maskable circle, PWA 48, 32 px and a 16 px browser tab:
+  - **A:** viewfinder corners and a check;
+  - **B:** a face whose smile is the check;
+  - **C:** a check in live rings with a green dot (the product's live check-in signature);
+  - **D:** QR finder squares with an orange check tile;
+  - **E:** the Thai letter "ช" whose tail rises into a check.
+  - Palette from DESIGN.md: orange #f97316, slate #0f172a, green #10b981. No university emblem or other brand marks are used.
+- **Verification:** rendered in the browser pane. The E letterform was redrawn once after the first render read poorly.
+- **Security/privacy/DB/deploy:** none. App files are unchanged.
+- **Handoff:** after the owner picks one, export `favicon.svg`, `pwa-192x192.png`, `pwa-512x512.png`, `apple-touch-icon.png` and a maskable 512 icon (add `purpose: 'maskable'` to the manifest). E needs its letterform refined before release.
+
+## [2026-11-17 03:03] Claude: App icon concepts, rounds 2 and 3 (clock + roster, then clock + notebook)
+- **Objective:** The owner asked to redraw the icon concepts:
+  - round 2: roster sheet + clock;
+  - round 3: clock + notebook.
+- **Files changed:** `docs/design/app-icon-variants.html` (git-ignored) now shows round 3:
+  - **A:** spiral notebook with ticked rows and a slate clock badge, on orange;
+  - **B:** closed notebook cover with an orange elastic band and a clock on the cover, on cream;
+  - **C:** open notebook spread with an orange clock on the gutter, on slate;
+  - **D:** spiral notebook page whose content is a clock face, on orange;
+  - **E:** outline icon combining notebook and clock, orange on slate.
+  - Earlier rounds are kept only as scratchpad copies of this session; they are not in the repository.
+- **Verification:** all five rendered in the browser pane at the hero size, iPhone 60, Android circle 60, 48, 32 and the 16 px tab. No overflow outside the Android circle.
+- **Security/privacy/DB/deploy:** none. App icon files are unchanged.
+- **Handoff:** after the owner picks one, export the favicon, PWA 192/512, the apple-touch icon and a maskable 512 icon, and add `purpose: 'maskable'` in `vite.config.ts`.
+
+## [2026-11-17 03:08] Claude: New app icon (concept A: spiral notebook + clock) shipped into the PWA
+- **Objective:** The owner chose round-3 concept A. Make it the real app icon.
+- **Files changed (frontend, branch `main`, uncommitted):**
+  - `brand/app-icon.svg`, `brand/app-icon-rounded.svg`, `brand/app-icon-maskable.svg` (new): SVG masters. The art is identical in all three. They are full-bleed square, 112/512 rounded square, and full-bleed with the art scaled 0.72 into the 80% maskable safe circle.
+  - `public/favicon.svg`: replaced the leftover purple Vite template logo with the rounded icon.
+  - `public/pwa-192x192.png` and `public/pwa-512x512.png`: rounded square with transparent corners ("any" purpose).
+  - `public/pwa-maskable-512x512.png` (new): full-bleed maskable icon.
+  - `public/apple-touch-icon.png`: 180 px full-bleed (iOS rounds it itself).
+  - `vite.config.ts`: manifest gains the maskable icon with `purpose: 'maskable'`, and `apple-touch-icon.png` is added to `includeAssets`.
+- **How the PNGs were made:** SVG master → WeasyPrint PDF → `pdftoppm` at 1536 px → PIL rounded-corner alpha and LANCZOS downscale. No new project dependency. To regenerate, re-render the `brand/` SVGs the same way.
+- **Security/privacy:** none. Colours come from DESIGN.md; no university emblem.
+- **DB/deploy:** a new web build is needed. Installed PWAs may only pick up the new icon after reinstalling or after the browser refreshes the manifest; that timing depends on the platform.
+- **Verification:**
+  - `scripts/verify_release.sh` exits 0, and `tsc`, lint and build pass.
+  - `dist/manifest.webmanifest` lists the three icons including the maskable one.
+  - The 512 rounded and maskable PNGs were viewed: the art is inside the safe circle.
+- **Remaining:**
+  - Not checked on a real home screen (iOS / Android).
+  - `public/icons.svg` (Vite template social-icon sprite) is unused; it was left in place.
+
+## [2026-11-17 03:17] Claude: Test-results report for the tuningModel work (docs/ReportTestResults_tuningModel.md)
+- **Objective:** The owner asked for a detailed Markdown report of the test results from branch `tuningModel`, using real values from the separate TEST database, covering everything from the start of the work.
+- **Files created:** `docs/ReportTestResults_tuningModel.md` (git-ignored `docs/`). It contains:
+  - a summary;
+  - a 12–17 Nov timeline with commits;
+  - the test environment;
+  - TEST DB results: accounts, 178 scans with 105 passes, per-day results, failure stages, results by build period with and without the main test account, results by action, the similarity-score distribution, device/engine/fps/timing, the blink rule used, PAD median-rule outcomes and the pilot log;
+  - automated test counts;
+  - simulation results, the problem/fix table, before/after thresholds, data limitations, conclusions with a next-step plan, and the SQL used.
+- **Data access:** read-only SQL on the TEST project only (aggregates; no names, e-mails, student ids or account ids in the report). Production was not touched.
+- **Corrections made while checking:**
+  - The first draft said only 3 scans happened after the 16 Nov 21:45 UX change. The DB shows 15, all from the main test account, so the text was fixed.
+  - The "before" thresholds were re-checked against `610560e` and labelled with where each value comes from.
+- **Security/privacy:** aggregates only; a pattern scan found no e-mails or UUIDs in the report.
+- **DB/deploy:** none.
+- **Remaining:** the field data predates most of the 16 Nov evening UX changes, and the report says so.
+
+## [2026-11-17 10:58] Claude: Line-by-line explanation of the face check-in endpoint (docs/codeexplain.md)
+- **Objective:** The owner sent a screenshot of `verify_hybrid_face_attendance` (`POST /api/v1/attendance/verify`, `backend/main.py`) and asked for a detailed line-by-line explanation, including where each piece lives.
+- **Files created:** `docs/codeexplain.md` (git-ignored `docs/`). It contains:
+  - where the code lives, and which version the screenshot shows;
+  - an overview with a flow diagram;
+  - a table for every screenshot line 1–227, with test-mode-only and security lines marked;
+  - each called helper with its file and line on current `main`;
+  - security notes;
+  - differences from `main`.
+- **Finding:** the screenshot is an uncommitted `tuningModel` state from about 13–14 Nov. It has test-mode `attempt` logging but no diagnostics collector or blink fallback, so it matches no single commit:
+  - `59c9306` (line 722) predates it;
+  - `efe0bda`/`d2d52f8`/`06bfeb2` (line 932) add more;
+  - current `main` `7d5e1af` has the endpoint at lines 817–1026 without test mode.
+- **Verification:** helper locations read with `git grep` on `7d5e1af`, and the test-mode helpers on `06bfeb2`. Behaviour statements were checked against the helper bodies (load_valid_challenge, claim/release/finalize RPC wrappers, read_validated_image, calculate_similarity, calculate_attendance_status, require_roles) and the current fallback wiring.
+- **Security/privacy/DB/deploy:** none (documentation only).
+
+## [2026-11-17 11:09] Claude: Screenshot vs current endpoint comparison added to docs/codeexplain.md
+- **Objective:** The owner asked whether the code in the screenshot differs from the real file.
+- **Findings:** `backend/main.py` lines 817–1026 on `main` (`7d5e1af`) keep the same main flow.
+  - Removed: all test-mode lines (screenshot lines 13–14, 19–21, 31–32, 46–47, 131, 153–156, 159–172, 195, 199–205).
+  - Added: the blink→move_closer fallback (main lines 39–48, 95, 166, 180–187) and an always-empty measurement suffix on the 401 (line 141).
+  - `FACE_THRESHOLD` changed from 0.45 to 0.50.
+- **Correction:** the earlier explanation of screenshot lines 121–123 described pgvector "[...]" text. The code converts PostgreSQL array braces `{...}` to `[...]`; the explanation was fixed.
+- **Files changed:** `docs/codeexplain.md` section 5 rewritten (git-ignored).
+- **Security/privacy/DB/deploy:** none.
+
+## [2026-11-17 11:19] Claude: reportResultFaceCheckin.pdf updated with current TEST data and the Google Form feedback
+- **Objective:** Update the internal usage report using live data from the TEST database, plus the testers' Google Form responses (CSV supplied by the owner).
+- **Files changed:** `docs/reportResultFaceCheckin.pdf`, regenerated with 6 pages (was 4); `docs/` is git-ignored. The previous 16 Nov version is kept as a copy in this session's scratchpad.
+- **New content:**
+  - current totals: 29 profiles, 21 face-registered, 23 testers, 178 scans with 105 passes (59.0%), and 44.7% excluding the development account;
+  - a per-tester table with the lowest and highest similarity scores;
+  - accounts that logged in but never scanned;
+  - 73 failures by stage, and scans per day from 13 to 17 Nov;
+  - from the form (21 answers): devices, a summary of comments, and a per-respondent table matched to accounts (16 by e-mail, 3 by name, 2 unmatched);
+  - a table mapping each piece of feedback to the fix made (or still pending).
+- **Data access:** read-only SELECTs on the TEST project only. Image links in the form were not opened.
+- **Security/privacy:** the report keeps tester names as the previous version did, marked "ห้าม commit / ห้ามเผยแพร่". It shows e-mail type only; no e-mails, student ids, images or embeddings. A text search of the PDF found no e-mail address or student id.
+- **Finding:** one respondent's account (registered face) has no scans in the DB, so that tester's attempts stopped in the browser before upload. Front-end failures are not logged anywhere.
+- **Verification:** totals cross-checked (178 = 105 + 73; the stages sum to 73; the student e-mail split is 17 + 11 = 28). All 6 pages were viewed after fixing an orphan last page and a wrong 16/12 e-mail split.
+- **Remaining:** the 16 Nov evening UX fixes have no feedback yet from the testers who reported the problems.

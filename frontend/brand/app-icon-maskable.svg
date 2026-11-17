@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>เช็คชื่อ มจพ.</title>
+  <rect width="512" height="512" fill="#f97316"/>
+  <g transform="translate(256 256) scale(0.72) translate(-277 -286)">
+  <rect x="124" y="120" width="236" height="290" rx="26" fill="#fff"/>
+  <g fill="#0f172a"><rect x="102" y="160" width="56" height="20" rx="10"/><rect x="102" y="226" width="56" height="20" rx="10"/><rect x="102" y="292" width="56" height="20" rx="10"/><rect x="102" y="358" width="56" height="20" rx="10"/></g>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M184 196l14 14 26-30M184 262l14 14 26-30" stroke="#f97316" stroke-width="16"/>
+    <path d="M244 198h80M244 264h80M184 330h92" stroke="#cbd5e1" stroke-width="18"/>
+  </g>
+  <circle cx="360" cy="360" r="92" fill="#0f172a" stroke="#f97316" stroke-width="18"/>
+  <path d="M360 360v-48M360 360l34 20" fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="360" cy="360" r="10" fill="#f97316"/>
+  </g>
+</svg>
